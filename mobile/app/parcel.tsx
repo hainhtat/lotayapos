@@ -77,7 +77,7 @@ export default function Parcel(){
     />
     {choice!=="DELIVERED"&&<ReasonCodeSelector reasons={reasonsQuery.data} selected={reason} note={note} loading={reasonsQuery.isLoading} error={reasonsQuery.isError} dark={dark} onSelect={item=>{setReason(item);setError("")}} onNoteChange={setNote} onRetry={()=>void reasonsQuery.refetch()}/>}
     {choice==="PARTIAL"&&<><Text style={[s.label,dark&&s.white]}>{i18n.t("actualCod")}</Text><TextInput accessibilityLabel={i18n.t("actualCod")} value={actualCod} onChangeText={setActualCod} keyboardType="number-pad" placeholder={i18n.t("actualCodPlaceholder")} placeholderTextColor="#94a3b8" style={[s.input,dark&&s.inputDark]}/><Text style={[s.label,dark&&s.white]}>{i18n.t("collectionWallet")}</Text><View style={s.wallets}>{(["CASH","KBZ_PAY","WAVE_PAY"] as const).map(wallet=><Pressable accessibilityRole="radio" accessibilityState={{selected:collectionWallet===wallet}} accessibilityLabel={i18n.t(wallet==="CASH"?"cash":wallet==="KBZ_PAY"?"kbzPay":"wavePay")} key={wallet} onPress={()=>setCollectionWallet(wallet)} style={[s.wallet,collectionWallet===wallet&&s.selected]}><Text style={[s.optionText,collectionWallet===wallet&&s.selectedText]}>{i18n.t(wallet==="CASH"?"cash":wallet==="KBZ_PAY"?"kbzPay":"wavePay")}</Text></Pressable>)}</View></>}
-    {error&&<Text accessibilityRole="alert" style={s.error}>{error}</Text>}
+    {error?<Text accessibilityRole="alert" style={s.error}>{error}</Text>:null}
     <Pressable accessibilityRole="button" disabled={saving} onPress={confirmSave} style={[s.button,saving&&s.disabled]}><Text style={s.buttonText}>{saving?i18n.t("loading"):i18n.t("confirm")}</Text></Pressable>
     </>}
     </>}

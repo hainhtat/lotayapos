@@ -29,7 +29,7 @@ export default function Settlement(){
     <Text style={[s.sectionTitle,dark&&s.white]}>{i18n.t("declareWalletMix")}</Text><Text style={s.muted}>{i18n.t("declareWalletHelp")}</Text>
     {([['cash',cash,setCash],['kbzPay',kbzPay,setKbzPay],['wavePay',wavePay,setWavePay]] as const).map(([key,value,setter])=><View key={key}><Text style={[s.fieldLabel,dark&&s.white]}>{i18n.t(key)}</Text><TextInput accessibilityLabel={i18n.t(key)} editable={!locked&&!mutation.isPending} keyboardType="number-pad" value={value} onChangeText={text=>{setter(text);setError("");setSaved(false)}} style={[s.input,dark&&s.inputDark]}/></View>)}
     <Text style={[s.declared,dark&&s.white]}>{i18n.t("declaredTotal")}: {money("error" in parsed?0:parsed.total)}</Text>
-    {error&&<Text accessibilityRole="alert" style={s.error}>{error}</Text>}{saved&&<Text accessibilityRole="alert" style={s.success}>{i18n.t("declarationSaved")}</Text>}
+    {error?<Text accessibilityRole="alert" style={s.error}>{error}</Text>:null}{saved?<Text accessibilityRole="alert" style={s.success}>{i18n.t("declarationSaved")}</Text>:null}
     <Pressable accessibilityRole="button" disabled={locked||mutation.isPending} onPress={submit} style={[s.button,(locked||mutation.isPending)&&s.disabled]}><Text style={s.buttonText}>{mutation.isPending?i18n.t("loading"):locked?i18n.t("settlementPosted"):i18n.t("saveDeclaration")}</Text></Pressable>
   </ScrollView></SafeAreaView>;
 }

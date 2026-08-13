@@ -67,6 +67,7 @@ describe("rider settlement outstanding visibility", () => {
       client.clear();
     });
     await waitFor(() => expect(screen.getByText("Still owed to hub")).toBeTruthy());
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByText(`${(9000).toLocaleString()} MMK`)).toBeTruthy();
     expect(screen.getByText(`${(11500).toLocaleString()} MMK`)).toBeTruthy();
     expect(screen.getByText(/Delivered parcels create an amount owed/)).toBeTruthy();
