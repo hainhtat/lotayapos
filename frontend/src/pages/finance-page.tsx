@@ -25,7 +25,7 @@ const control =
 
 function resolveFinanceTab(searchParams: URLSearchParams, hash: string): FinanceTab {
   if (searchParams.get("tab") === "settlements") return "settlements";
-  if (hash === "#os-settlements" || hash === "#rider-outstanding") return "settlements";
+  if (hash === "#os-settlements" || hash === "#os-pending-returns" || hash === "#rider-outstanding") return "settlements";
   return "overview";
 }
 
@@ -77,7 +77,7 @@ export function FinancePage() {
     if (next === "overview") params.delete("tab");
     else params.set("tab", "settlements");
     setSearchParams(params, { replace: true });
-    if (next === "overview" && (location.hash === "#os-settlements" || location.hash === "#rider-outstanding")) {
+    if (next === "overview" && (location.hash === "#os-settlements" || location.hash === "#os-pending-returns" || location.hash === "#rider-outstanding")) {
       window.history.replaceState(null, "", `${location.pathname}${params.toString() ? `?${params}` : ""}`);
     }
   };

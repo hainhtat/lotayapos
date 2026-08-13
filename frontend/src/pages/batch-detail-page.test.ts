@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { formatTrackingNumber, parseParcelGrid } from "./batch-detail-page";
+import { appendParcelDraft, formatTrackingNumber, isParcelRowComplete, parseParcelGrid, type ParcelRow } from "./batch-detail-page";
+
+const blankRow = (): ParcelRow => ({
+  orderId: "",
+  customerName: "",
+  address: "",
+  regionStateId: "",
+  districtId: "",
+  townshipId: "",
+  zoneId: "",
+  customerPhone: "",
+  codAmount: "",
+});
 
 describe("parseParcelGrid", () => {
   it("parses pasted spreadsheet rows in the confirmed column order", () => {
@@ -34,5 +46,22 @@ describe("formatTrackingNumber", () => {
   it("formats Lotaya tracking numbers with zero padding", () => {
     expect(formatTrackingNumber(1)).toBe("LTY-001");
     expect(formatTrackingNumber(42)).toBe("LTY-042");
+  });
+});
+
+describe("parcel form drafts", () => {
+  it("accepts a complete modal row and replaces the first blank spreadsheet row", () => {
+    const draft: ParcelRow = {
+      ...blankRow(),
+      customerName: "Ma Su",
+      address: "Yangon",
+      townshipId: "t1",
+      codAmount: "25000",
+    };
+    expect(isParcelRowComplete(draft)).toBe(true);
+    expect(isParcelRowComplete({ ...draft, customerPhone: "" })).toBe(true);
+    expect(isParcelRowComplete({ ...draft, townshipId: "" })).toBe(false);
+    expect(isParcelRowComplete({ ...draft, codAmount: "12.5" })).toBe(false);
+    expect(appendParcelDraft([blankRow(), blankRow()], draft)[0]).toEqual(draft);
   });
 });

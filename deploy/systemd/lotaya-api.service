@@ -1,0 +1,18 @@
+[Unit]
+Description=Lotaya POS API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/lotaya/backend
+Environment=PORT=4010
+Environment=LISTEN_HOST=127.0.0.1
+EnvironmentFile=/opt/lotaya/shared/lotaya.env
+ExecStart=/usr/bin/node dist/server.js
+Restart=on-failure
+RestartSec=5
+User=www-data
+Group=www-data
+
+[Install]
+WantedBy=multi-user.target

@@ -3,6 +3,16 @@ import { ApiError } from "../utils/api-error.js";
 import { resolveCommissionRateBps } from "../utils/commission.js";
 import type { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import {
+  buildOsSettlementReturnDeductionLines,
+  getActiveReturnDeduction,
+  postReturnDeductionInTx,
+  recoverableAdvance,
+  recoverableAdvanceAmount,
+  settlementReturnedAdvanceContribution,
+  sumUnreversedCreditsToOsAdvanceReceivableByParcel,
+  sumUnreversedDebitsToOsSettlementOffsetByParcel,
+} from "./os-advance.js";
 
 function businessDay(value: string) {
   const date = new Date(value);
@@ -435,6 +445,7 @@ export async function listOsSettlementDrafts(
       hub: { select: { id: true, name: true } },
       parcels: {
         select: {
+          id: true,
           status: true,
           codAmount: true,
           actualCodCollected: true,
@@ -469,41 +480,21 @@ export async function listOsSettlementDrafts(
       (priorReturnsByShop.get(settlement.shopId) ?? 0) + settlement.returnDeduction,
     );
   }
+  const parcelIds = batches.flatMap((batch) => batch.parcels.map((parcel) => parcel.id));
+  const [creditsByParcel, offsetsByParcel] = await Promise.all([
+    sumUnreversedCreditsToOsAdvanceReceivableByParcel(prisma, parcelIds),
+    sumUnreversedDebitsToOsSettlementOffsetByParcel(prisma, parcelIds),
+  ]);
   return batches.map((batch) => {
-    const collectedCod = batch.parcels.reduce(
-      (sum, parcel) =>
-        sum +
-        (parcel.status === "DELIVERED"
-          ? parcel.codAmount
-          : parcel.status === "PARTIAL"
-            ? (parcel.actualCodCollected ?? 0)
-            : 0),
-      0,
-    );
-    const deliveryFees = batch.parcels.reduce(
-      (sum, parcel) =>
-        sum +
-        (["DELIVERED", "PARTIAL"].includes(parcel.status)
-          ? (parcel.deliveryFee ?? 0)
-          : 0),
-      0,
-    );
-    const returnedAdvance = batch.parcels.reduce(
-      (sum, parcel) =>
-        sum +
-        (["RETURNED", "CANCELLED"].includes(parcel.status)
-          ? parcel.advanceAmount
-          : 0),
-      0,
-    );
+    const components = osBatchComponents(batch, creditsByParcel, offsetsByParcel);
     const unresolvedCount = batch.parcels.filter(
       (parcel) => !["DELIVERED", "PARTIAL", "RETURNED", "CANCELLED"].includes(parcel.status),
     ).length;
     const priorSettledReturns = priorReturnsByShop.get(batch.shopId) ?? 0;
     const covered = isOsSettlementCodCovered({
-      collectedCod,
+      collectedCod: components.collectedCod,
       advancePaid: batch.advancePaid,
-      returnedAdvance,
+      returnedAdvance: components.returnedAdvance,
       priorSettledReturns: batch.settlementLinks.length > 0 ? 0 : priorSettledReturns,
     });
     return {
@@ -515,9 +506,9 @@ export async function listOsSettlementDrafts(
       hub: batch.hub,
       parcelCount: batch.parcels.length,
       advancePaid: batch.advancePaid,
-      collectedCod,
-      deliveryFees,
-      returnedAdvance,
+      collectedCod: components.collectedCod,
+      deliveryFees: components.deliveryFees,
+      returnedAdvance: components.returnedAdvance,
       priorSettledReturns,
       unresolvedCount,
       eligible:
@@ -550,15 +541,56 @@ type OsSettlementInput = {
   idempotencyKey: string;
 };
 
-function osBatchComponents(batch: {
-  advancePaid: number;
-  parcels: Array<{ status: string; codAmount: number; actualCodCollected: number | null; deliveryFee: number | null; advanceAmount: number }>;
-}) {
-  const collectedCod = batch.parcels.reduce((sum, parcel) => sum + (parcel.status === "DELIVERED" ? parcel.codAmount : parcel.status === "PARTIAL" ? (parcel.actualCodCollected ?? 0) : 0), 0);
-  const deliveryFees = batch.parcels.reduce((sum, parcel) => sum + (["DELIVERED", "PARTIAL"].includes(parcel.status) ? (parcel.deliveryFee ?? 0) : 0), 0);
-  const returnedAdvance = batch.parcels.reduce((sum, parcel) => sum + (["RETURNED", "CANCELLED"].includes(parcel.status) ? parcel.advanceAmount : 0), 0);
-  const advanceAmount = batch.parcels.reduce((sum, parcel) => sum + (["DELIVERED", "PARTIAL"].includes(parcel.status) ? parcel.advanceAmount : 0), 0);
+function osBatchComponents(
+  batch: {
+    advancePaid: number;
+    parcels: Array<{
+      id: string;
+      status: string;
+      codAmount: number;
+      actualCodCollected: number | null;
+      deliveryFee: number | null;
+      advanceAmount: number;
+    }>;
+  },
+  creditsByParcel: Map<string, number>,
+  offsetsByParcel: Map<string, number>,
+) {
+  const collectedCod = batch.parcels.reduce((sum, parcel) => {
+    if (parcel.status === "DELIVERED") return sum + parcel.codAmount;
+    if (parcel.status === "PARTIAL" || (parcel.status === "RETURNED" && parcel.actualCodCollected != null)) {
+      return sum + (parcel.actualCodCollected ?? 0);
+    }
+    return sum;
+  }, 0);
+  const deliveryFees = batch.parcels.reduce((sum, parcel) => {
+    if (["DELIVERED", "PARTIAL"].includes(parcel.status)) return sum + (parcel.deliveryFee ?? 0);
+    if (parcel.status === "RETURNED" && parcel.actualCodCollected != null) return sum + (parcel.deliveryFee ?? 0);
+    return sum;
+  }, 0);
+  const returnedAdvance = batch.parcels.reduce((sum, parcel) => sum + settlementReturnedAdvanceContribution(
+    parcel,
+    creditsByParcel.get(parcel.id) ?? 0,
+    offsetsByParcel.get(parcel.id) ?? 0,
+  ), 0);
+  const advanceAmount = batch.parcels.reduce((sum, parcel) => {
+    if (!["DELIVERED", "PARTIAL"].includes(parcel.status)) return sum;
+    return sum + Math.max(0, parcel.advanceAmount - (creditsByParcel.get(parcel.id) ?? 0));
+  }, 0);
   return { collectedCod, deliveryFees, returnedAdvance, advanceAmount: Math.min(advanceAmount, batch.advancePaid) };
+}
+
+/** Pure helper for tests: returned-advance contribution after prior OS advance credits and staged offsets. */
+export function returnedAdvanceContribution(
+  parcel: { status: string; advanceAmount: number },
+  priorCreditsToOsAdvanceReceivable: number,
+  priorDebitsToOsSettlementOffset = 0,
+) {
+  return settlementReturnedAdvanceContribution(
+    parcel,
+    priorCreditsToOsAdvanceReceivable,
+    priorDebitsToOsSettlementOffset,
+  );
 }
 
 export function calculateOsSettlementNet(input: { grossCollectedCod: number; advanceDeduction: number; returnDeduction: number; deliveryFeeDeduction: number; adjustmentAmount: number }) {
@@ -585,7 +617,7 @@ export async function previewOsSettlement(input: { shopId: string; hubId?: strin
   const hubId = await resolveFinanceHub(actor, input.hubId);
   const batchIds = [...new Set(input.batchIds)];
   if (!batchIds.length) throw new ApiError(400, "BATCH_REQUIRED", "Select at least one batch");
-  const batches = await prisma.batch.findMany({ where: { id: { in: batchIds } }, include: { shop: true, parcels: { select: { status: true, codAmount: true, actualCodCollected: true, deliveryFee: true, advanceAmount: true } }, settlementLinks: { where: { settlement: { status: "POSTED" } }, select: { id: true } } } });
+  const batches = await prisma.batch.findMany({ where: { id: { in: batchIds } }, include: { shop: true, parcels: { select: { id: true, status: true, codAmount: true, actualCodCollected: true, deliveryFee: true, advanceAmount: true } }, settlementLinks: { where: { settlement: { status: "POSTED" } }, select: { id: true } } } });
   if (batches.length !== batchIds.length) throw new ApiError(404, "BATCH_NOT_FOUND", "One or more batches were not found");
   if (batches.some((batch) => batch.shopId !== input.shopId || batch.hubId !== hubId)) throw new ApiError(403, "SETTLEMENT_SCOPE_MISMATCH", "All batches must belong to the selected shop and hub");
   if (batches.some((batch) => batch.settlementLinks.length > 0)) throw new ApiError(409, "BATCH_ALREADY_SETTLED", "One or more batches are already in a posted settlement");
@@ -600,7 +632,15 @@ export async function previewOsSettlement(input: { shopId: string; hubId?: strin
     _sum: { returnDeduction: true },
   });
   const priorReturns = priorSettledReturns._sum.returnDeduction ?? 0;
-  const components = batches.map((batch) => ({ batchId: batch.id, label: batch.label, ...osBatchComponents(batch), advancePaid: batch.advancePaid }));
+  const creditsByParcel = await sumUnreversedCreditsToOsAdvanceReceivableByParcel(
+    prisma,
+    batches.flatMap((batch) => batch.parcels.map((parcel) => parcel.id)),
+  );
+  const offsetsByParcel = await sumUnreversedDebitsToOsSettlementOffsetByParcel(
+    prisma,
+    batches.flatMap((batch) => batch.parcels.map((parcel) => parcel.id)),
+  );
+  const components = batches.map((batch) => ({ batchId: batch.id, label: batch.label, ...osBatchComponents(batch, creditsByParcel, offsetsByParcel), advancePaid: batch.advancePaid }));
   const totals = components.reduce(
     (sum, component) => ({
       grossCollectedCod: sum.grossCollectedCod + component.collectedCod,
@@ -659,15 +699,8 @@ export async function postOsSettlement(input: OsSettlementInput, actor: FinanceA
   const preview = await previewOsSettlement(input, actor);
   const date = businessDay(input.businessDate);
   const maximums = preview.defaults;
-  const advanceDeduction = input.advanceDeduction ?? maximums.advanceDeduction;
-  const returnDeduction = input.returnDeduction ?? maximums.returnDeduction;
-  const deliveryFeeDeduction = input.deliveryFeeDeduction ?? maximums.deliveryFeeDeduction;
   const adjustmentAmount = input.adjustmentAmount ?? 0;
-  for (const [field, value, max] of [["advanceDeduction", advanceDeduction, maximums.advanceDeduction], ["returnDeduction", returnDeduction, maximums.returnDeduction], ["deliveryFeeDeduction", deliveryFeeDeduction, maximums.deliveryFeeDeduction]] as const) if (!Number.isInteger(value) || value < 0 || value > max) throw new ApiError(400, "INVALID_SETTLEMENT_COMPONENT", `${field} must be between 0 and ${max}`);
-  const adjustmentLimit = maximums.grossCollectedCod + maximums.advanceDeduction + maximums.returnDeduction + maximums.deliveryFeeDeduction;
-  if (!Number.isInteger(adjustmentAmount) || Math.abs(adjustmentAmount) > adjustmentLimit) throw new ApiError(400, "INVALID_SETTLEMENT_ADJUSTMENT", "Adjustment is outside the statement bounds");
   if (adjustmentAmount !== 0 && !input.adjustmentReason?.trim()) throw new ApiError(400, "ADJUSTMENT_REASON_REQUIRED", "A reason is required for a settlement adjustment");
-  const netAmount = calculateOsSettlementNet({ grossCollectedCod: maximums.grossCollectedCod, advanceDeduction, returnDeduction, deliveryFeeDeduction, adjustmentAmount });
   return prisma.$transaction(async (tx) => {
     await assertCashbookOpen(tx, date, preview.hubId);
     const batchIds = [...new Set(input.batchIds)];
@@ -677,18 +710,28 @@ export async function postOsSettlement(input: OsSettlementInput, actor: FinanceA
     if (activeLinks.length) throw new ApiError(409, "BATCH_ALREADY_SETTLED", "One or more batches were settled while this statement was open");
     const liveBatches = await tx.batch.findMany({
       where: { id: { in: batchIds } },
-      include: { parcels: { select: { status: true, codAmount: true, actualCodCollected: true, deliveryFee: true, advanceAmount: true } } },
+      include: { parcels: { select: { id: true, status: true, codAmount: true, actualCodCollected: true, deliveryFee: true, advanceAmount: true } } },
     });
+    const liveCredits = await sumUnreversedCreditsToOsAdvanceReceivableByParcel(
+      tx,
+      liveBatches.flatMap((batch) => batch.parcels.map((parcel) => parcel.id)),
+    );
+    const liveOffsets = await sumUnreversedDebitsToOsSettlementOffsetByParcel(
+      tx,
+      liveBatches.flatMap((batch) => batch.parcels.map((parcel) => parcel.id)),
+    );
     const liveTotals = liveBatches.reduce(
       (sum, batch) => {
-        const components = osBatchComponents(batch);
+        const components = osBatchComponents(batch, liveCredits, liveOffsets);
         return {
           collectedCod: sum.collectedCod + components.collectedCod,
           advancePaid: sum.advancePaid + batch.advancePaid,
           returnedAdvance: sum.returnedAdvance + components.returnedAdvance,
+          advanceDeduction: sum.advanceDeduction + components.advanceAmount,
+          deliveryFees: sum.deliveryFees + components.deliveryFees,
         };
       },
-      { collectedCod: 0, advancePaid: 0, returnedAdvance: 0 },
+      { collectedCod: 0, advancePaid: 0, returnedAdvance: 0, advanceDeduction: 0, deliveryFees: 0 },
     );
     const priorInTx = await tx.osSettlement.aggregate({
       where: {
@@ -712,26 +755,121 @@ export async function postOsSettlement(input: OsSettlementInput, actor: FinanceA
         "Collected COD must exceed advance paid plus returned advances (including previously settled returns) before settlement",
       );
     }
+    const liveMaximums = {
+      grossCollectedCod: liveTotals.collectedCod,
+      advanceDeduction: liveTotals.advanceDeduction,
+      returnDeduction: liveTotals.returnedAdvance,
+      deliveryFeeDeduction: liveTotals.deliveryFees,
+    };
+    if (
+      maximums.grossCollectedCod !== liveMaximums.grossCollectedCod ||
+      maximums.advanceDeduction !== liveMaximums.advanceDeduction ||
+      maximums.returnDeduction !== liveMaximums.returnDeduction ||
+      maximums.deliveryFeeDeduction !== liveMaximums.deliveryFeeDeduction
+    ) {
+      throw new ApiError(409, "BATCH_CHANGED", "Settlement totals changed; refresh the preview and retry");
+    }
+    const advanceDeduction = input.advanceDeduction ?? liveMaximums.advanceDeduction;
+    const returnDeduction = input.returnDeduction ?? liveMaximums.returnDeduction;
+    const deliveryFeeDeduction = input.deliveryFeeDeduction ?? liveMaximums.deliveryFeeDeduction;
+    for (const [field, value, max] of [["advanceDeduction", advanceDeduction, liveMaximums.advanceDeduction], ["returnDeduction", returnDeduction, liveMaximums.returnDeduction], ["deliveryFeeDeduction", deliveryFeeDeduction, liveMaximums.deliveryFeeDeduction]] as const) {
+      if (!Number.isInteger(value) || value < 0 || value > max) throw new ApiError(409, "BATCH_CHANGED", `${field} exceeds live settlement bounds; refresh the preview`);
+    }
+    const adjustmentLimit = liveMaximums.grossCollectedCod + liveMaximums.advanceDeduction + liveMaximums.returnDeduction + liveMaximums.deliveryFeeDeduction;
+    if (!Number.isInteger(adjustmentAmount) || Math.abs(adjustmentAmount) > adjustmentLimit) throw new ApiError(400, "INVALID_SETTLEMENT_ADJUSTMENT", "Adjustment is outside the statement bounds");
+    const netAmount = calculateOsSettlementNet({ grossCollectedCod: liveMaximums.grossCollectedCod, advanceDeduction, returnDeduction, deliveryFeeDeduction, adjustmentAmount });
     const settlementId = randomUUID();
+    const offsetParcelIds = liveBatches.flatMap((batch) =>
+      batch.parcels
+        .filter((parcel) => ["RETURNED", "CANCELLED", "PARTIAL"].includes(parcel.status))
+        .map((parcel) => parcel.id),
+    );
+    const stagedOffsetTotal = offsetParcelIds.reduce(
+      (sum, parcelId) => sum + (liveOffsets.get(parcelId) ?? 0),
+      0,
+    );
+    if (returnDeduction < stagedOffsetTotal) {
+      throw new ApiError(409, "BATCH_CHANGED", "Staged return offsets increased; refresh the preview");
+    }
     const journalLines = [
-      { account: "OS_COD_PAYABLE", debit: maximums.grossCollectedCod, credit: 0 },
+      { account: "OS_COD_PAYABLE", debit: liveMaximums.grossCollectedCod, credit: 0 },
       ...(advanceDeduction ? [{ account: "OS_ADVANCE_RECEIVABLE", debit: 0, credit: advanceDeduction }] : []),
-      ...(returnDeduction ? [{ account: "OS_RETURN_DEDUCTION", debit: 0, credit: returnDeduction }] : []),
+      ...buildOsSettlementReturnDeductionLines(returnDeduction, Math.min(returnDeduction, stagedOffsetTotal)),
       ...(deliveryFeeDeduction ? [{ account: "DELIVERY_FEE_REVENUE", debit: 0, credit: deliveryFeeDeduction }] : []),
       ...(adjustmentAmount > 0 ? [{ account: "OS_SETTLEMENT_ADJUSTMENT", debit: adjustmentAmount, credit: 0 }] : adjustmentAmount < 0 ? [{ account: "OS_SETTLEMENT_ADJUSTMENT", debit: 0, credit: -adjustmentAmount }] : []),
       ...(netAmount > 0 ? [{ account: walletAccount(input.wallet), debit: 0, credit: netAmount }] : netAmount < 0 ? [{ account: "OS_SETTLEMENT_RECEIVABLE", debit: -netAmount, credit: 0 }] : []),
     ];
     const journal = await tx.journalEntry.create({ data: { sourceType: "OS_SETTLEMENT", sourceId: settlementId, hubId: preview.hubId, businessDate: date, description: `OS settlement for ${preview.shop.name}`, lines: { create: journalLines } } });
-    return tx.osSettlement.create({ data: { id: settlementId, shopId: input.shopId, hubId: preview.hubId, businessDate: date, grossCollectedCod: maximums.grossCollectedCod, advanceDeduction, returnDeduction, deliveryFeeDeduction, adjustmentAmount, adjustmentReason: input.adjustmentReason?.trim() || null, netAmount, wallet: input.wallet, idempotencyKey: input.idempotencyKey, postedBy: actor.id, journalEntryId: journal.id, batches: { create: preview.batches.map((batch) => ({ batchId: batch.batchId, collectedCod: batch.collectedCod, advanceAmount: batch.advanceAmount, returnedAdvance: batch.returnedAdvance, deliveryFees: batch.deliveryFees })) } }, include: { shop: true, batches: { include: { batch: true } }, journalEntry: { include: { lines: true } } } });
+    return tx.osSettlement.create({ data: { id: settlementId, shopId: input.shopId, hubId: preview.hubId, businessDate: date, grossCollectedCod: liveMaximums.grossCollectedCod, advanceDeduction, returnDeduction, deliveryFeeDeduction, adjustmentAmount, adjustmentReason: input.adjustmentReason?.trim() || null, netAmount, wallet: input.wallet, idempotencyKey: input.idempotencyKey, postedBy: actor.id, journalEntryId: journal.id, batches: { create: liveBatches.map((batch) => {
+      const components = osBatchComponents(batch, liveCredits, liveOffsets);
+      return { batchId: batch.id, collectedCod: components.collectedCod, advanceAmount: components.advanceAmount, returnedAdvance: components.returnedAdvance, deliveryFees: components.deliveryFees };
+    }) } }, include: { shop: true, batches: { include: { batch: true } }, journalEntry: { include: { lines: true } } } });
   }, { isolationLevel: "Serializable" });
 }
 
-export async function listOsSettlements(input: { shopId?: string; hubId?: string }, actor: FinanceActor) {
+function supportsOrgWideFinanceRead(user: { role: string; hubId: string | null }) {
+  return user.role === "SUPERADMIN" || (user.role === "AUDITOR" && !user.hubId);
+}
+
+async function resolveFinanceListHub(actor: FinanceActor, requestedHubId?: string) {
   const user = await assertFinanceReadActor(actor);
-  let hubId: string | undefined;
-  if (input.hubId || user.role !== "SUPERADMIN") {
-    hubId = await resolveFinanceHubForRead(actor, input.hubId);
+  if (supportsOrgWideFinanceRead(user)) {
+    if (requestedHubId) return resolveFinanceHubForRead(actor, requestedHubId);
+    return undefined;
   }
+  return resolveFinanceHubForRead(actor, requestedHubId);
+}
+
+function receiveOsReturnHistoryNote(input: {
+  idempotencyKey: string;
+  businessDate: string;
+  recoverableAmount: number;
+}) {
+  return [
+    "Finance OS return receive",
+    `idempotencyKey=${input.idempotencyKey}`,
+    `businessDate=${input.businessDate.slice(0, 10)}`,
+    `recoverableAmount=${input.recoverableAmount}`,
+  ].join(" | ");
+}
+
+function receiveNoteBusinessDate(note: string | null | undefined) {
+  return note?.match(/businessDate=([0-9]{4}-[0-9]{2}-[0-9]{2})/)?.[1] ?? null;
+}
+
+async function replayReceiveOsReturn(
+  tx: Prisma.TransactionClient,
+  input: { parcelId: string; businessDate: string; idempotencyKey: string },
+  priorNote: string | null | undefined,
+) {
+  const noteBusinessDate = receiveNoteBusinessDate(priorNote);
+  if (noteBusinessDate && noteBusinessDate !== input.businessDate.slice(0, 10)) {
+    throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key was already used for a different receive request");
+  }
+  const parcel = await tx.parcel.findUnique({
+    where: { id: input.parcelId },
+    select: { id: true, status: true, trackingNumber: true, advanceAmount: true },
+  });
+  if (!parcel) throw new ApiError(404, "PARCEL_NOT_FOUND", "Parcel not found");
+  const journalEntry = await getActiveReturnDeduction(tx, parcel.id);
+  const recoverableAmount = Number(priorNote?.match(/recoverableAmount=(\d+)/)?.[1] ?? 0);
+  return {
+    parcel: {
+      id: parcel.id,
+      status: parcel.status,
+      trackingNumber: parcel.trackingNumber,
+      advanceAmount: parcel.advanceAmount,
+    },
+    recoverableAmount,
+    journalEntry,
+    alreadyReceived: true,
+    replay: true as const,
+  };
+}
+
+export async function listOsSettlements(input: { shopId?: string; hubId?: string }, actor: FinanceActor) {
+  await assertFinanceReadActor(actor);
+  const hubId = await resolveFinanceListHub(actor, input.hubId);
   return prisma.osSettlement.findMany({
     where: {
       ...(hubId ? { hubId } : {}),
@@ -741,6 +879,241 @@ export async function listOsSettlements(input: { shopId?: string; hubId?: string
     orderBy: [{ businessDate: "desc" }, { createdAt: "desc" }],
     take: 200,
   });
+}
+
+const OS_PENDING_RETURN_STATUSES = ["FAILED", "REJECTED", "PENDING_RETURN", "PARTIAL"] as const;
+
+/**
+ * Finance OS pending-return queue: parcels awaiting return-to-OS recovery.
+ * Recoverable amounts exclude unreversed OS_ADVANCE_RECEIVABLE credits (partial offsets, prior deductions, etc.).
+ */
+export async function listOsPendingReturns(
+  input: { shopId?: string; hubId?: string },
+  actor: FinanceActor,
+) {
+  await assertFinanceReadActor(actor);
+  const hubId = await resolveFinanceListHub(actor, input.hubId);
+  const parcels = await prisma.parcel.findMany({
+    where: {
+      status: { in: [...OS_PENDING_RETURN_STATUSES] },
+      ...((input.shopId || hubId)
+        ? {
+            batch: {
+              ...(input.shopId ? { shopId: input.shopId } : {}),
+              ...(hubId ? { hubId } : {}),
+            },
+          }
+        : {}),
+    },
+    select: {
+      id: true,
+      trackingNumber: true,
+      status: true,
+      advanceAmount: true,
+      returnDueAt: true,
+      batch: {
+        select: {
+          id: true,
+          label: true,
+          hubId: true,
+          shop: { select: { id: true, name: true } },
+        },
+      },
+    },
+    orderBy: [{ returnDueAt: "asc" }, { createdAt: "asc" }],
+    take: 500,
+  });
+  const creditsByParcel = await sumUnreversedCreditsToOsAdvanceReceivableByParcel(
+    prisma,
+    parcels.map((parcel) => parcel.id),
+  );
+  const items = parcels.map((parcel) => {
+    const recoverableAmount = recoverableAdvanceAmount(
+      parcel.advanceAmount,
+      creditsByParcel.get(parcel.id) ?? 0,
+    );
+    return {
+      id: parcel.id,
+      trackingNumber: parcel.trackingNumber,
+      status: parcel.status,
+      advanceAmount: parcel.advanceAmount,
+      recoverableAmount,
+      priorOffsetAmount: parcel.advanceAmount - recoverableAmount,
+      returnDueAt: parcel.returnDueAt,
+      batch: { id: parcel.batch.id, label: parcel.batch.label },
+      shop: { id: parcel.batch.shop.id, name: parcel.batch.shop.name },
+      hubId: parcel.batch.hubId,
+    };
+  });
+  return {
+    items,
+    summary: {
+      count: items.length,
+      totalRecoverableAmount: items.reduce((sum, item) => sum + item.recoverableAmount, 0),
+    },
+  };
+}
+
+/**
+ * Finance receive-to-OS: mark parcel RETURNED and post remaining recoverable advance as OS_RETURN_DEDUCTION.
+ *
+ * Finance-allowed status path (documented): SUPERADMIN / FINANCE / OPERATIONS_MANAGER may jump
+ * FAILED | REJECTED | PARTIAL | PENDING_RETURN → RETURNED in one step (not limited to PENDING_RETURN → RETURNED).
+ * This is intentional finance recovery, not an ERP Ops status override — MONEY_POSTED does not block PARTIAL → RETURNED here.
+ * No wallet lines are posted on this action.
+ */
+export async function receiveOsReturn(
+  input: { parcelId: string; businessDate: string; idempotencyKey: string },
+  actor: FinanceActor,
+) {
+  const user = await assertFinanceActor(actor);
+  const date = businessDay(input.businessDate);
+  const idempotencyKey = input.idempotencyKey.trim();
+
+  return prisma.$transaction(async (tx) => {
+    const priorReceive = await tx.statusHistory.findFirst({
+      where: {
+        parcelId: input.parcelId,
+        reasonCode: "FINANCE_OS_RETURN_RECEIVE",
+        note: { contains: `idempotencyKey=${idempotencyKey} |` },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { note: true },
+    });
+    if (priorReceive) {
+      return replayReceiveOsReturn(tx, input, priorReceive.note);
+    }
+
+    const parcel = await tx.parcel.findUnique({
+      where: { id: input.parcelId },
+      include: {
+        batch: { select: { hubId: true, shopId: true } },
+      },
+    });
+    if (!parcel) throw new ApiError(404, "PARCEL_NOT_FOUND", "Parcel not found");
+    if (!parcel.batch.hubId) throw new ApiError(409, "PARCEL_HUB_REQUIRED", "Parcel batch must belong to a hub");
+    const hubId = parcel.batch.hubId;
+    if (user.role !== "SUPERADMIN" && (!user.hubId || user.hubId !== hubId)) {
+      throw new ApiError(403, "FORBIDDEN", "Parcel is outside your hub scope");
+    }
+
+    await assertCashbookOpen(tx, date, hubId);
+
+    const activeDeduction = await getActiveReturnDeduction(tx, parcel.id);
+
+    if (parcel.status === "RETURNED") {
+      const recoverable = await recoverableAdvance(tx, parcel);
+      if (activeDeduction) {
+        const credited = activeDeduction.lines
+          .filter((line) => line.account === "OS_ADVANCE_RECEIVABLE")
+          .reduce((sum, line) => sum + line.credit, 0);
+        if (recoverable > 0 && credited < recoverable) {
+          throw new ApiError(
+            409,
+            "DEDUCTION_INCOMPLETE",
+            "An existing return deduction covers less than the recoverable advance remainder",
+          );
+        }
+        return {
+          parcel: { id: parcel.id, status: "RETURNED", trackingNumber: parcel.trackingNumber, advanceAmount: parcel.advanceAmount },
+          recoverableAmount: 0,
+          journalEntry: activeDeduction,
+          alreadyReceived: true,
+        };
+      }
+      if (recoverable === 0) {
+        return {
+          parcel: { id: parcel.id, status: "RETURNED", trackingNumber: parcel.trackingNumber, advanceAmount: parcel.advanceAmount },
+          recoverableAmount: 0,
+          journalEntry: null,
+          alreadyReceived: true,
+        };
+      }
+      const journalEntry = await postReturnDeductionInTx(tx, {
+        parcel,
+        hubId,
+        businessDate: date,
+        amount: recoverable,
+      });
+      await tx.statusHistory.create({
+        data: {
+          parcelId: parcel.id,
+          fromStatus: "RETURNED",
+          toStatus: "RETURNED",
+          actorId: actor.id,
+          reasonCode: "FINANCE_OS_RETURN_RECEIVE",
+          note: receiveOsReturnHistoryNote({
+            idempotencyKey,
+            businessDate: input.businessDate,
+            recoverableAmount: recoverable,
+          }),
+        },
+      });
+      return {
+        parcel: { id: parcel.id, status: "RETURNED", trackingNumber: parcel.trackingNumber, advanceAmount: parcel.advanceAmount },
+        recoverableAmount: recoverable,
+        journalEntry,
+        alreadyReceived: false,
+      };
+    }
+
+    if (!(OS_PENDING_RETURN_STATUSES as readonly string[]).includes(parcel.status)) {
+      throw new ApiError(
+        409,
+        "INVALID_RETURN_STATUS",
+        "OS return receive requires FAILED, REJECTED, PENDING_RETURN, or PARTIAL status",
+      );
+    }
+
+    if (activeDeduction) {
+      throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "A return deduction already exists for a parcel that is not RETURNED");
+    }
+
+    const recoverableAmount = await recoverableAdvance(tx, parcel);
+
+    const updated = await tx.parcel.updateMany({
+      where: { id: parcel.id, status: parcel.status },
+      data: { status: "RETURNED" },
+    });
+    if (updated.count !== 1) throw new ApiError(409, "STATUS_CONFLICT", "Parcel status changed; refresh and retry");
+
+    await tx.statusHistory.create({
+      data: {
+        parcelId: parcel.id,
+        fromStatus: parcel.status as never,
+        toStatus: "RETURNED",
+        actorId: actor.id,
+        reasonCode: "FINANCE_OS_RETURN_RECEIVE",
+        note: receiveOsReturnHistoryNote({
+          idempotencyKey,
+          businessDate: input.businessDate,
+          recoverableAmount,
+        }),
+      },
+    });
+
+    let journalEntry = null;
+    if (recoverableAmount > 0) {
+      journalEntry = await postReturnDeductionInTx(tx, {
+        parcel,
+        hubId,
+        businessDate: date,
+        amount: recoverableAmount,
+      });
+    }
+
+    return {
+      parcel: {
+        id: parcel.id,
+        status: "RETURNED",
+        trackingNumber: parcel.trackingNumber,
+        advanceAmount: parcel.advanceAmount,
+      },
+      recoverableAmount,
+      journalEntry,
+      alreadyReceived: false,
+    };
+  }, { isolationLevel: "Serializable" });
 }
 
 export async function getOsSettlement(id: string, actor: FinanceActor) {

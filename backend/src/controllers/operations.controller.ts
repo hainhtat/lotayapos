@@ -31,9 +31,22 @@ export const bulkAssign: RequestHandler = async (req, res) => {
   });
 };
 
+export const previewManifest: RequestHandler = async (req, res) => {
+  const result = await service.buildManifestForRiders(req.body, actor(req));
+  res.status(200).json({
+    success: true,
+    data: {
+      sections: result.sections,
+      summary: result.summary,
+      riderCount: result.riderCount,
+      parcelCount: result.parcelCount,
+    },
+  });
+};
+
 export const downloadManifest: RequestHandler = async (req, res) => {
   const result = await service.buildManifestForRiders(req.body, actor(req));
-  const pdf = generateDispatchManifestPdf({ sections: result.sections });
+  const pdf = generateDispatchManifestPdf({ sections: result.sections, statusesLabel: result.statusesLabel });
   res.status(200).type("application/pdf").set({
     "Content-Disposition": `attachment; filename="dispatch-manifest-${result.filenameSuffix}.pdf"`,
     "X-Rider-Count": String(result.riderCount),

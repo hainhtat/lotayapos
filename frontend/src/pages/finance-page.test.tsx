@@ -7,21 +7,27 @@ import "@/i18n";
 import {FinancePage} from "./finance-page";
 
 const apiMock=vi.hoisted(()=>vi.fn());
+const authState=vi.hoisted(()=>({role:"FINANCE"}));
 vi.mock("@/lib/api",()=>({api:apiMock}));
+vi.mock("@/app/auth",()=>({useAuth:()=>({user:{id:"user-1",name:"Finance",email:"finance@example.com",role:authState.role}})}));
 const ledger=[
   {account:"WALLET_CASH",debit:125000,credit:25000,balance:100000},
   {account:"WALLET_KBZ_PAY",debit:50000,credit:10000,balance:40000},
   {account:"WALLET_WAVE_PAY",debit:75000,credit:15000,balance:60000},
 ];
 const ledgerReport={accounts:ledger,entries:[],totalDebit:250000,totalCredit:50000,difference:200000,balanced:false};
+const emptyPendingReturns={items:[],summary:{count:0,totalRecoverableAmount:0}};
 const batch={id:"batch-1",label:"Shop 11.08.2026",pickupDate:"2026-08-11T00:00:00.000Z",shop:{name:"Shop"},parcels:[{status:"CREATED"},{status:"CREATED"}]};
 function renderPage(initialEntry="/finance"){const queryClient=new QueryClient({defaultOptions:{queries:{retry:false}}});return render(<MemoryRouter initialEntries={[initialEntry]}><QueryClientProvider client={queryClient}><FinancePage/></QueryClientProvider></MemoryRouter>)}
 
 describe("FinancePage",()=>{
-  beforeEach(()=>{apiMock.mockReset();apiMock.mockImplementation((path:string)=>{
+  beforeEach(()=>{authState.role="FINANCE";apiMock.mockReset();apiMock.mockImplementation((path:string)=>{
     if(path==="/operations/batches")return Promise.resolve({data:[batch]});
     if(path==="/finance/expense-categories")return Promise.resolve({data:[{id:"fuel",code:"FUEL",nameEn:"Fuel",nameMy:"ဆီဖိုး",active:true}]});
     if(path.startsWith("/finance/expenses?"))return Promise.resolve({data:[]});
+    if(path==="/master-data/shops"||path==="/master-data")return Promise.resolve({data:path==="/master-data"?{hubs:[]}:[]});
+    if(path.startsWith("/finance/os-pending-returns"))return Promise.resolve({data:emptyPendingReturns});
+    if(path.startsWith("/finance/rider-outstanding")||path.startsWith("/finance/os-settlement"))return Promise.resolve({data:[]});
     return Promise.resolve({data:ledgerReport});
   })});
 
@@ -257,6 +263,19 @@ describe("FinancePage",()=>{
     expect(screen.getByRole("checkbox", { name: "Select Over-advanced batch for settlement" })).toBeDisabled();
   });
 
+  it("opens the settlements tab from the os-pending-returns deep-link hash", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/operations/batches" || path === "/master-data/shops") return Promise.resolve({ data: [] });
+      if (path === "/finance/expense-categories" || path.startsWith("/finance/expenses?")) return Promise.resolve({ data: [] });
+      if (path.startsWith("/finance/rider-outstanding") || path.startsWith("/finance/os-settlement") || path.startsWith("/finance/os-pending-returns")) return Promise.resolve({ data: path.startsWith("/finance/os-pending-returns") ? emptyPendingReturns : [] });
+      return Promise.resolve({ data: ledgerReport });
+    });
+    renderPage("/finance#os-pending-returns");
+    expect(await screen.findByRole("tab", { name: "OS & riders" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("heading", { name: "OS pending returns" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Post pickup advances" })).not.toBeInTheDocument();
+  });
+
   it("opens the settlements tab from the os-settlements deep-link hash", async () => {
     apiMock.mockImplementation((path: string) => {
       if (path === "/operations/batches" || path === "/master-data/shops") return Promise.resolve({ data: [] });
@@ -290,7 +309,9 @@ describe("FinancePage",()=>{
     let historyCalls = 0;
     apiMock.mockImplementation((path: string) => {
       if (path === "/operations/batches" || path === "/master-data/shops") return Promise.resolve({ data: [] });
+      if (path === "/master-data") return Promise.resolve({ data: { hubs: [] } });
       if (path === "/finance/expense-categories" || path.startsWith("/finance/expenses?")) return Promise.resolve({ data: [] });
+      if (path.startsWith("/finance/os-pending-returns")) return Promise.resolve({ data: emptyPendingReturns });
       if (path.startsWith("/finance/rider-outstanding") || path.startsWith("/finance/os-settlement-drafts")) return Promise.resolve({ data: [] });
       if (path === "/finance/os-settlements" || path.startsWith("/finance/os-settlements?")) {
         historyCalls += 1;
@@ -317,5 +338,134 @@ describe("FinancePage",()=>{
     );
     expect(historyGets.length).toBeGreaterThanOrEqual(2);
     expect(historyGets.every(([path]) => !String(path).includes("hubId="))).toBe(true);
+  });
+
+  it("lists OS pending returns with recoverable totals and receives a return", async () => {
+    apiMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/operations/batches" || path === "/master-data/shops") return Promise.resolve({ data: path === "/master-data/shops" ? [{ id: "shop-1", name: "SNMD" }] : [] });
+      if (path === "/master-data") return Promise.resolve({ data: { hubs: [{ id: "hub-1", name: "Main Hub" }] } });
+      if (path === "/finance/expense-categories" || path.startsWith("/finance/expenses?")) return Promise.resolve({ data: [] });
+      if (path.startsWith("/finance/rider-outstanding") || path.startsWith("/finance/os-settlement")) return Promise.resolve({ data: [] });
+      if (path.startsWith("/finance/os-pending-returns")) return Promise.resolve({ data: {
+        items: [
+          {
+            id: "parcel-failed",
+            trackingNumber: "TRK-FAILED",
+            status: "FAILED",
+            advanceAmount: 8000,
+            recoverableAmount: 8000,
+            priorOffsetAmount: 0,
+            returnDueAt: null,
+            batch: { id: "batch-1", label: "August batch" },
+            shop: { id: "shop-1", name: "SNMD" },
+            hubId: "hub-1",
+          },
+          {
+            id: "parcel-partial",
+            trackingNumber: "TRK-PARTIAL",
+            status: "PARTIAL",
+            advanceAmount: 8000,
+            recoverableAmount: 4000,
+            priorOffsetAmount: 4000,
+            returnDueAt: "2026-08-17T00:00:00.000Z",
+            batch: { id: "batch-1", label: "August batch" },
+            shop: { id: "shop-1", name: "SNMD" },
+            hubId: "hub-1",
+          },
+        ],
+        summary: { count: 2, totalRecoverableAmount: 12000 },
+      } });
+      if (path === "/finance/os-returns/receive" && init) return Promise.resolve({ data: { parcel: { status: "RETURNED" }, recoverableAmount: 8000 } });
+      return Promise.resolve({ data: ledgerReport });
+    });
+    const user = userEvent.setup();
+    renderPage("/finance?tab=settlements&businessDate=2026-08-13");
+    expect(await screen.findByText("TRK-FAILED")).toBeInTheDocument();
+    expect(screen.getByText("TRK-PARTIAL")).toBeInTheDocument();
+    expect(screen.getByText("2 parcel(s) awaiting return")).toBeInTheDocument();
+    const pendingSection = screen.getByRole("heading", { name: "OS pending returns" }).closest("div")!.parentElement!;
+    expect(within(pendingSection).getByText("12,000 MMK")).toBeInTheDocument();
+    expect(within(screen.getByText("TRK-FAILED").closest("tr")!).getByText("Failed")).toBeInTheDocument();
+    expect(within(screen.getByText("TRK-PARTIAL").closest("tr")!).getByText("Partial")).toBeInTheDocument();
+    expect(screen.getByText("TRK-PARTIAL").closest("tr")).toHaveTextContent("4,000 MMK");
+    expect(screen.getByText("TRK-PARTIAL").closest("tr")).toHaveTextContent("8,000 MMK");
+    await user.click(within(screen.getByText("TRK-FAILED").closest("tr")!).getByRole("button", { name: "Received" }));
+    const dialog = screen.getByRole("form", { name: "Confirm return received" });
+    expect(dialog).toHaveTextContent("8,000 MMK");
+    await user.click(within(dialog).getByRole("button", { name: "Confirm return received" }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/finance/os-returns/receive", expect.objectContaining({ method: "POST" })));
+    const receiveCall = apiMock.mock.calls.find(([path, init]) => path === "/finance/os-returns/receive" && init)!;
+    expect(JSON.parse(receiveCall[1].body)).toMatchObject({
+      parcelId: "parcel-failed",
+      businessDate: "2026-08-13",
+      idempotencyKey: expect.stringMatching(/^os-return-/),
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent("Return received and recoverable deduction posted.");
+    expect(screen.queryByRole("form", { name: "Confirm return received" })).not.toBeInTheDocument();
+  });
+
+  it("treats idempotent OS return receive replay as success", async () => {
+    apiMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/operations/batches" || path === "/master-data/shops") return Promise.resolve({ data: path === "/master-data/shops" ? [{ id: "shop-1", name: "SNMD" }] : [] });
+      if (path === "/master-data") return Promise.resolve({ data: { hubs: [{ id: "hub-1", name: "Main Hub" }] } });
+      if (path === "/finance/expense-categories" || path.startsWith("/finance/expenses?")) return Promise.resolve({ data: [] });
+      if (path.startsWith("/finance/rider-outstanding") || path.startsWith("/finance/os-settlement")) return Promise.resolve({ data: [] });
+      if (path.startsWith("/finance/os-pending-returns")) return Promise.resolve({ data: {
+        items: [{
+          id: "parcel-failed",
+          trackingNumber: "TRK-FAILED",
+          status: "FAILED",
+          advanceAmount: 8000,
+          recoverableAmount: 8000,
+          priorOffsetAmount: 0,
+          returnDueAt: null,
+          batch: { id: "batch-1", label: "August batch" },
+          shop: { id: "shop-1", name: "SNMD" },
+          hubId: "hub-1",
+        }],
+        summary: { count: 1, totalRecoverableAmount: 8000 },
+      } });
+      if (path === "/finance/os-returns/receive" && init) {
+        return Promise.resolve({ data: { parcel: { status: "RETURNED" }, recoverableAmount: 8000, alreadyReceived: true } });
+      }
+      return Promise.resolve({ data: ledgerReport });
+    });
+    const user = userEvent.setup();
+    renderPage("/finance?tab=settlements&businessDate=2026-08-13");
+    await user.click(await screen.findByRole("button", { name: "Received" }));
+    await user.click(within(screen.getByRole("form", { name: "Confirm return received" })).getByRole("button", { name: "Confirm return received" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Return received and recoverable deduction posted.");
+    const receiveCall = apiMock.mock.calls.find(([path, init]) => path === "/finance/os-returns/receive" && init)!;
+    expect(JSON.parse(receiveCall[1].body).idempotencyKey).toMatch(/^os-return-/);
+  });
+
+  it("hides Received actions for Auditor while still showing pending returns", async () => {
+    authState.role = "AUDITOR";
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/operations/batches" || path === "/master-data/shops") return Promise.resolve({ data: [] });
+      if (path === "/master-data") return Promise.resolve({ data: { hubs: [] } });
+      if (path === "/finance/expense-categories" || path.startsWith("/finance/expenses?")) return Promise.resolve({ data: [] });
+      if (path.startsWith("/finance/rider-outstanding") || path.startsWith("/finance/os-settlement")) return Promise.resolve({ data: [] });
+      if (path.startsWith("/finance/os-pending-returns")) return Promise.resolve({ data: {
+        items: [{
+          id: "parcel-1",
+          trackingNumber: "TRK-AUD",
+          status: "PENDING_RETURN",
+          advanceAmount: 5000,
+          recoverableAmount: 5000,
+          priorOffsetAmount: 0,
+          returnDueAt: "2026-08-20T00:00:00.000Z",
+          batch: { id: "batch-1", label: "Batch A" },
+          shop: { id: "shop-1", name: "SNMD" },
+          hubId: "hub-1",
+        }],
+        summary: { count: 1, totalRecoverableAmount: 5000 },
+      } });
+      return Promise.resolve({ data: ledgerReport });
+    });
+    renderPage("/finance?tab=settlements");
+    expect(await screen.findByText("TRK-AUD")).toBeInTheDocument();
+    expect(screen.getByText("Pending return")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Received" })).not.toBeInTheDocument();
   });
 });

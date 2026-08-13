@@ -1,10 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Link2, Pencil, RefreshCw, Search, UserPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@/app/auth";
+import { DeliveryStatusPanel, type ManifestPreviewData } from "@/components/delivery-status-panel";
 import { ApiError, api, apiRaw } from "@/lib/api";
+import {
+  buildManifestBody,
+  MANIFEST_DATE_PRESETS,
+  MANIFEST_STATUS_FILTERS,
+  manifestStatusLabelKey,
+  type ManifestDatePreset,
+  type ManifestStatusKey,
+} from "@/lib/manifest-filters";
 
 type Parcel = {
   id: string;
@@ -134,6 +143,10 @@ export function OperationsPage() {
   const [bulkOverrideNote, setBulkOverrideNote] = useState("");
   const [manifestOpen, setManifestOpen] = useState(false);
   const [manifestRiderIds, setManifestRiderIds] = useState<string[]>([]);
+  const [manifestStatus, setManifestStatus] = useState<ManifestStatusKey>("toDeliver");
+  const [manifestDatePreset, setManifestDatePreset] = useState<ManifestDatePreset>("all");
+  const [manifestDateFrom, setManifestDateFrom] = useState("");
+  const [manifestDateTo, setManifestDateTo] = useState("");
   const [partial, setPartial] = useState<Parcel | null>(null);
   const [editing, setEditing] = useState<Parcel | null>(null);
   const [editForm, setEditForm] = useState({
@@ -278,18 +291,38 @@ export function OperationsPage() {
     onError: (e) => setMessage(e instanceof Error ? e.message : t("loadError")),
   });
 
+  const manifestBody = useMemo(
+    () =>
+      buildManifestBody({
+        riderIds: manifestRiderIds,
+        status: manifestStatus,
+        datePreset: manifestDatePreset,
+        dateFrom: manifestDateFrom,
+        dateTo: manifestDateTo,
+      }),
+    [manifestRiderIds, manifestStatus, manifestDatePreset, manifestDateFrom, manifestDateTo],
+  );
+  const manifestPreview = useQuery({
+    queryKey: ["manifest-preview", manifestBody],
+    enabled: manifestOpen,
+    queryFn: () =>
+      api<ManifestPreviewData>("/operations/parcels/manifest/preview", {
+        method: "POST",
+        body: JSON.stringify(manifestBody),
+      }).then((r) => r.data),
+  });
   const downloadManifest = useMutation({
     mutationFn: () =>
       apiRaw("/operations/parcels/manifest", {
         method: "POST",
-        body: JSON.stringify({ riderIds: manifestRiderIds }),
+        body: JSON.stringify(manifestBody),
       }),
     onSuccess: async (response) => {
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `dispatch-manifest-${manifestRiderIds.length === 1 ? manifestRiderIds[0] : `${manifestRiderIds.length}-riders`}.pdf`;
+      link.download = `dispatch-manifest-${manifestRiderIds.length === 1 ? manifestRiderIds[0] : `${manifestRiderIds.length || "hub"}-riders`}.pdf`;
       link.click();
       URL.revokeObjectURL(url);
       setManifestOpen(false);
@@ -479,6 +512,10 @@ export function OperationsPage() {
       ...new Set(visible.filter((parcel) => parcel.rider?.id).map((parcel) => parcel.rider!.id!)),
     ];
     setManifestRiderIds(assignedRiderIds.length ? assignedRiderIds : []);
+    setManifestStatus("toDeliver");
+    setManifestDatePreset("today");
+    setManifestDateFrom("");
+    setManifestDateTo("");
     setManifestOpen(true);
   };
   const toggleManifestRider = (id: string) =>
@@ -999,11 +1036,45 @@ export function OperationsPage() {
 
       {manifestOpen && (
         <div role="dialog" aria-modal="true" aria-labelledby="manifest-title" className="fixed inset-0 z-20 grid place-items-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl dark:bg-[#181a1d]">
+          <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl dark:bg-[#181a1d]">
             <h2 id="manifest-title" className="font-display text-xl font-bold">
               {t("downloadManifest")}
             </h2>
             <p className="mt-2 text-sm text-slate-500">{t("downloadManifestDescription")}</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {MANIFEST_DATE_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setManifestDatePreset(preset)}
+                  className={`rounded-lg border px-3 py-1.5 text-xs font-bold ${manifestDatePreset === preset ? "border-[#1598ef] bg-[#eaf6ff] text-[#0787df] dark:bg-[#1598ef]/15" : "border-slate-200 dark:border-white/10"}`}
+                >
+                  {preset === "all" ? t("allDates") : preset === "custom" ? t("customRange") : t(preset)}
+                </button>
+              ))}
+            </div>
+            {manifestDatePreset === "custom" && (
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <label className="text-xs font-bold text-slate-500">
+                  {t("dateFrom")}
+                  <input aria-label={`${t("downloadManifest")} ${t("dateFrom")}`} type="date" value={manifestDateFrom} onChange={(e) => setManifestDateFrom(e.target.value)} className={`${control} mt-1 w-full`} />
+                </label>
+                <label className="text-xs font-bold text-slate-500">
+                  {t("dateTo")}
+                  <input aria-label={`${t("downloadManifest")} ${t("dateTo")}`} type="date" value={manifestDateTo} onChange={(e) => setManifestDateTo(e.target.value)} className={`${control} mt-1 w-full`} />
+                </label>
+              </div>
+            )}
+            <label className="mt-4 block text-xs font-bold text-slate-500">
+              {t("status")}
+              <select aria-label={t("status")} value={manifestStatus} onChange={(e) => setManifestStatus(e.target.value as ManifestStatusKey)} className={`${control} mt-1 w-full max-w-sm`}>
+                {MANIFEST_STATUS_FILTERS.map((key) => (
+                  <option key={key} value={key}>
+                    {t(manifestStatusLabelKey(key))}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="mt-4 flex flex-wrap gap-2">
               <button
                 type="button"
@@ -1017,10 +1088,10 @@ export function OperationsPage() {
                 onClick={() => setManifestRiderIds([])}
                 className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold dark:border-white/10"
               >
-                {t("clearFilters")}
+                {t("allRiders")}
               </button>
             </div>
-            <div className="mt-4 max-h-72 space-y-2 overflow-y-auto rounded-xl border border-slate-200 p-3 dark:border-white/10">
+            <div className="mt-4 max-h-48 space-y-2 overflow-y-auto rounded-xl border border-slate-200 p-3 dark:border-white/10">
               {riders.map((rider) => {
                 const checked = manifestRiderIds.includes(rider.id);
                 return (
@@ -1035,18 +1106,21 @@ export function OperationsPage() {
                 );
               })}
             </div>
+            <div className="mt-5">
+              <DeliveryStatusPanel preview={manifestPreview.data} loading={manifestPreview.isLoading} error={manifestPreview.isError} onRetry={() => void manifestPreview.refetch()} />
+            </div>
             <div className="mt-6 flex justify-end gap-3">
               <button type="button" onClick={() => setManifestOpen(false)} className={control}>
                 {t("cancel")}
               </button>
               <button
                 type="button"
-                disabled={!manifestRiderIds.length || downloadManifest.isPending}
+                disabled={downloadManifest.isPending || !manifestPreview.data?.parcelCount}
                 onClick={() => downloadManifest.mutate()}
                 className="rounded-lg bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
               >
                 <Download size={16} className="mr-2 inline" />
-                {downloadManifest.isPending ? t("loading") : t("downloadPdf")} ({manifestRiderIds.length})
+                {downloadManifest.isPending ? t("loading") : t("downloadPdf")}
               </button>
             </div>
           </div>

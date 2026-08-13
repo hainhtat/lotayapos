@@ -73,7 +73,8 @@ export function RiderAppPage() {
           )}
         </div>
 
-        <p className="mt-6 text-xs text-slate-400">{t("riderAppWebBlocked")}</p>
+        <p className="mt-6 text-xs text-slate-400">{t("riderApkInstallHint")}</p>
+        <p className="mt-2 text-xs text-slate-400">{t("riderAppWebBlocked")}</p>
       </div>
     </main>
   );

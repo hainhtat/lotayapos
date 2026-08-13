@@ -9,8 +9,8 @@ import {clearAccessToken,getAccessToken,getRememberedIdentifier,restoreAccessTok
 
 describe("remembered rider session",()=>{
   beforeEach(async()=>{mockValues.clear();await clearAccessToken()});
-  it("keeps an unremembered token only for the current runtime",async()=>{await setAccessToken("session-token",false);expect(await getAccessToken()).toBe("session-token");expect(mockValues.has("lotaya-access-token")).toBe(false)});
-  it("persists a token and normalized identifier only when selected",async()=>{await setAccessToken("saved-token",true);await saveRememberedIdentifier("  rider.one  ",true);expect(mockValues.get("lotaya-access-token")).toBe("saved-token");expect(await getRememberedIdentifier()).toBe("rider.one")});
+  it("persists the access token even when remember-me is off",async()=>{await setAccessToken("session-token",false);expect(await getAccessToken()).toBe("session-token");expect(mockValues.get("lotaya-access-token")).toBe("session-token")});
+  it("persists a token and normalized identifier when remember-me is on",async()=>{await setAccessToken("saved-token",true);await saveRememberedIdentifier("  rider.one  ",true);expect(mockValues.get("lotaya-access-token")).toBe("saved-token");expect(await getRememberedIdentifier()).toBe("rider.one")});
   it("removes previously remembered data when remember is cleared",async()=>{await saveRememberedIdentifier("rider.one",true);await saveRememberedIdentifier("",false);expect(await getRememberedIdentifier()).toBeNull()});
   it("restores a persisted token into the runtime session for verify bootstrap",async()=>{
     mockValues.set("lotaya-access-token","persisted-token");

@@ -38,9 +38,16 @@ export const bulkAssignmentValidation = [
   body("riderId").isString().trim().notEmpty(),
 ];
 
+const manifestStatuses = ["CREATED", "PICKED_UP", "ASSIGNED", "OUT_FOR_DELIVERY", "DELIVERED", "PARTIAL", "FAILED", "REJECTED", "PENDING_RETURN", "RETURNED"];
+
 export const manifestDownloadValidation = [
-  body("riderIds").isArray({ min: 1, max: 50 }),
-  body("riderIds.*").isString().trim().notEmpty(),
+  body("riderIds").optional().isArray({ min: 0, max: 50 }),
+  body("riderIds.*").optional().isString().trim().notEmpty(),
+  body("hubId").optional().isString().trim().notEmpty(),
+  body("dateFrom").optional().isISO8601(),
+  body("dateTo").optional().isISO8601(),
+  body("statuses").optional().isArray({ max: 12 }),
+  body("statuses.*").optional().isIn(manifestStatuses),
 ];
 
 export const linkParcelsValidation = [

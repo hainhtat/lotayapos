@@ -22,4 +22,17 @@ if (databaseProvider === "postgresql" && !/^postgres(ql)?:\/\//.test(databaseUrl
 const hubTimezone = process.env.HUB_TIMEZONE ?? "Asia/Yangon";
 try { new Intl.DateTimeFormat("en-US", { timeZone: hubTimezone }).format(); } catch { throw new Error("HUB_TIMEZONE must be a valid IANA timezone"); }
 
-export const env = { nodeEnv, port: Number(process.env.PORT ?? 4000), databaseProvider, databaseUrl, jwtSecret, jwtIssuer: required("JWT_ISSUER", "lotaya-api"), jwtAudience: required("JWT_AUDIENCE", "lotaya-clients"), webOrigin: process.env.WEB_ORIGIN ?? "http://localhost:5173", defaultLocale: process.env.DEFAULT_LOCALE ?? "en", riderCommissionRateBps: Number(process.env.RIDER_COMMISSION_RATE_BPS ?? 1000), hubTimezone };
+function parseWebOrigins() {
+  const configured = (process.env.WEB_ORIGIN ?? (nodeEnv === "production" ? "http://localhost:5173" : "http://localhost:5173"))
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (nodeEnv !== "production") {
+    for (const devOrigin of ["http://localhost:8081", "http://127.0.0.1:8081"]) {
+      if (!configured.includes(devOrigin)) configured.push(devOrigin);
+    }
+  }
+  return configured;
+}
+
+export const env = { nodeEnv, port: Number(process.env.PORT ?? 4000), listenHost: process.env.LISTEN_HOST ?? (nodeEnv === "production" ? "127.0.0.1" : "0.0.0.0"), databaseProvider, databaseUrl, jwtSecret, jwtIssuer: required("JWT_ISSUER", "lotaya-api"), jwtAudience: required("JWT_AUDIENCE", "lotaya-clients"), webOrigins: parseWebOrigins(), defaultLocale: process.env.DEFAULT_LOCALE ?? "en", riderCommissionRateBps: Number(process.env.RIDER_COMMISSION_RATE_BPS ?? 1000), hubTimezone };

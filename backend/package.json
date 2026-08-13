@@ -16,9 +16,9 @@
     "db:generate:postgresql": "DATABASE_PROVIDER=postgresql prisma generate --schema prisma/schema.postgresql.prisma",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
-    "db:deploy:postgresql": "DATABASE_PROVIDER=postgresql prisma migrate deploy --schema prisma/schema.postgresql.prisma"
-    ,"provision:superadmin": "tsx src/scripts/provision-superadmin.ts"
-    ,"seed:locations": "tsx src/scripts/seed-myanmar-locations.ts"
+    "db:deploy:postgresql": "DATABASE_PROVIDER=postgresql prisma migrate deploy --schema prisma/schema.postgresql.prisma",
+    "provision:superadmin": "tsx src/scripts/provision-superadmin.ts",
+    "seed:locations": "tsx src/scripts/seed-myanmar-locations.ts"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.9.1",
@@ -31,8 +31,9 @@
     "express": "latest",
     "express-validator": "latest",
     "jsonwebtoken": "latest",
+    "pdfjs-dist": "^6.2.108",
+    "pg": "latest",
     "pino-http": "latest"
-    ,"pg": "latest"
   },
   "devDependencies": {
     "@types/bcryptjs": "latest",

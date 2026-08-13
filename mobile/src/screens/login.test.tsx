@@ -17,7 +17,7 @@ describe("rider login",()=>{
     await fireEvent.changeText(screen.getByLabelText("Username or email"),identifier);
     await fireEvent.changeText(screen.getByLabelText("Password"),"secret-value");
     await fireEvent.press(screen.getByText("Sign in"));
-    await waitFor(()=>expect(mockSignIn).toHaveBeenCalledWith(identifier,"secret-value",false));
+    await waitFor(()=>expect(mockSignIn).toHaveBeenCalledWith(identifier,"secret-value",true));
   });
 
   it("restores remember choice and toggles password visibility accessibly",async()=>{

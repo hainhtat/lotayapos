@@ -15,7 +15,7 @@ export default function Login(){
   const dark=theme==="dark";
   const [error,setError]=useState("");
   const [showPassword,setShowPassword]=useState(false);
-  const [remember,setRemember]=useState(false);
+  const [remember,setRemember]=useState(true);
   const [submitting,setSubmitting]=useState(false);
   const {control,handleSubmit,setValue}=useForm<LoginFields>({defaultValues:{identifier:"",password:""}});
 

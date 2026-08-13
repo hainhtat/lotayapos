@@ -96,6 +96,21 @@ describe("assigned parcel linked groups", () => {
     expect(globalThis.fetch).toHaveBeenNthCalledWith(2, expect.stringContaining("page=2&pageSize=100"), expect.any(Object));
   });
 
+  it("sends pickup date filters on assigned parcel requests", async () => {
+    (globalThis.fetch as jest.Mock).mockImplementation(() =>
+      okJson([], { page: 1, pageSize: 100, total: 0, totalPages: 1 }),
+    );
+    await getAssignedParcels({ dateFrom: "2026-08-10", dateTo: "2026-08-16" });
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("dateFrom=2026-08-10"),
+      expect.any(Object),
+    );
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("dateTo=2026-08-16"),
+      expect.any(Object),
+    );
+  });
+
   it("uses detail link-group membership for linked parcel count", async () => {
     (globalThis.fetch as jest.Mock).mockImplementation(() =>
       okJson({

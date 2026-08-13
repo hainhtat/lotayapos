@@ -177,6 +177,52 @@ describe("protected API contracts", () => {
     expect(preview.status).toBe(403);
   });
 
+  test("protects OS pending-return list and receive endpoints", async () => {
+    const unauthenticated = await request(app).get("/api/v1/finance/os-pending-returns");
+    expect(unauthenticated.status).toBe(401);
+
+    const list = await request(app)
+      .get("/api/v1/finance/os-pending-returns")
+      .set("Authorization", `Bearer ${token("AUDITOR")}`);
+    expect(list.status).toBe(200);
+    expect(list.body.success).toBe(true);
+    expect(list.body.data).toHaveProperty("items");
+    expect(list.body.data).toHaveProperty("summary");
+
+    const denied = await request(app)
+      .post("/api/v1/finance/os-returns/receive")
+      .set("Authorization", `Bearer ${token("AUDITOR")}`)
+      .send({ parcelId: "parcel-1", businessDate: "2026-08-13", idempotencyKey: "auditor-denied-receive" });
+    expect(denied.status).toBe(403);
+
+    const dispatcherDenied = await request(app)
+      .post("/api/v1/finance/os-returns/receive")
+      .set("Authorization", `Bearer ${token("DISPATCHER")}`)
+      .send({ parcelId: "parcel-1", businessDate: "2026-08-13", idempotencyKey: "dispatcher-denied-receive" });
+    expect(dispatcherDenied.status).toBe(403);
+
+    const superadminList = await request(app)
+      .get("/api/v1/finance/os-pending-returns")
+      .set("Authorization", `Bearer ${token("SUPERADMIN")}`);
+    expect(superadminList.status).toBe(200);
+    expect(superadminList.body.success).toBe(true);
+    expect(Array.isArray(superadminList.body.data.items)).toBe(true);
+
+    const invalid = await request(app)
+      .post("/api/v1/finance/os-returns/receive")
+      .set("Authorization", `Bearer ${token("FINANCE")}`)
+      .send({ businessDate: "2026-08-13", idempotencyKey: "missing-parcel-id" });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error.code).toBe("VALIDATION_ERROR");
+
+    const invalidKey = await request(app)
+      .post("/api/v1/finance/os-returns/receive")
+      .set("Authorization", `Bearer ${token("FINANCE")}`)
+      .send({ parcelId: "parcel-1", businessDate: "2026-08-13", idempotencyKey: "bad key" });
+    expect(invalidKey.status).toBe(400);
+    expect(invalidKey.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
   test("limits OS settlement reversals to finance roles", async () => {
     const response = await request(app)
       .post("/api/v1/finance/os-settlements/os-1/reversal")
@@ -414,14 +460,60 @@ describe("protected API contracts", () => {
     expect(response.body.error.code).toBe("VALIDATION_ERROR");
   });
 
-  test("returns a validation error for an incomplete manifest download request", async () => {
+  test("returns a validation error for invalid manifest status filters", async () => {
     const response = await request(app)
       .post("/api/v1/operations/parcels/manifest")
       .set("Authorization", `Bearer ${token("DISPATCHER")}`)
-      .send({ riderIds: [] });
+      .send({ riderIds: ["rider-1"], statuses: ["BOGUS"] });
 
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("lets Superadmin preview delivery status without selecting riders or a hub", async () => {
+    const response = await request(app)
+      .post("/api/v1/operations/parcels/manifest/preview")
+      .set("Authorization", `Bearer ${token("SUPERADMIN")}`)
+      .send({ statuses: ["DELIVERED", "OUT_FOR_DELIVERY"] });
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.summary).toEqual(expect.objectContaining({ parcelCount: expect.any(Number) }));
+  });
+
+  test("lets Finance preview a filtered manifest without a PDF", async () => {
+    const response = await request(app)
+      .post("/api/v1/operations/parcels/manifest/preview")
+      .set("Authorization", `Bearer ${token("FINANCE")}`)
+      .send({ dateFrom: "2026-08-13", dateTo: "2026-08-13", statuses: ["DELIVERED"] });
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data).toMatchObject({
+      sections: expect.any(Array),
+      summary: expect.objectContaining({ parcelCount: expect.any(Number), delivered: expect.any(Number) }),
+    });
+  });
+
+  test("lets Auditor preview all hub riders when riderIds is an empty array", async () => {
+    const response = await request(app)
+      .post("/api/v1/operations/parcels/manifest/preview")
+      .set("Authorization", `Bearer ${token("AUDITOR")}`)
+      .send({ riderIds: [], statuses: ["DELIVERED"] });
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.summary).toEqual(expect.objectContaining({ parcelCount: expect.any(Number) }));
+  });
+
+  test("rejects rider access to delivery-status preview", async () => {
+    const response = await request(app)
+      .post("/api/v1/operations/parcels/manifest/preview")
+      .set("Authorization", `Bearer ${token("RIDER")}`)
+      .send({});
+
+    expect(response.status).toBe(403);
+    expect(response.body.error.code).toBe("FORBIDDEN");
   });
 
   test("rejects unknown parcel assignment filters", async () => {
@@ -539,5 +631,28 @@ describe("protected API contracts", () => {
 
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("protects OS manifest PDF preview and rejects non-PDF uploads before extraction", async () => {
+    const path = "/api/v1/operations/batches/missing-batch/manifest-preview";
+    const unauthenticated = await request(app).post(path).set("Content-Type", "application/pdf").send(Buffer.from("%PDF-1.4"));
+    expect(unauthenticated.status).toBe(401);
+    expect(unauthenticated.body.error.code).toBe("AUTH_REQUIRED");
+
+    const rider = await request(app).post(path).set("Authorization", `Bearer ${token("RIDER")}`).set("Content-Type", "application/pdf").send(Buffer.from("%PDF-1.4"));
+    expect(rider.status).toBe(403);
+    expect(rider.body.error.code).toBe("FORBIDDEN");
+
+    const finance = await request(app).post(path).set("Authorization", `Bearer ${token("FINANCE")}`).set("Content-Type", "application/pdf").send(Buffer.from("%PDF-1.4"));
+    expect(finance.status).toBe(403);
+    expect(finance.body.error.code).toBe("FORBIDDEN");
+
+    const invalid = await request(app).post(path).set("Authorization", `Bearer ${token("DISPATCHER")}`).set("Content-Type", "application/pdf").send(Buffer.from("not-a-pdf"));
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error.code).toBe("INVALID_PDF");
+
+    const missing = await request(app).post(path).set("Authorization", `Bearer ${token("DISPATCHER")}`).set("Content-Type", "application/pdf").send(Buffer.from("%PDF-1.4"));
+    expect(missing.status).toBe(404);
+    expect(missing.body.error.code).toBe("BATCH_NOT_FOUND");
   });
 });

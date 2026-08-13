@@ -13,6 +13,12 @@ export const createOsSettlement: RequestHandler = async (req, res) => res.status
 export const osSettlements: RequestHandler = async (req, res) => res.json({ success: true, data: await service.listOsSettlements({ shopId: typeof req.query.shopId === "string" ? req.query.shopId : undefined, hubId: typeof req.query.hubId === "string" ? req.query.hubId : undefined }, actor(req)) });
 export const osSettlementDetail: RequestHandler = async (req, res) => res.json({ success: true, data: await service.getOsSettlement(String(req.params.id), actor(req)) });
 export const reverseOsSettlement: RequestHandler = async (req, res) => res.json({ success: true, data: await service.reverseOsSettlement({ id: String(req.params.id), ...req.body }, actor(req)) });
+export const osPendingReturns: RequestHandler = async (req, res) => res.json({ success: true, data: await service.listOsPendingReturns({ shopId: typeof req.query.shopId === "string" ? req.query.shopId : undefined, hubId: typeof req.query.hubId === "string" ? req.query.hubId : undefined }, actor(req)) });
+export const receiveOsReturn: RequestHandler = async (req, res) => {
+  const data = await service.receiveOsReturn(req.body, actor(req));
+  const status = data.alreadyReceived ? 200 : 201;
+  res.status(status).json({ success: true, data });
+};
 export const declareSettlement: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await service.declareRiderSettlement(req.body, actor(req)) });
 export const close: RequestHandler = async (req, res) => res.json({ success: true, data: await service.closeCashbook(req.body, actor(req)) });
 export const approveVariance: RequestHandler = async (req, res) => res.json({ success: true, data: await service.approveCashbookVariance(req.body, actor(req)) });

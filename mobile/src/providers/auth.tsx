@@ -38,7 +38,7 @@ export function AuthProvider({children}:{children:React.ReactNode}){
       method:"POST",
       body:JSON.stringify({identifier:identifier.trim(),password}),
     });
-    await setAccessToken(result.data.accessToken,remember);
+    await setAccessToken(result.data.accessToken);
     await saveRememberedIdentifier(identifier,remember);
     setUser(result.data.user);
   };

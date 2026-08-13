@@ -3,6 +3,20 @@ import { ApiError } from "../utils/api-error.js";
 import type { Prisma } from "@prisma/client";
 import { assertCashbookOpen } from "./finance.service.js";
 import { resolveCommissionRateBps } from "../utils/commission.js";
+import {
+  buildReturnDeductionLines,
+  postReturnDeductionInTx,
+  recoverableAdvance,
+} from "./os-advance.js";
+
+export {
+  buildReturnDeductionLines,
+  postReturnDeductionInTx,
+  recoverableAdvance,
+  recoverableAdvanceAmount,
+  sumUnreversedCreditsToOsAdvanceReceivable,
+  sumUnreversedCreditsToOsAdvanceReceivableByParcel,
+} from "./os-advance.js";
 
 export type LedgerWallet = "CASH" | "KBZ_PAY" | "WAVE_PAY";
 export type LedgerActor = { id: string; role: string };
@@ -116,17 +130,6 @@ export function calculateLinkedDeliveryAmounts(input: { baseDeliveryFee: number;
   return { deliveryFee, commission: Math.round(deliveryFee * input.commissionRateBps / 10000) };
 }
 
-export function buildReturnDeductionLines(amount: number) {
-  assertAmount(amount, "amount");
-  if (amount <= 0) throw new ApiError(400, "INVALID_DEDUCTION", "Return deduction must be greater than zero");
-  const lines = [
-    { account: "OS_SETTLEMENT_OFFSET", debit: amount, credit: 0 },
-    { account: "OS_ADVANCE_RECEIVABLE", debit: 0, credit: amount },
-  ];
-  assertBalancedLines(lines);
-  return lines;
-}
-
 export function calculatePartialReturnAmounts(input: { codAmount: number; advanceAmount: number; actualCodCollected: number }) {
   assertAmount(input.codAmount, "codAmount");
   assertAmount(input.advanceAmount, "advanceAmount");
@@ -191,15 +194,16 @@ export async function postReturnDeduction(input: { parcelId: string; businessDat
   const parcel = await parcelForActor(input.parcelId, actor);
   const parcelHubId = parcel.batch.hubId!;
   if (parcel.status !== "RETURNED") throw new ApiError(409, "PARCEL_NOT_RETURNED", "Return deductions can only be posted for returned parcels");
-  const amount = input.amount ?? parcel.advanceAmount;
-  if (amount > parcel.advanceAmount) throw new ApiError(400, "DEDUCTION_EXCEEDS_ADVANCE", "Return deduction cannot exceed the pickup advance");
   const date = businessDay(input.businessDate);
-  const lines = buildReturnDeductionLines(amount);
   return prisma.$transaction(async (tx) => {
     await assertCashbookOpen(tx, date, parcelHubId);
-    const existing = await tx.journalEntry.findUnique({ where: sourceKey("OS_RETURN_DEDUCTION", parcel.id) });
-    if (existing) throw new ApiError(409, "DEDUCTION_EXISTS", "A return deduction already exists for this parcel");
-    return tx.journalEntry.create({ data: { sourceType: "OS_RETURN_DEDUCTION", sourceId: parcel.id, hubId: parcelHubId, businessDate: date, description: `Return deduction for ${parcel.trackingNumber}`, lines: { create: lines } }, include: { lines: true } });
+    const recoverable = await recoverableAdvance(tx, parcel);
+    const amount = input.amount ?? recoverable;
+    if (amount > recoverable) {
+      throw new ApiError(400, "DEDUCTION_EXCEEDS_ADVANCE", "Return deduction cannot exceed the recoverable advance remainder");
+    }
+    if (amount <= 0) throw new ApiError(400, "INVALID_DEDUCTION", "Return deduction must be greater than zero");
+    return postReturnDeductionInTx(tx, { parcel, hubId: parcelHubId, businessDate: date, amount });
   });
 }
 
@@ -214,7 +218,8 @@ async function assertOriginalScope(actor: LedgerActor, entry: { sourceType: stri
     return;
   }
   if (["PICKUP_ADVANCE", "DELIVERY_COLLECTION", "PARTIAL_RETURN_COLLECTION", "OS_PARTIAL_RETURN_ADJUSTMENT", "OS_SHORTFALL", "OS_RETURN_DEDUCTION", "RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_COD"].includes(entry.sourceType)) {
-    const parcel = await prisma.parcel.findUnique({ where: { id: entry.sourceId }, include: { batch: { select: { hubId: true } } } });
+    const parcelId = ["OS_RETURN_DEDUCTION", "RIDER_COMMISSION"].includes(entry.sourceType) ? entry.sourceId.split(":")[0]! : entry.sourceId;
+    const parcel = await prisma.parcel.findUnique({ where: { id: parcelId }, include: { batch: { select: { hubId: true } } } });
     if (!parcel || parcel.batch.hubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Entry is outside your hub scope");
     return;
   }
@@ -253,7 +258,8 @@ async function entryInScope(entry: { sourceType: string; sourceId: string | null
     return batch?.hubId === hubId;
   }
   if (["PICKUP_ADVANCE", "DELIVERY_COLLECTION", "PARTIAL_RETURN_COLLECTION", "OS_PARTIAL_RETURN_ADJUSTMENT", "OS_SHORTFALL", "OS_RETURN_DEDUCTION", "RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_COD"].includes(entry.sourceType)) {
-    const parcel = await prisma.parcel.findUnique({ where: { id: entry.sourceId }, include: { batch: { select: { hubId: true } } } });
+    const parcelId = ["OS_RETURN_DEDUCTION", "RIDER_COMMISSION"].includes(entry.sourceType) ? entry.sourceId.split(":")[0]! : entry.sourceId;
+    const parcel = await prisma.parcel.findUnique({ where: { id: parcelId }, include: { batch: { select: { hubId: true } } } });
     return parcel?.batch.hubId === hubId;
   }
   if (["LINKED_RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_FEE", "LINKED_DELIVERY_COLLECTION", "LINKED_RIDER_COMMISSION", "LINKED_OS_SHORTFALL"].includes(entry.sourceType)) {
@@ -277,7 +283,12 @@ export async function getLedgerReport(input: { from?: string; to?: string; accou
   const from = input.from ? businessDay(input.from) : undefined;
   const to = input.to ? businessDay(input.to) : undefined;
   if (from && to && from > to) throw new ApiError(400, "INVALID_DATE_RANGE", "Ledger start date must be before the end date");
-  const entries = await prisma.journalEntry.findMany({ where: { ...(user.role === "SUPERADMIN" ? {} : { hubId: user.hubId! }), ...(from || to ? { businessDate: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}) }, include: { lines: true }, orderBy: [{ businessDate: "asc" }, { createdAt: "asc" }] });
+  const entries = await prisma.journalEntry.findMany({
+    where: { ...(user.role === "SUPERADMIN" ? {} : { hubId: user.hubId! }), ...(from || to ? { businessDate: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}) },
+    include: { lines: true },
+    orderBy: [{ businessDate: "asc" }, { createdAt: "asc" }],
+    take: 500,
+  });
   const scopedEntries = entries;
   const filteredEntries = input.account ? scopedEntries.filter((entry) => entry.lines.some((line) => line.account === input.account)) : scopedEntries;
   const balances = new Map<string, { debit: number; credit: number }>();

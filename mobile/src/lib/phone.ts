@@ -1,7 +1,11 @@
 export type PhoneLauncher={canOpenURL(url:string):Promise<boolean>;openURL(url:string):Promise<unknown>};
 
+export function sanitizedCustomerPhone(phone:string|undefined){
+  return phone?.replace(/[^+\d]/g,"")??"";
+}
+
 export async function callCustomer(phone:string|undefined,launcher:PhoneLauncher){
-  const normalized=phone?.replace(/[^+\d]/g,"");
+  const normalized=sanitizedCustomerPhone(phone);
   if(!normalized)return "missing" as const;
   const url=`tel:${normalized}`;
   try{

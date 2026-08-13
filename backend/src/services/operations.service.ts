@@ -7,6 +7,27 @@ const walletAccounts: Record<FundingWallet, string> = { CASH: "WALLET_CASH", KBZ
 type BatchActor = { id: string; role: string };
 const operationsReadRoles = ["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "DISPATCHER"];
 const assignmentRoles = ["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"];
+const manifestReadRoles = ["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER", "FINANCE", "AUDITOR"];
+export const DISPATCH_MANIFEST_STATUSES = ["ASSIGNED", "OUT_FOR_DELIVERY", "PICKED_UP"] as const;
+const MANIFEST_STATUSES = ["CREATED", "PICKED_UP", "ASSIGNED", "OUT_FOR_DELIVERY", "DELIVERED", "PARTIAL", "FAILED", "REJECTED", "PENDING_RETURN", "RETURNED"] as const;
+const PDF_STATUS_NOTE: Record<string, string> = {
+  CREATED: "CRT",
+  PICKED_UP: "PKU",
+  ASSIGNED: "ASN",
+  OUT_FOR_DELIVERY: "OFD",
+  DELIVERED: "DLV",
+  PARTIAL: "PRT",
+  FAILED: "FLD",
+  REJECTED: "REJ",
+  PENDING_RETURN: "PRN",
+  RETURNED: "RTN",
+};
+
+export function manifestStatusesLabel(statuses?: string[]) {
+  const list = statuses?.length ? statuses : [...DISPATCH_MANIFEST_STATUSES];
+  if (list.length >= MANIFEST_STATUSES.length) return "All statuses";
+  return list.map((status) => status.replaceAll("_", " ").toLowerCase().replace(/^[a-z]/, (letter) => letter.toUpperCase())).join(", ");
+}
 const assignmentEligibleStatuses = ["CREATED", "PICKED_UP"];
 
 export function walletAccount(wallet: string): string {
@@ -234,38 +255,108 @@ export async function bulkAssignParcels(input: { parcelIds: string[]; riderId: s
   return { rider: { id: rider.id, name: rider.user.name, hubId: rider.hubId }, parcels: assigned, assignedCount: assigned.length };
 }
 
-export async function buildManifestForRiders(input: { riderIds: string[] }, actor: BatchActor) {
-  const uniqueRiderIds = [...new Set(input.riderIds)];
-  if (uniqueRiderIds.length === 0 || uniqueRiderIds.length !== input.riderIds.length) throw new ApiError(400, "INVALID_RIDER_IDS", "riderIds must contain unique rider IDs");
-  if (uniqueRiderIds.length > 50) throw new ApiError(400, "BATCH_TOO_LARGE", "A manifest may include at most 50 riders");
+function parseManifestDate(value: string | undefined, field: string, endOfDay = false) {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw new ApiError(400, "INVALID_DATE", `${field} must be a valid date`);
+  if (endOfDay && /^\d{4}-\d{2}-\d{2}$/.test(value)) date.setUTCDate(date.getUTCDate() + 1);
+  return date;
+}
+
+export type ManifestQuery = {
+  riderIds?: string[];
+  hubId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  statuses?: string[];
+};
+
+export function summarizeManifestParcels(parcels: Array<{ status: string; codAmount: number; deliveryFee?: number | null }>) {
+  const count = (status: string) => parcels.filter((parcel) => parcel.status === status).length;
+  return {
+    parcelCount: parcels.length,
+    delivered: count("DELIVERED"),
+    partial: count("PARTIAL"),
+    failed: count("FAILED"),
+    rejected: count("REJECTED"),
+    pendingReturn: count("PENDING_RETURN"),
+    toDeliver: parcels.filter((parcel) => ["CREATED", "PICKED_UP", "ASSIGNED", "OUT_FOR_DELIVERY"].includes(parcel.status)).length,
+    totalCod: parcels.reduce((sum, parcel) => sum + parcel.codAmount, 0),
+    totalFees: parcels.reduce((sum, parcel) => sum + (parcel.deliveryFee ?? 0), 0),
+  };
+}
+
+export async function buildManifestForRiders(input: ManifestQuery, actor: BatchActor) {
+  const requestedIds = [...new Set(input.riderIds ?? [])];
+  if (requestedIds.length !== (input.riderIds ?? []).length) throw new ApiError(400, "INVALID_RIDER_IDS", "riderIds must contain unique rider IDs");
+  if (requestedIds.length > 50) throw new ApiError(400, "BATCH_TOO_LARGE", "A manifest may include at most 50 riders");
+  if (input.statuses?.some((status) => !(MANIFEST_STATUSES as readonly string[]).includes(status))) {
+    throw new ApiError(400, "INVALID_STATUS", "One or more manifest statuses are invalid");
+  }
 
   const user = await prisma.user.findUnique({ where: { id: actor.id }, select: { role: true, active: true, hubId: true } });
-  if (!user || !user.active || user.role !== actor.role || !assignmentRoles.includes(user.role)) throw new ApiError(403, "FORBIDDEN", "You may not download dispatch manifests");
-  if (user.role !== "SUPERADMIN" && !user.hubId) throw new ApiError(403, "FORBIDDEN", "A hub scope is required for dispatch");
+  if (!user || !user.active || user.role !== actor.role || !manifestReadRoles.includes(user.role)) throw new ApiError(403, "FORBIDDEN", "You may not view dispatch manifests");
+  const hubId = user.role === "SUPERADMIN" ? input.hubId ?? user.hubId ?? undefined : user.hubId ?? undefined;
+  if (user.role !== "SUPERADMIN" && !hubId) throw new ApiError(403, "FORBIDDEN", "A hub scope is required for dispatch");
 
-  const riders = await prisma.rider.findMany({
-    where: { id: { in: uniqueRiderIds } },
-    select: { id: true, hubId: true, hub: { select: { name: true } }, user: { select: { name: true, active: true, role: true } } },
-  });
+  let riders = requestedIds.length
+    ? await prisma.rider.findMany({
+        where: { id: { in: requestedIds } },
+        select: { id: true, hubId: true, hub: { select: { name: true } }, user: { select: { name: true, active: true, role: true } } },
+      })
+    : await prisma.rider.findMany({
+        where: hubId ? { hubId } : {},
+        select: { id: true, hubId: true, hub: { select: { name: true } }, user: { select: { name: true, active: true, role: true } } },
+        take: 51,
+        orderBy: { id: "asc" },
+      });
+  if (!requestedIds.length && riders.length > 50) throw new ApiError(400, "BATCH_TOO_LARGE", "Select at most 50 riders for a manifest");
+  const uniqueRiderIds = requestedIds.length ? requestedIds : riders.map((rider) => rider.id);
+  if (uniqueRiderIds.length === 0) {
+    return {
+      sections: [],
+      summary: summarizeManifestParcels([]),
+      riderCount: 0,
+      parcelCount: 0,
+      filenameSuffix: "none",
+      statusesLabel: manifestStatusesLabel(input.statuses),
+    };
+  }
+
   const ridersById = new Map(riders.map((rider) => [rider.id, rider]));
   const missing = uniqueRiderIds.filter((id) => !ridersById.has(id));
   const outOfScope = uniqueRiderIds.filter((id) => {
     const rider = ridersById.get(id);
-    return rider && (!rider.hubId || (user.role !== "SUPERADMIN" && rider.hubId !== user.hubId));
+    return rider && (!rider.hubId || (user.role !== "SUPERADMIN" && rider.hubId !== user.hubId) || (hubId && rider.hubId !== hubId));
   });
   if (missing.length > 0 || outOfScope.length > 0) {
     throw new ApiError(404, "RIDER_NOT_FOUND", "One or more riders were not found in your hub scope", { missingRiderIds: missing, outOfScopeRiderIds: outOfScope });
   }
 
+  const dateFrom = parseManifestDate(input.dateFrom, "dateFrom");
+  const dateTo = parseManifestDate(input.dateTo, "dateTo", true);
+  if (dateFrom && dateTo && dateFrom >= dateTo) throw new ApiError(400, "INVALID_DATE_RANGE", "dateFrom must be before dateTo");
+  const statuses = input.statuses?.length ? input.statuses : [...DISPATCH_MANIFEST_STATUSES];
+
   const parcels = await prisma.parcel.findMany({
     where: {
       riderId: { in: uniqueRiderIds },
-      status: { in: ["ASSIGNED", "OUT_FOR_DELIVERY", "PICKED_UP"] },
-      ...(user.role === "SUPERADMIN" ? {} : { batch: { hubId: user.hubId! } }),
+      status: { in: statuses },
+      ...((hubId || dateFrom || dateTo)
+        ? {
+            batch: {
+              ...(hubId ? { hubId } : {}),
+              ...(dateFrom || dateTo
+                ? { pickupDate: { ...(dateFrom ? { gte: dateFrom } : {}), ...(dateTo ? { lt: dateTo } : {}) } }
+                : {}),
+            },
+          }
+        : {}),
     },
     select: {
       id: true,
       riderId: true,
+      status: true,
       trackingNumber: true,
       orderId: true,
       customerName: true,
@@ -275,9 +366,10 @@ export async function buildManifestForRiders(input: { riderIds: string[] }, acto
       deliveryFee: true,
       zone: true,
       township: true,
-      batch: { select: { label: true, shop: { select: { name: true } } } },
+      batch: { select: { label: true, pickupDate: true, shop: { select: { name: true } } } },
     },
     orderBy: [{ riderId: "asc" }, { trackingNumber: "asc" }],
+    take: 501,
   });
 
   if (parcels.length > 500) {
@@ -288,11 +380,13 @@ export async function buildManifestForRiders(input: { riderIds: string[] }, acto
     const rider = ridersById.get(riderId)!;
     const riderParcels = parcels.filter((parcel) => parcel.riderId === riderId);
     return {
+      riderId,
       riderName: rider.user.name,
       hubName: rider.hub?.name ?? undefined,
       parcels: riderParcels.map((parcel) => ({
         trackingNumber: parcel.trackingNumber,
         orderId: parcel.orderId,
+        status: parcel.status,
         customerName: parcel.customerName,
         customerPhone: parcel.customerPhone,
         address: parcel.address,
@@ -301,16 +395,20 @@ export async function buildManifestForRiders(input: { riderIds: string[] }, acto
         zone: parcel.zone,
         township: parcel.township,
         batchLabel: parcel.batch.label,
+        pickupDate: parcel.batch.pickupDate,
         shopName: parcel.batch.shop.name,
+        note: PDF_STATUS_NOTE[parcel.status] ?? parcel.status.slice(0, 4),
       })),
     };
   });
 
   return {
     sections,
+    summary: summarizeManifestParcels(parcels),
     riderCount: uniqueRiderIds.length,
     parcelCount: parcels.length,
     filenameSuffix: uniqueRiderIds.length === 1 ? uniqueRiderIds[0]! : `${uniqueRiderIds.length}-riders`,
+    statusesLabel: manifestStatusesLabel(input.statuses),
   };
 }
 

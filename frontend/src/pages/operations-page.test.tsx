@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "@/i18n";
+import { datePresetRange } from "@/lib/date-presets";
+import { manifestStatusList } from "@/lib/manifest-filters";
 import { OperationsPage } from "./operations-page";
 
 const apiMock = vi.hoisted(() => vi.fn());
@@ -436,5 +438,41 @@ describe("OperationsPage", () => {
     expect(screen.queryByText(/multi-edit/i)).not.toBeInTheDocument();
     expect(screen.getByLabelText("Rider TRK-1")).toBeDisabled();
     expect(screen.getByLabelText("Status TRK-1")).toBeDisabled();
+  });
+
+  it("previews the dispatch manifest for all hub riders when none are selected", async () => {
+    mockParcelList([]);
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/master-data") {
+        return Promise.resolve({ data: { riders: [{ id: "rider-1", user: { name: "Aung Aung" } }] } });
+      }
+      if (path === "/operations/parcels/manifest/preview") {
+        return Promise.resolve({
+          data: {
+            riderCount: 0,
+            parcelCount: 0,
+            summary: { parcelCount: 0, delivered: 0, partial: 0, failed: 0, rejected: 0, pendingReturn: 0, toDeliver: 0, totalCod: 0, totalFees: 0 },
+            sections: [],
+          },
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Download manifest" }));
+    expect(await screen.findByRole("dialog", { name: "Download manifest" })).toBeInTheDocument();
+    await waitFor(() => {
+      const call = apiMock.mock.calls.find(([path]) => path === "/operations/parcels/manifest/preview");
+      expect(call?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
+      const body = JSON.parse(String(call?.[1]?.body ?? "{}")) as {
+        riderIds?: string[];
+        statuses?: string[];
+        dateFrom?: string;
+        dateTo?: string;
+      };
+      expect(body.riderIds).toBeUndefined();
+      expect(body.statuses).toEqual(manifestStatusList("toDeliver"));
+      expect(body).toMatchObject(datePresetRange("today"));
+    });
   });
 });

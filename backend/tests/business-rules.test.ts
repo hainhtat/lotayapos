@@ -1,11 +1,12 @@
-import { addWalletAmounts, assertCashbookOpen, buildCashbookAdjustmentLines, buildExpenseLines, buildOpeningBalanceLines, buildWalletTransferLines, calculateDailySalaryDeduction, calculateOsSettlementNet, calculateRecognitionTotals, calculateRiderSettlementAmounts, calculateRiderSettlementTotals, calculateWalletBalances, calculateWalletReconciliationVariance, combineRiderOutstandingAggregates, cumulativeReceiptPosition, isOsSettlementCodCovered, settlementWalletMismatch } from "../src/services/finance.service.js";
+import { addWalletAmounts, assertCashbookOpen, buildCashbookAdjustmentLines, buildExpenseLines, buildOpeningBalanceLines, buildWalletTransferLines, calculateDailySalaryDeduction, calculateOsSettlementNet, calculateRecognitionTotals, calculateRiderSettlementAmounts, calculateRiderSettlementTotals, calculateWalletBalances, calculateWalletReconciliationVariance, combineRiderOutstandingAggregates, cumulativeReceiptPosition, isOsSettlementCodCovered, returnedAdvanceContribution, settlementWalletMismatch } from "../src/services/finance.service.js";
 import { buildRiderReceivableRecognitionLines } from "../src/services/parcel.service.js";
 import { ApiError } from "../src/utils/api-error.js";
-import { buildPickupAdvanceJournalLines, bulkAssignParcels, calculateReturnExtension, isAssignmentEligible, pickupAdvancePostingDisposition } from "../src/services/operations.service.js";
+import { buildPickupAdvanceJournalLines, bulkAssignParcels, calculateReturnExtension, isAssignmentEligible, manifestStatusesLabel, pickupAdvancePostingDisposition, summarizeManifestParcels } from "../src/services/operations.service.js";
 import { businessDateFor } from "../src/services/master-data.service.js";
 import { assertParcelAccess, buildParcelListWhere, buildParcelScope, buildRiderCommissionLines, calculateCommissionAmount, canOverrideStatus, isAllowedTransition, LINKED_MONEY_POSTED_SOURCE_TYPES, MONEY_POSTED_SOURCE_TYPES, overrideLeavesMoneyBearingStatus, requiresOverrideNote, resolveCommissionRateBps, validateConfiguredReason } from "../src/services/parcel.service.js";
 import { normalizeReasonCode, normalizeRiderPayFields } from "../src/services/master-data.service.js";
 import { assertBalancedLines, buildDeliveryCollectionLines, buildPartialReturnAdjustmentLines, buildPartialReturnCollectionLines, buildReturnDeductionLines, calculatePartialReturnAmounts } from "../src/services/ledger.service.js";
+import { recoverableAdvanceAmount, buildOsSettlementReturnDeductionLines, allocateProRata, baseParcelIdFromSourceId } from "../src/services/os-advance.js";
 import { generateDispatchManifestPdf } from "../src/utils/manifest-pdf.js";
 import { env } from "../src/config/env.js";
 
@@ -148,6 +149,36 @@ describe("OS settlement formula", () => {
     expect(isOsSettlementCodCovered({ collectedCod: 100000, advancePaid: 40000, returnedAdvance: 10000, priorSettledReturns: 0 })).toBe(true);
     expect(isOsSettlementCodCovered({ collectedCod: 100000, advancePaid: 40000, returnedAdvance: 10000, priorSettledReturns: 50000 })).toBe(false);
     expect(isOsSettlementCodCovered({ collectedCod: 100001, advancePaid: 40000, returnedAdvance: 10000, priorSettledReturns: 50000 })).toBe(true);
+  });
+
+  test("excludes already-credited advance from returnedAdvance settlement contribution", () => {
+    expect(returnedAdvanceContribution({ status: "RETURNED", advanceAmount: 8000 }, 0, 0)).toBe(8000);
+    expect(returnedAdvanceContribution({ status: "RETURNED", advanceAmount: 8000 }, 4000, 0)).toBe(4000);
+    expect(returnedAdvanceContribution({ status: "RETURNED", advanceAmount: 8000 }, 4000, 4000)).toBe(8000);
+    expect(returnedAdvanceContribution({ status: "RETURNED", advanceAmount: 8000 }, 8000, 8000)).toBe(8000);
+    expect(returnedAdvanceContribution({ status: "RETURNED", advanceAmount: 8000 }, 8000, 0)).toBe(0);
+    expect(returnedAdvanceContribution({ status: "CANCELLED", advanceAmount: 5000 }, 5000, 5000)).toBe(5000);
+    expect(returnedAdvanceContribution({ status: "FAILED", advanceAmount: 8000 }, 0, 0)).toBe(0);
+    expect(returnedAdvanceContribution({ status: "PARTIAL", advanceAmount: 8000 }, 4000, 4000)).toBe(4000);
+    expect(returnedAdvanceContribution({ status: "PARTIAL", advanceAmount: 8000 }, 0, 0)).toBe(0);
+    expect(baseParcelIdFromSourceId("parcel-1")).toBe("parcel-1");
+    expect(baseParcelIdFromSourceId("parcel-1:abc")).toBe("parcel-1");
+    expect(allocateProRata(1000, [{ id: "b", weight: 0 }, { id: "a", weight: 8000 }, { id: "c", weight: 2000 }])).toEqual(new Map([["a", 800], ["b", 0], ["c", 200]]));
+    expect(allocateProRata(5, [{ id: "z", weight: 2 }, { id: "a", weight: 2 }])).toEqual(new Map([["a", 2], ["z", 3]]));
+  });
+});
+
+describe("OS recoverable advance", () => {
+  test("computes recoverable remainder after partial return offset", () => {
+    // COD 10000, advance 8000, actualCod 6000 → shortfall/offset 4000 → recoverable 4000
+    const partial = calculatePartialReturnAmounts({ codAmount: 10000, advanceAmount: 8000, actualCodCollected: 6000 });
+    expect(partial.settlementOffset).toBe(4000);
+    expect(recoverableAdvanceAmount(8000, partial.settlementOffset)).toBe(4000);
+  });
+
+  test("returns zero when prior credits already cover the full advance", () => {
+    expect(recoverableAdvanceAmount(8000, 8000)).toBe(0);
+    expect(recoverableAdvanceAmount(8000, 9000)).toBe(0);
   });
 });
 
@@ -385,6 +416,16 @@ describe("double-entry ledger rules", () => {
     ]);
   });
 
+  test("splits settlement return deduction between staged offset clearance and legacy deduction", () => {
+    expect(buildOsSettlementReturnDeductionLines(8000, 8000)).toEqual([
+      { account: "OS_SETTLEMENT_OFFSET", debit: 0, credit: 8000 },
+    ]);
+    expect(buildOsSettlementReturnDeductionLines(8000, 3000)).toEqual([
+      { account: "OS_SETTLEMENT_OFFSET", debit: 0, credit: 3000 },
+      { account: "OS_RETURN_DEDUCTION", debit: 0, credit: 5000 },
+    ]);
+  });
+
   test("rejects unbalanced journal lines", () => {
     expect(() => assertBalancedLines([{ account: "WALLET_CASH", debit: 1, credit: 0 }, { account: "REVENUE", debit: 0, credit: 2 }])).toThrow("equal credits");
   });
@@ -427,6 +468,31 @@ describe("partial return COD adjustments", () => {
 });
 
 describe("bulk dispatch and manifest rules", () => {
+  test("labels filtered PDF statuses and keeps the default dispatch set", () => {
+    expect(manifestStatusesLabel()).toBe("Assigned, Out for delivery, Picked up");
+    expect(manifestStatusesLabel(["DELIVERED", "FAILED"])).toBe("Delivered, Failed");
+    expect(manifestStatusesLabel(["CREATED", "PICKED_UP", "ASSIGNED", "OUT_FOR_DELIVERY", "DELIVERED", "PARTIAL", "FAILED", "REJECTED", "PENDING_RETURN", "RETURNED"])).toBe("All statuses");
+  });
+  test("summarizes delivery outcomes for hub settlement review", () => {
+    expect(
+      summarizeManifestParcels([
+        { status: "DELIVERED", codAmount: 10000, deliveryFee: 1500 },
+        { status: "FAILED", codAmount: 8000, deliveryFee: 1500 },
+        { status: "ASSIGNED", codAmount: 5000, deliveryFee: 1000 },
+        { status: "PARTIAL", codAmount: 7000, deliveryFee: 1000 },
+      ]),
+    ).toEqual({
+      parcelCount: 4,
+      delivered: 1,
+      partial: 1,
+      failed: 1,
+      rejected: 0,
+      pendingReturn: 0,
+      toDeliver: 1,
+      totalCod: 30000,
+      totalFees: 5000,
+    });
+  });
   test("only unassigned created or picked-up parcels are dispatchable", () => {
     expect(isAssignmentEligible({ riderId: null, status: "CREATED" })).toBe(true);
     expect(isAssignmentEligible({ riderId: null, status: "PICKED_UP" })).toBe(true);
@@ -493,6 +559,7 @@ describe("bulk dispatch and manifest rules", () => {
     expect(content).toContain("Aung Aung");
     expect(content).toContain("PKG-001");
     expect(content).toContain("All Active Deliveries");
+    expect(content).toContain("Assigned, Out for delivery, Picked up");
     expect(content).toContain("COD:");
     expect(content).toContain("Fees:");
     expect(content).toContain("Total:");

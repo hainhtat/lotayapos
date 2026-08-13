@@ -1,4 +1,4 @@
-import { AlertTriangle, ClipboardPaste, FileUp, Pencil, Plus, Save, Trash2 } from "lucide-react";
+import { AlertTriangle, ClipboardPaste, FileUp, LayoutGrid, ListPlus, Pencil, Plus, Save, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -6,7 +6,10 @@ import { useParams } from "react-router-dom";
 import { api, apiRaw } from "@/lib/api";
 
 type Location = { id: string; code?: string; nameEn: string; nameMy?: string };
-type Township = Location & { deliveryFee: number };
+type Township = Location & {
+  deliveryFee: number;
+  district?: { id: string; nameEn: string; regionStateId?: string; regionState?: { id?: string; nameEn: string } };
+};
 type Zone = { id: string; code?: string; name: string };
 type SavedParcel = {
   id: string;
@@ -60,6 +63,20 @@ const blank = (): ParcelRow => ({
   codAmount: "",
 });
 
+export function isParcelRowBlank(row: ParcelRow) {
+  return !Object.values(row).some(Boolean);
+}
+
+export function isParcelRowComplete(row: ParcelRow) {
+  return Boolean(row.customerName.trim() && row.address.trim() && row.townshipId && /^\d+$/.test(row.codAmount));
+}
+
+export function appendParcelDraft(rows: ParcelRow[], draft: ParcelRow): ParcelRow[] {
+  const blankIndex = rows.findIndex(isParcelRowBlank);
+  if (blankIndex >= 0) return rows.map((row, index) => (index === blankIndex ? { ...draft } : row));
+  return [...rows, { ...draft }];
+}
+
 export function formatTrackingNumber(sequence: number) {
   return `LTY-${String(sequence).padStart(3, "0")}`;
 }
@@ -92,6 +109,8 @@ const match = (items: Location[], token: string) =>
 
 const cell =
   "min-w-[130px] border-0 bg-transparent px-2 py-2 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-inset focus:ring-[#1598ef] dark:text-slate-100";
+const field =
+  "mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-[#1598ef] focus:ring-2 focus:ring-[#1598ef]/20 dark:border-white/10 dark:bg-[#121416] dark:text-slate-100";
 
 function useRowLocationData(row: ParcelRow, regions: Location[]) {
   const resolvedRegion = match(regions, row.regionStateId);
@@ -183,6 +202,9 @@ export function BatchDetailPage() {
   const queryClient = useQueryClient();
   const gridRef = useRef<HTMLDivElement>(null);
   const [rows, setRows] = useState(() => Array.from({ length: 10 }, blank));
+  const [entryMode, setEntryMode] = useState<"spreadsheet" | "form">("spreadsheet");
+  const [formOpen, setFormOpen] = useState(false);
+  const [formDraft, setFormDraft] = useState<ParcelRow>(blank);
   const [message, setMessage] = useState("");
   const [preview, setPreview] = useState<ManifestPreview | null>(null);
   const [editing, setEditing] = useState<SavedParcel | null>(null);
@@ -203,6 +225,11 @@ export function BatchDetailPage() {
     queryKey: ["locations", "zones", editForm.townshipId],
     enabled: Boolean(editForm.townshipId),
     queryFn: () => api<Zone[]>(`/master-data/locations/zones?townshipId=${encodeURIComponent(editForm.townshipId)}`).then((response) => response.data),
+  });
+  const formZones = useQuery({
+    queryKey: ["locations", "zones", formDraft.townshipId],
+    enabled: Boolean(formOpen && formDraft.townshipId),
+    queryFn: () => api<Zone[]>(`/master-data/locations/zones?townshipId=${encodeURIComponent(formDraft.townshipId)}`).then((response) => response.data),
   });
   useEffect(() => {
     if (!editing) return;
@@ -259,12 +286,26 @@ export function BatchDetailPage() {
     () =>
       rows
         .map((row, index) => ({ row, index }))
-        .filter(({ row }) => Object.values(row).some(Boolean)),
+        .filter(({ row }) => !isParcelRowBlank(row)),
     [rows],
   );
-  const invalid = populated.some(
-    ({ row }) => !row.customerName.trim() || !row.address.trim() || !row.townshipId || !/^\d+$/.test(row.codAmount),
-  );
+  const invalid = populated.some(({ row }) => !isParcelRowComplete(row));
+  const applyFormTownship = (townshipId: string) => {
+    const township = allTownships.data?.find((item) => item.id === townshipId);
+    setFormDraft((current) => ({
+      ...current,
+      townshipId,
+      zoneId: "",
+      districtId: township?.district?.id ?? "",
+      regionStateId: township?.district?.regionState?.id ?? township?.district?.regionStateId ?? "",
+    }));
+  };
+  const commitFormDraft = (close: boolean) => {
+    if (!isParcelRowComplete(formDraft)) return;
+    setRows((current) => appendParcelDraft(current, formDraft));
+    setFormDraft(blank());
+    if (close) setFormOpen(false);
+  };
   const update = (index: number, key: keyof ParcelRow, value: string) =>
     setRows((current) =>
       current.map((row, rowIndex) =>
@@ -332,27 +373,67 @@ export function BatchDetailPage() {
           </p>
         </div>
       </div>
-      <div className="mt-6 flex flex-wrap justify-between gap-3">
-        <p className="text-sm text-slate-500">
-          <ClipboardPaste className="mr-2 inline" size={16} />
-          {t("pasteGridHint")}
-        </p>
-        <div className="flex gap-2">
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+        <div className="inline-flex rounded-xl border border-slate-200 p-1 dark:border-white/10">
+          <button
+            type="button"
+            aria-pressed={entryMode === "spreadsheet"}
+            onClick={() => setEntryMode("spreadsheet")}
+            className={`rounded-lg px-3 py-1.5 text-sm font-bold ${entryMode === "spreadsheet" ? "bg-[#eaf6ff] text-[#0787df]" : "text-slate-500"}`}
+          >
+            <LayoutGrid size={14} className="mr-1 inline" />
+            {t("entrySpreadsheet")}
+          </button>
+          <button
+            type="button"
+            aria-pressed={entryMode === "form"}
+            onClick={() => setEntryMode("form")}
+            className={`rounded-lg px-3 py-1.5 text-sm font-bold ${entryMode === "form" ? "bg-[#eaf6ff] text-[#0787df]" : "text-slate-500"}`}
+          >
+            <ListPlus size={14} className="mr-1 inline" />
+            {t("entryForm")}
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-2">
           <label className="cursor-pointer rounded-xl border border-[#1598ef] px-4 py-2 text-sm font-bold text-[#0787df] transition hover:bg-[#1598ef]/5">
             <FileUp className="mr-1 inline" size={16} />
             {uploadManifest.isPending ? t("parsingPdf") : t("uploadManifestPdf")}
             <input aria-label={t("uploadManifestPdf")} type="file" accept="application/pdf,.pdf" className="sr-only" disabled={uploadManifest.isPending} onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadManifest.mutate(file); event.currentTarget.value = ""; }} />
           </label>
-          <button onClick={() => setRows((current) => [...current, ...Array.from({ length: 10 }, blank)])} className="rounded-xl border px-4 py-2 text-sm font-bold">
-            <Plus className="mr-1 inline" size={16} />
-            {t("addTenRows")}
-          </button>
+          {entryMode === "spreadsheet" && (
+            <button onClick={() => setRows((current) => [...current, ...Array.from({ length: 10 }, blank)])} className="rounded-xl border px-4 py-2 text-sm font-bold">
+              <Plus className="mr-1 inline" size={16} />
+              {t("addTenRows")}
+            </button>
+          )}
+          {entryMode === "form" && (
+            <button
+              type="button"
+              onClick={() => {
+                setFormDraft(blank());
+                setFormOpen(true);
+              }}
+              className="rounded-xl border px-4 py-2 text-sm font-bold"
+            >
+              <Plus className="mr-1 inline" size={16} />
+              {t("addParcelModal")}
+            </button>
+          )}
           <button disabled={!populated.length || invalid || save.isPending} onClick={() => save.mutate()} className="rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
             <Save className="mr-1 inline" size={16} />
             {t("saveParcels", { count: populated.length })}
           </button>
         </div>
       </div>
+      {entryMode === "spreadsheet" && (
+        <p className="mt-3 text-sm text-slate-500">
+          <ClipboardPaste className="mr-2 inline" size={16} />
+          {t("pasteGridHint")}
+        </p>
+      )}
+      {entryMode === "form" && (
+        <p className="mt-3 text-sm text-slate-500">{t("formEntryHint")}</p>
+      )}
       {message && (
         <p role="status" className="mt-3 text-sm text-[#0787df]">
           {message}
@@ -372,6 +453,46 @@ export function BatchDetailPage() {
           {t("parcelGridValidation")}
         </p>
       )}
+      {entryMode === "form" && (
+        <section className="mt-4 rounded-2xl border bg-white p-4 dark:border-white/10 dark:bg-[#181a1d]">
+          <h2 className="font-display font-bold">{t("draftParcels")}</h2>
+          {!populated.length ? (
+            <p className="mt-3 text-sm text-slate-400">{t("empty")}</p>
+          ) : (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="text-xs uppercase text-slate-500">
+                    <th className="pb-2">{t("tracking")}</th>
+                    <th className="pb-2">{t("orderId")}</th>
+                    <th className="pb-2">{t("customer")}</th>
+                    <th className="pb-2">{t("township")}</th>
+                    <th className="pb-2 text-right">{t("cod")}</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {populated.map(({ row, index }) => (
+                    <tr key={index} className="border-t dark:border-white/10">
+                      <td className="py-2 font-bold">{trackingForIndex(index)}</td>
+                      <td className="py-2">{row.orderId || "—"}</td>
+                      <td className="py-2">{row.customerName}</td>
+                      <td className="py-2">{allTownships.data?.find((township) => township.id === row.townshipId)?.nameEn || row.townshipId || "—"}</td>
+                      <td className="py-2 text-right">{row.codAmount}</td>
+                      <td className="py-2 text-right">
+                        <button aria-label={`${t("removeParcel")} ${index + 1}`} onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} className="p-2 text-rose-500">
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+      {entryMode === "spreadsheet" && (
       <div
         ref={gridRef}
         onPaste={(event) => {
@@ -430,6 +551,7 @@ export function BatchDetailPage() {
           </tbody>
         </table>
       </div>
+      )}
       {(batch.data?.parcels.length ?? 0) > 0 && (
         <section className="mt-8 rounded-2xl border bg-white p-6 dark:border-white/10 dark:bg-[#181a1d]">
           <h2 className="font-display text-lg font-bold">{t("savedParcelList")}</h2>
@@ -472,6 +594,37 @@ export function BatchDetailPage() {
           </div>
         </section>
       )}
+      {formOpen && (
+        <div className="fixed inset-0 z-30 grid place-items-center overflow-y-auto bg-black/45 p-4">
+          <form
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-parcel-title"
+            onSubmit={(event) => {
+              event.preventDefault();
+              commitFormDraft(false);
+            }}
+            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-[#181a1d]"
+          >
+            <h2 id="add-parcel-title" className="font-display text-xl font-bold">{t("addParcelModal")}</h2>
+            <p className="mt-1 text-sm text-slate-500">{t("formEntryHint")}</p>
+            <div className="mt-4 grid gap-3">
+              <label className="text-xs font-bold text-slate-500">{t("orderId")}<input value={formDraft.orderId} onChange={(e) => setFormDraft((v) => ({ ...v, orderId: e.target.value }))} className={field} /></label>
+              <label className="text-xs font-bold text-slate-500">{t("customer")}<input required value={formDraft.customerName} onChange={(e) => setFormDraft((v) => ({ ...v, customerName: e.target.value }))} className={field} /></label>
+              <label className="text-xs font-bold text-slate-500">{t("address")}<input required value={formDraft.address} onChange={(e) => setFormDraft((v) => ({ ...v, address: e.target.value }))} className={field} /></label>
+              <label className="text-xs font-bold text-slate-500">{t("customerPhone")}<input value={formDraft.customerPhone} onChange={(e) => setFormDraft((v) => ({ ...v, customerPhone: e.target.value }))} className={field} /></label>
+              <label className="text-xs font-bold text-slate-500">{t("township")}<select required value={formDraft.townshipId} onChange={(e) => applyFormTownship(e.target.value)} className={field}><option value="">{t("township")}</option>{allTownships.data?.map((township) => <option key={township.id} value={township.id}>{township.district?.regionState?.nameEn ? `${township.district.regionState.nameEn} · ` : ""}{township.district?.nameEn ? `${township.district.nameEn} · ` : ""}{township.nameEn}</option>)}</select></label>
+              <label className="text-xs font-bold text-slate-500">{t("zone")}<select value={formDraft.zoneId} onChange={(e) => setFormDraft((v) => ({ ...v, zoneId: e.target.value }))} className={field}><option value="">—</option>{formZones.data?.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}</select></label>
+              <label className="text-xs font-bold text-slate-500">{t("cod")}<input required type="number" min={0} value={formDraft.codAmount} onChange={(e) => setFormDraft((v) => ({ ...v, codAmount: e.target.value }))} className={field} /></label>
+            </div>
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button type="button" onClick={() => setFormOpen(false)} className="rounded-xl border px-4 py-2 text-sm font-bold">{t("cancel")}</button>
+              <button type="button" disabled={!isParcelRowComplete(formDraft)} onClick={() => commitFormDraft(true)} className="rounded-xl border px-4 py-2 text-sm font-bold disabled:opacity-50">{t("addAndClose")}</button>
+              <button disabled={!isParcelRowComplete(formDraft)} className="rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{t("addNextParcel")}</button>
+            </div>
+          </form>
+        </div>
+      )}
       {editing && (
         <div className="fixed inset-0 z-30 grid place-items-center bg-black/45 p-4">
           <form
@@ -485,13 +638,13 @@ export function BatchDetailPage() {
             <h2 className="font-display text-xl font-bold">{t("editParcel")}</h2>
             <p className="mt-1 text-sm text-slate-500">{editing.trackingNumber}</p>
             <div className="mt-4 grid gap-3">
-              <label className="text-xs font-bold text-slate-500">{t("orderId")}<input value={editForm.orderId} onChange={(e) => setEditForm((v) => ({ ...v, orderId: e.target.value }))} className={`${cell} mt-1 w-full rounded-xl border border-slate-200 dark:border-white/10`} /></label>
-              <label className="text-xs font-bold text-slate-500">{t("customer")}<input required value={editForm.customerName} onChange={(e) => setEditForm((v) => ({ ...v, customerName: e.target.value }))} className={`${cell} mt-1 w-full rounded-xl border border-slate-200 dark:border-white/10`} /></label>
-              <label className="text-xs font-bold text-slate-500">{t("address")}<input required value={editForm.address} onChange={(e) => setEditForm((v) => ({ ...v, address: e.target.value }))} className={`${cell} mt-1 w-full rounded-xl border border-slate-200 dark:border-white/10`} /></label>
-              <label className="text-xs font-bold text-slate-500">{t("customerPhone")}<input value={editForm.customerPhone} onChange={(e) => setEditForm((v) => ({ ...v, customerPhone: e.target.value }))} className={`${cell} mt-1 w-full rounded-xl border border-slate-200 dark:border-white/10`} /></label>
-              <label className="text-xs font-bold text-slate-500">{t("township")}<select required value={editForm.townshipId} onChange={(e) => setEditForm((v) => ({ ...v, townshipId: e.target.value, zoneId: "" }))} className={`${cell} mt-1 w-full rounded-xl border border-slate-200 dark:border-white/10`}><option value="">{t("township")}</option>{allTownships.data?.map((township) => <option key={township.id} value={township.id}>{township.district?.regionState?.nameEn ? `${township.district.regionState.nameEn} · ` : ""}{township.district?.nameEn ? `${township.district.nameEn} · ` : ""}{township.nameEn}</option>)}</select></label>
-              <label className="text-xs font-bold text-slate-500">{t("zone")}<select value={editForm.zoneId} onChange={(e) => setEditForm((v) => ({ ...v, zoneId: e.target.value }))} className={`${cell} mt-1 w-full rounded-xl border border-slate-200 dark:border-white/10`}><option value="">—</option>{editZones.data?.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}</select></label>
-              <label className="text-xs font-bold text-slate-500">{t("cod")}<input required type="number" min={0} value={editForm.codAmount} onChange={(e) => setEditForm((v) => ({ ...v, codAmount: e.target.value }))} className={`${cell} mt-1 w-full rounded-xl border border-slate-200 dark:border-white/10`} /></label>
+              <label className="text-xs font-bold text-slate-500">{t("orderId")}<input value={editForm.orderId} onChange={(e) => setEditForm((v) => ({ ...v, orderId: e.target.value }))} className={field} /></label>
+              <label className="text-xs font-bold text-slate-500">{t("customer")}<input required value={editForm.customerName} onChange={(e) => setEditForm((v) => ({ ...v, customerName: e.target.value }))} className={field} /></label>
+              <label className="text-xs font-bold text-slate-500">{t("address")}<input required value={editForm.address} onChange={(e) => setEditForm((v) => ({ ...v, address: e.target.value }))} className={field} /></label>
+              <label className="text-xs font-bold text-slate-500">{t("customerPhone")}<input value={editForm.customerPhone} onChange={(e) => setEditForm((v) => ({ ...v, customerPhone: e.target.value }))} className={field} /></label>
+              <label className="text-xs font-bold text-slate-500">{t("township")}<select required value={editForm.townshipId} onChange={(e) => setEditForm((v) => ({ ...v, townshipId: e.target.value, zoneId: "" }))} className={field}><option value="">{t("township")}</option>{allTownships.data?.map((township) => <option key={township.id} value={township.id}>{township.district?.regionState?.nameEn ? `${township.district.regionState.nameEn} · ` : ""}{township.district?.nameEn ? `${township.district.nameEn} · ` : ""}{township.nameEn}</option>)}</select></label>
+              <label className="text-xs font-bold text-slate-500">{t("zone")}<select value={editForm.zoneId} onChange={(e) => setEditForm((v) => ({ ...v, zoneId: e.target.value }))} className={field}><option value="">—</option>{editZones.data?.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}</select></label>
+              <label className="text-xs font-bold text-slate-500">{t("cod")}<input required type="number" min={0} value={editForm.codAmount} onChange={(e) => setEditForm((v) => ({ ...v, codAmount: e.target.value }))} className={field} /></label>
             </div>
             <div className="mt-6 flex justify-end gap-3">
               <button type="button" onClick={() => setEditing(null)} className="rounded-xl border px-4 py-2 text-sm font-bold">{t("cancel")}</button>

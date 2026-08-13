@@ -21,13 +21,18 @@ type ApiSuccess<T>={success:true;data:T;pagination?:{page:number;pageSize:number
 
 export async function api<T>(path:string,init:RequestInit={}):Promise<ApiSuccess<T>>{
   const token=await getAccessToken();
-  const response=await fetch(`${base}${path}`,{
-    ...init,
-    headers:{
-      "content-type":"application/json",
-      ...(token?{authorization:`Bearer ${token}`}:{}),
-    },
-  });
+  let response:Response;
+  try{
+    response=await fetch(`${base}${path}`,{
+      ...init,
+      headers:{
+        "content-type":"application/json",
+        ...(token?{authorization:`Bearer ${token}`}:{}),
+      },
+    });
+  }catch{
+    throw new ApiError("Unable to reach the API. Start the backend on port 4000 and check EXPO_PUBLIC_API_BASE_URL.",0);
+  }
   const body=await response.json().catch(()=>null);
   if(!response.ok){
     if(response.status===401&&token){
@@ -42,6 +47,7 @@ export async function api<T>(path:string,init:RequestInit={}):Promise<ApiSuccess
 type ParcelResponse={
   id:string;
   trackingNumber:string;
+  orderId?:string|null;
   customerName:string;
   customerPhone?:string;
   address:string;
@@ -69,13 +75,16 @@ function enrichAssignedParcels(parcels:ParcelResponse[]):AssignedParcel[]{
   }));
 }
 
-export async function getAssignedParcels():Promise<AssignedParcel[]>{
+export async function getAssignedParcels(filters?:{dateFrom?:string;dateTo?:string}):Promise<AssignedParcel[]>{
   const pageSize=100;
   let page=1;
   let totalPages=1;
   const parcels:ParcelResponse[]=[];
   while(page<=totalPages){
-    const result=await api<ParcelResponse[]>(`/parcels?assignedToMe=true&page=${page}&pageSize=${pageSize}`);
+    const params=new URLSearchParams({assignedToMe:"true",page:String(page),pageSize:String(pageSize)});
+    if(filters?.dateFrom)params.set("dateFrom",filters.dateFrom);
+    if(filters?.dateTo)params.set("dateTo",filters.dateTo);
+    const result=await api<ParcelResponse[]>(`/parcels?${params.toString()}`);
     parcels.push(...result.data);
     totalPages=result.pagination?.totalPages??1;
     page+=1;

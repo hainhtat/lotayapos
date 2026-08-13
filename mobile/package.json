@@ -14,6 +14,7 @@
   "dependencies": {
     "@tanstack/react-query": "latest",
     "expo": "latest",
+    "expo-clipboard": "~57.0.1",
     "expo-localization": "latest",
     "expo-router": "latest",
     "expo-secure-store": "latest",
@@ -29,6 +30,8 @@
     "@testing-library/react-native": "latest",
     "@types/jest": "latest",
     "@types/react": "latest",
+    "eslint": "^9.0.0",
+    "eslint-config-expo": "~57.0.1",
     "jest": "latest",
     "jest-expo": "latest",
     "typescript": "latest"
