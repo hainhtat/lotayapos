@@ -41,7 +41,8 @@ cd "${REPO}/backend"
 npm ci --include=dev
 DATABASE_PROVIDER=postgresql npx prisma generate --schema prisma/schema.postgresql.prisma
 npx prisma migrate deploy --schema prisma/schema.postgresql.prisma
-npx tsc -p tsconfig.json
+rm -rf dist
+npx tsc -p tsconfig.build.json
 rsync -a --delete --exclude node_modules --exclude .env dist package.json package-lock.json prisma "${ROOT}/backend/"
 mkdir -p "${ROOT}/backend/node_modules"
 rsync -a node_modules/ "${ROOT}/backend/node_modules/"
