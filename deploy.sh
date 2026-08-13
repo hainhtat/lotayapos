@@ -38,8 +38,8 @@ export NODE_ENV=production
 export DATABASE_PROVIDER=postgresql
 
 cd "${REPO}/backend"
-npm ci
-npx prisma generate --schema prisma/schema.postgresql.prisma
+npm ci --include=dev
+DATABASE_PROVIDER=postgresql npx prisma generate --schema prisma/schema.postgresql.prisma
 npx prisma migrate deploy --schema prisma/schema.postgresql.prisma
 npx tsc -p tsconfig.json
 rsync -a --delete --exclude node_modules --exclude .env dist package.json package-lock.json prisma "${ROOT}/backend/"
@@ -50,7 +50,7 @@ install -m 600 "${SHARED}/lotaya.env" "${ROOT}/backend/.env"
 cd "${REPO}/frontend"
 export VITE_API_BASE_URL="${VITE_API_BASE_URL:-https://lotaya.mmds.site/api/v1}"
 export VITE_RIDER_ANDROID_DOWNLOAD_URL="${VITE_RIDER_ANDROID_DOWNLOAD_URL:-https://lotaya.mmds.site/app/lotaya-rider.apk}"
-npm ci
+npm ci --include=dev
 npx vite build
 rsync -a --delete dist/ "${ROOT}/frontend/dist/"
 
