@@ -13,6 +13,7 @@
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "com.lotaya.rider",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#000000"
