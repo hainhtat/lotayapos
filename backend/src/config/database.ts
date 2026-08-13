@@ -4,7 +4,7 @@ import { PrismaClient } from "@prisma/client";
 import { env } from "./env.js";
 
 const adapter = env.databaseProvider === "postgresql"
-  ? new PrismaPg({ connectionString: env.databaseUrl })
+  ? new PrismaPg({ connectionString: env.databaseUrl, ssl: { rejectUnauthorized: false } })
   : new PrismaBetterSqlite3({ url: env.databaseUrl });
 
 export const prisma = new PrismaClient({ adapter });
