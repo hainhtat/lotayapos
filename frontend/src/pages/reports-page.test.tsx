@@ -1,0 +1,7 @@
+import {fireEvent,render,screen,waitFor} from "@testing-library/react";
+import {QueryClient,QueryClientProvider} from "@tanstack/react-query";
+import {beforeEach,describe,expect,it,vi} from "vitest";
+import "@/i18n";
+import {ReportsPage} from "./reports-page";
+const apiMock=vi.hoisted(()=>vi.fn());vi.mock("@/lib/api",()=>({api:apiMock}));
+describe("ReportsPage",()=>{beforeEach(()=>apiMock.mockImplementation((path:string)=>path==="/master-data/dashboard"?Promise.resolve({data:{totalParcels:12,delivered:8,pendingReturn:2,cashCollected:90000,grossProfit:10000}}):Promise.resolve({data:{accounts:[{account:"WALLET_CASH",debit:100000,credit:10000,balance:90000}],entries:[],totalDebit:100000,totalCredit:10000,difference:90000,balanced:false}})));it("shows operational totals and runs a filtered ledger report",async()=>{const client=new QueryClient({defaultOptions:{queries:{retry:false}}});render(<QueryClientProvider client={client}><ReportsPage/></QueryClientProvider>);expect(await screen.findByText("12")).toBeInTheDocument();fireEvent.change(screen.getByLabelText("From date"),{target:{value:"2026-08-01"}});fireEvent.change(screen.getByLabelText("Account"),{target:{value:"WALLET_CASH"}});fireEvent.click(screen.getByRole("button",{name:"Run report"}));await waitFor(()=>expect(apiMock).toHaveBeenCalledWith("/finance/ledger?from=2026-08-01&account=WALLET_CASH"));expect(await screen.findByText("WALLET_CASH")).toBeInTheDocument()})});

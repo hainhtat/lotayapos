@@ -1,0 +1,4 @@
+interface:
+  display_name: "Frontend Starter"
+  short_description: "Build a tested React frontend starter"
+  default_prompt: "Use $frontend-starter to scaffold a Vite React frontend with routing, JWT auth, providers, theming, English/Myanmar translations, and baseline tests."

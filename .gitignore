@@ -1,0 +1,32 @@
+# Root
+.DS_Store
+*.log
+tmp/
+.env
+.env.*
+!.env.example
+
+# Dependencies / build
+node_modules/
+dist/
+build/
+coverage/
+.expo/
+web-build/
+*.tsbuildinfo
+
+# Databases / local runtime
+*.db
+*.sqlite
+*.sqlite3
+dev.db
+prisma/*.db
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+
+# Secrets / local overrides
+**/.env.local
+**/credentials.json

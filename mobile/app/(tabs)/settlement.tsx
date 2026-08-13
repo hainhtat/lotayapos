@@ -1,0 +1,37 @@
+import {useEffect,useState} from "react";
+import {Pressable,SafeAreaView,ScrollView,StyleSheet,Text,TextInput,View} from "react-native";
+import {useMutation,useQuery,useQueryClient} from "@tanstack/react-query";
+import {declareRiderSettlement,getRiderSettlementPreview} from "@/lib/api";
+import {buildSettlementDeclaration,localBusinessDate} from "@/lib/settlement";
+import {i18n} from "@/i18n";
+import {useTheme} from "@/providers/theme";
+
+const money=(value:number)=>`${value.toLocaleString()} MMK`;
+export default function Settlement(){
+  const {theme}=useTheme();const dark=theme==="dark";const businessDate=localBusinessDate();const queryClient=useQueryClient();
+  const preview=useQuery({queryKey:["rider-settlement-preview",businessDate],queryFn:()=>getRiderSettlementPreview(businessDate)});
+  const [cash,setCash]=useState("0");const [kbzPay,setKbzPay]=useState("0");const [wavePay,setWavePay]=useState("0");const [error,setError]=useState("");const [saved,setSaved]=useState(false);
+  useEffect(()=>{const declaration=preview.data?.declaration;if(declaration){setCash(String(declaration.cash));setKbzPay(String(declaration.kbzPay));setWavePay(String(declaration.wavePay))}},[preview.data?.declaration]);
+  const mutation=useMutation({mutationFn:declareRiderSettlement,onSuccess:async()=>{setSaved(true);await queryClient.invalidateQueries({queryKey:["rider-settlement-preview",businessDate]})},onError:e=>setError(e instanceof Error?e.message:i18n.t("requestError"))});
+  const parsed=buildSettlementDeclaration(businessDate,{cash,kbzPay,wavePay});
+  const submit=()=>{setSaved(false);setError("");if("error" in parsed){setError(i18n.t("walletAmountInvalid"));return}mutation.mutate(parsed.payload)};
+  if(preview.isLoading)return <SafeAreaView style={[s.safe,dark&&s.dark]}><Text style={[s.content,dark&&s.white]}>{i18n.t("loading")}</Text></SafeAreaView>;
+  if(preview.isError)return <SafeAreaView style={[s.safe,dark&&s.dark]}><View style={s.content}><Text accessibilityRole="alert" style={s.error}>{i18n.t("requestError")}</Text><Pressable accessibilityRole="button" onPress={()=>void preview.refetch()} style={s.button}><Text style={s.buttonText}>{i18n.t("retry")}</Text></Pressable></View></SafeAreaView>;
+  const data=preview.data!;const locked=Boolean(data.settlement);const paid=data.paidAmount??data.settlement?.actualAmount??0;const remaining=data.outstandingAmount??Math.max(0,data.expectedAmount-paid);const salary=data.salaryDeduction??0;
+  return <SafeAreaView style={[s.safe,dark&&s.dark]}><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
+    <Text style={[s.title,dark&&s.white]}>{i18n.t("settlement")}</Text><Text style={s.muted}>{businessDate}</Text>
+    <View style={[s.statusCard,remaining===0&&data.settlement?s.settledCard:s.owedCard]}><Text style={s.statusLabel}>{remaining===0&&data.settlement?i18n.t("hubVerifiedSettled"):i18n.t("stillOwedToHub")}</Text><Text style={s.statusTotal}>{money(remaining)}</Text><Text style={s.statusHelp}>{remaining===0&&data.settlement?i18n.t("hubVerifiedHelp"):i18n.t("deliveredNotPaidHelp")}</Text></View>
+    <View style={[s.card,dark&&s.cardDark]}><Text style={s.label}>{i18n.t("todayExpected")}</Text><Text style={[s.total,dark&&s.white]}>{money(data.expectedAmount)}</Text><Text style={s.muted}>{i18n.t("settlementSummary",{count:data.parcelCount,cod:money(data.cod),fees:money(data.fees),commission:money(data.commission)})}</Text>
+      <View style={s.breakdown}><Breakdown label={i18n.t("customerCollections")} value={data.cod+data.fees} dark={dark}/><Breakdown label={i18n.t("riderCommission")} value={-data.commission} dark={dark}/><Breakdown label={i18n.t("salaryDeduction")} value={-salary} dark={dark}/><Breakdown label={i18n.t("hubVerifiedReceived")} value={paid} dark={dark}/></View>
+    </View>
+    {data.declaration&&<View style={[s.noticeCard,dark&&s.cardDark]}><Text style={[s.noticeTitle,dark&&s.white]}>{i18n.t("walletDeclarationOnly")}</Text><Text style={s.muted}>{i18n.t("walletDeclarationHelp")}</Text><Text style={s.notice}>{i18n.t("declarationStatus",{status:data.declaration.status})}</Text></View>}
+    {data.settlement&&<Text accessibilityRole="alert" style={s.notice}>{i18n.t("settlementStatus",{status:data.settlement.status})}</Text>}
+    <Text style={[s.sectionTitle,dark&&s.white]}>{i18n.t("declareWalletMix")}</Text><Text style={s.muted}>{i18n.t("declareWalletHelp")}</Text>
+    {([['cash',cash,setCash],['kbzPay',kbzPay,setKbzPay],['wavePay',wavePay,setWavePay]] as const).map(([key,value,setter])=><View key={key}><Text style={[s.fieldLabel,dark&&s.white]}>{i18n.t(key)}</Text><TextInput accessibilityLabel={i18n.t(key)} editable={!locked&&!mutation.isPending} keyboardType="number-pad" value={value} onChangeText={text=>{setter(text);setError("");setSaved(false)}} style={[s.input,dark&&s.inputDark]}/></View>)}
+    <Text style={[s.declared,dark&&s.white]}>{i18n.t("declaredTotal")}: {money("error" in parsed?0:parsed.total)}</Text>
+    {error&&<Text accessibilityRole="alert" style={s.error}>{error}</Text>}{saved&&<Text accessibilityRole="alert" style={s.success}>{i18n.t("declarationSaved")}</Text>}
+    <Pressable accessibilityRole="button" disabled={locked||mutation.isPending} onPress={submit} style={[s.button,(locked||mutation.isPending)&&s.disabled]}><Text style={s.buttonText}>{mutation.isPending?i18n.t("loading"):locked?i18n.t("settlementPosted"):i18n.t("saveDeclaration")}</Text></Pressable>
+  </ScrollView></SafeAreaView>;
+}
+function Breakdown({label,value,dark}:{label:string;value:number;dark:boolean}){return <View style={s.breakdownRow}><Text style={s.muted}>{label}</Text><Text style={[s.breakdownValue,dark&&s.white]}>{value<0?"−":""}{money(Math.abs(value))}</Text></View>}
+const s=StyleSheet.create({safe:{flex:1,backgroundColor:"#f6f7f9"},dark:{backgroundColor:"#111315"},content:{padding:20,paddingBottom:40},white:{color:"white"},title:{fontSize:30,fontWeight:"800"},muted:{color:"#718096",marginTop:7},statusCard:{padding:20,borderRadius:18,marginTop:22,borderWidth:1},owedCard:{backgroundColor:"#fff7ed",borderColor:"#fb923c"},settledCard:{backgroundColor:"#ecfdf5",borderColor:"#34d399"},statusLabel:{color:"#475569",fontWeight:"800"},statusTotal:{color:"#111827",fontWeight:"900",fontSize:30,marginTop:6},statusHelp:{color:"#475569",marginTop:7,lineHeight:20},card:{backgroundColor:"white",padding:20,borderRadius:18,marginTop:14},cardDark:{backgroundColor:"#1b1e22"},label:{color:"#718096",fontWeight:"700"},total:{fontSize:28,fontWeight:"800",marginTop:8},breakdown:{marginTop:16,borderTopWidth:1,borderTopColor:"#dbe2ea",paddingTop:8},breakdownRow:{flexDirection:"row",justifyContent:"space-between",gap:12,marginTop:7},breakdownValue:{fontWeight:"800"},noticeCard:{backgroundColor:"white",padding:16,borderRadius:16,marginTop:14},noticeTitle:{fontWeight:"800"},notice:{color:"#0878be",fontWeight:"700",marginTop:10},sectionTitle:{fontSize:19,fontWeight:"800",marginTop:24},fieldLabel:{fontWeight:"800",marginTop:18,marginBottom:8},input:{backgroundColor:"white",color:"#111827",borderRadius:14,padding:16,borderWidth:1,borderColor:"#dbe2ea"},inputDark:{backgroundColor:"#1b1e22",color:"white",borderColor:"#343a40"},declared:{fontWeight:"800",fontSize:17,marginTop:24},error:{color:"#dc2626",marginTop:16},success:{color:"#15803d",fontWeight:"700",marginTop:16},button:{marginTop:24,backgroundColor:"#1598ef",padding:17,borderRadius:15,alignItems:"center"},buttonText:{color:"white",fontWeight:"800"},disabled:{opacity:.55}});

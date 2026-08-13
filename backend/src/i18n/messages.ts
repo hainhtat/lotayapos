@@ -1,0 +1,2 @@
+export const messages = { en: { authInvalid: "Invalid email or password", authRequired: "Authentication required", validation: "Please check the submitted fields", health: "Service is healthy" }, my: { authInvalid: "အီးမေးလ် သို့မဟုတ် စကားဝှက် မမှန်ပါ", authRequired: "အထောက်အထားပြရန် လိုအပ်ပါသည်", validation: "ဖြည့်သွင်းထားသော အချက်အလက်များကို စစ်ဆေးပါ", health: "ဝန်ဆောင်မှု အဆင်ပြေပါသည်" } } as const;
+export const t = (locale: "en" | "my" | undefined, key: keyof typeof messages.en) => messages[locale ?? "en"][key];

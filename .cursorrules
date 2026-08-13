@@ -1,0 +1,40 @@
+# Lotaya POS — Cursor rules
+
+## Source of truth
+
+- `PROJECT_SPEC.md` is authoritative for product scope, domain language, workflows, permissions, ledger rules, and acceptance criteria.
+- Do not invent business rules, APIs, roles, or accounting behavior. Prefer repository evidence. Ask a targeted question when a decision would change money, auth, permissions, or scope; otherwise state a bounded assumption.
+- Explicit user instructions override the spec when they conflict — call out the conflict and route intentional deviations to Spec Maintainer / `PROJECT_SPEC.md` sync.
+
+## Stack
+
+- `backend/` — TypeScript, Express, Prisma, SQLite (local/tests), PostgreSQL (production), JWT, `/api/v1`, Jest/Supertest
+- `frontend/` — Vite, React, TypeScript, React Router, TanStack Query, React Hook Form, shadcn/ui, Tailwind, Vitest
+- `mobile/` — Expo, Expo Router, React Native, TanStack Query, React Hook Form (no third-party UI kit)
+- User-visible strings: English + Myanmar (`en` / `my`). No hardcoded UI copy.
+- Money: integer minor units only. Strict double-entry ledger; corrections via reversals, never destructive edits. Authz and financial calculations stay server-side.
+
+## Skills and agents
+
+Use existing project skills and subagents; do not reinvent stack conventions.
+
+**Skills** (`.agents/skills/`): `backend-starter`, `frontend-starter`, `mobile-starter`, `test`
+
+**Subagents** (`.cursor/agents/`): `orchestrator`, `backend-developer`, `frontend-developer`, `mobile-developer`, `test`, `test-reviewer`, `verifier`, `auditor`, `spec-maintainer`
+
+See `AGENTS.md` for the full roster. Prefer `/orchestrator` for multi-step work; run `/test` then `/verifier` (and `/auditor` for money/auth risk) before claiming done.
+
+## Change discipline
+
+- Smallest coherent diff that satisfies the request. No drive-by refactors or unrelated cleanup.
+- Reuse existing patterns, error envelopes, validators, and UI primitives.
+- Never edit applied Prisma migrations; add a new migration when schema changes.
+- Do not commit, push, or force-push unless the user explicitly asks.
+- Do not weaken security, authz, idempotency, or ledger invariants.
+
+## Quality bar
+
+- Validate inputs; return stable API error codes; never leak secrets, stacks, or PII.
+- Handle loading, empty, error, unauthorized, and retry states in clients.
+- Add focused behavior tests for changed critical paths (ledger, settlements, status transitions, auth).
+- Keep accessibility: labels, keyboard focus, contrast; test light/dark when touching UI theme.

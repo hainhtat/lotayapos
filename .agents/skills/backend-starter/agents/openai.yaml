@@ -1,0 +1,4 @@
+interface:
+  display_name: "Backend Starter"
+  short_description: "Build a tested versioned Express API"
+  default_prompt: "Use $backend-starter to scaffold a TypeScript Express API with Prisma, JWT auth, validation, localization, migrations, and unit/integration tests."

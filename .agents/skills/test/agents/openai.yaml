@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test"
+  short_description: "Write focused high-value tests"
+  default_prompt: "Use $test to add and run the smallest behavior-focused test set for the changed code, prioritizing regressions, critical rules, public contracts, and edge cases."

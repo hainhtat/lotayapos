@@ -1,0 +1,4 @@
+export type LedgerAccount={account:string;debit:number;credit:number;balance:number};
+export type LedgerReport={accounts:LedgerAccount[];entries:unknown[];totalDebit:number;totalCredit:number;difference:number;balanced:boolean};
+function isLedgerAccount(value:unknown):value is LedgerAccount{return typeof value==="object"&&value!==null&&typeof (value as LedgerAccount).account==="string"&&typeof (value as LedgerAccount).debit==="number"&&typeof (value as LedgerAccount).credit==="number"&&typeof (value as LedgerAccount).balance==="number"}
+export function ledgerAccounts(value:unknown):LedgerAccount[]{const candidate=Array.isArray(value)?value:typeof value==="object"&&value!==null?(value as {accounts?:unknown}).accounts:undefined;return Array.isArray(candidate)?candidate.filter(isLedgerAccount):[]}

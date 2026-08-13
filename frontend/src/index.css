@@ -1,0 +1,6 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+:root { font-family:'DM Sans',sans-serif; color:#101318; background:#f6f7f9; color-scheme:light; font-synthesis:none; }
+html.dark{color:#f1f5f9;background:#111315;color-scheme:dark}html.dark body{color:#f1f5f9;background:#111315}
+*{box-sizing:border-box} body{margin:0;min-width:320px} button,input,select,textarea{font:inherit} select{color:inherit} option{background:#fff;color:#101318}.dark option{background:#181a1d;color:#f1f5f9}.dark table{color:#e2e8f0}.dark input::placeholder,.dark textarea::placeholder{color:#64748b}.font-display{font-family:'Space Grotesk',sans-serif}

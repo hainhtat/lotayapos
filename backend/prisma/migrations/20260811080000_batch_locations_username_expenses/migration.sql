@@ -1,0 +1,30 @@
+ALTER TABLE "User" ADD COLUMN "username" TEXT;
+CREATE UNIQUE INDEX "User_username_key" ON "User"("username");
+ALTER TABLE "Batch" ADD COLUMN "advancePaid" INTEGER NOT NULL DEFAULT 0;
+UPDATE "Batch" SET "advancePaid"=(SELECT COALESCE(SUM("advanceAmount"),0) FROM "Parcel" WHERE "Parcel"."batchId"="Batch"."id");
+DROP INDEX "Batch_shopId_pickupDate_key";
+CREATE INDEX "Batch_shopId_pickupDate_idx" ON "Batch"("shopId", "pickupDate");
+
+CREATE TABLE "RegionState" ("id" TEXT NOT NULL PRIMARY KEY,"code" TEXT NOT NULL,"nameEn" TEXT NOT NULL,"nameMy" TEXT NOT NULL,"createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE UNIQUE INDEX "RegionState_code_key" ON "RegionState"("code");
+CREATE TABLE "District" ("id" TEXT NOT NULL PRIMARY KEY,"code" TEXT NOT NULL,"regionStateId" TEXT NOT NULL,"nameEn" TEXT NOT NULL,"nameMy" TEXT NOT NULL,"createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY("regionStateId") REFERENCES "RegionState"("id"));
+CREATE UNIQUE INDEX "District_code_key" ON "District"("code");
+CREATE UNIQUE INDEX "District_regionStateId_nameEn_key" ON "District"("regionStateId","nameEn");
+CREATE TABLE "Township" ("id" TEXT NOT NULL PRIMARY KEY,"code" TEXT NOT NULL,"districtId" TEXT NOT NULL,"nameEn" TEXT NOT NULL,"nameMy" TEXT,"deliveryFee" INTEGER,"createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY("districtId") REFERENCES "District"("id"));
+CREATE UNIQUE INDEX "Township_code_key" ON "Township"("code");
+CREATE UNIQUE INDEX "Township_districtId_nameEn_key" ON "Township"("districtId","nameEn");
+ALTER TABLE "Zone" ADD COLUMN "townshipId" TEXT REFERENCES "Township"("id");
+CREATE INDEX "Zone_townshipId_idx" ON "Zone"("townshipId");
+ALTER TABLE "Parcel" ADD COLUMN "townshipId" TEXT REFERENCES "Township"("id");
+CREATE INDEX "Parcel_townshipId_idx" ON "Parcel"("townshipId");
+ALTER TABLE "Parcel" ADD COLUMN "deliveryFeeNew" INTEGER;
+UPDATE "Parcel" SET "deliveryFeeNew"="deliveryFee";
+ALTER TABLE "Parcel" DROP COLUMN "deliveryFee";
+ALTER TABLE "Parcel" RENAME COLUMN "deliveryFeeNew" TO "deliveryFee";
+
+CREATE TABLE "ExpenseCategory" ("id" TEXT NOT NULL PRIMARY KEY,"code" TEXT NOT NULL,"nameEn" TEXT NOT NULL,"nameMy" TEXT NOT NULL,"active" BOOLEAN NOT NULL DEFAULT true,"createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,"updatedAt" DATETIME NOT NULL);
+CREATE UNIQUE INDEX "ExpenseCategory_code_key" ON "ExpenseCategory"("code");
+CREATE TABLE "ExpenseEntry" ("id" TEXT NOT NULL PRIMARY KEY,"hubId" TEXT NOT NULL,"categoryId" TEXT NOT NULL,"wallet" TEXT NOT NULL,"businessDate" DATETIME NOT NULL,"description" TEXT NOT NULL,"amount" INTEGER NOT NULL,"actorId" TEXT NOT NULL,"journalEntryId" TEXT NOT NULL,"createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY("categoryId") REFERENCES "ExpenseCategory"("id"));
+CREATE UNIQUE INDEX "ExpenseEntry_journalEntryId_key" ON "ExpenseEntry"("journalEntryId");
+CREATE INDEX "ExpenseEntry_hubId_businessDate_idx" ON "ExpenseEntry"("hubId","businessDate");
+INSERT INTO "ExpenseCategory"("id","code","nameEn","nameMy","updatedAt") VALUES ('expense_rent','RENT','Rent','အိမ်ငှားခ',CURRENT_TIMESTAMP),('expense_salary','SALARY','Salary','လစာ',CURRENT_TIMESTAMP),('expense_utilities','UTILITIES','Utilities','အသုံးစရိတ်များ',CURRENT_TIMESTAMP),('expense_other','OTHER','Other','အခြား',CURRENT_TIMESTAMP);

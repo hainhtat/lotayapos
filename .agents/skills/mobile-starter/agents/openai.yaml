@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mobile Starter"
+  short_description: "Build a tested Expo mobile starter"
+  default_prompt: "Use $mobile-starter to scaffold an Expo Router app with protected tabs, JWT auth, themes, English/Myanmar translations, React Query, and React Hook Form."

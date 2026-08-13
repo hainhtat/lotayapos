@@ -1,0 +1,12 @@
+---
+description: Lotaya POS source of truth and agent/skill routing
+alwaysApply: true
+---
+
+# Lotaya delivery ERP guidance
+
+- **Source of truth:** `PROJECT_SPEC.md`. Do not invent product requirements, ledger rules, permissions, or APIs. Prefer code + the spec; ask when a decision would change money, auth, or scope.
+- **Skills (use directly):** `.agents/skills/` — `backend-starter`, `frontend-starter`, `mobile-starter`, `test`. Already Cursor-discoverable; do not duplicate them under `.cursor/skills/`.
+- **Specialist subagents:** `.cursor/agents/` (ported from `.codex/agents/`). Prefer `/orchestrator` for multi-step work; `/backend-developer`, `/frontend-developer`, `/mobile-developer` for implementation; `/test` then `/verifier`; `/auditor` for security/money risk; `/spec-maintainer` only to sync the spec.
+- **Stack:** Express/Prisma API (`backend/`), Vite React ERP (`frontend/`), Expo rider app (`mobile/`). Integer money, balanced double-entry, server-side authz, `en`/`my` strings.
+- **Change discipline:** smallest coherent diff; no drive-by refactors; no commits unless asked.

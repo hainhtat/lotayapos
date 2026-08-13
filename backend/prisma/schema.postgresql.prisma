@@ -1,0 +1,494 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id                 String                @id @default(cuid())
+  email              String                @unique
+  username           String?               @unique
+  passwordHash       String
+  name               String
+  role               String                @default("RIDER")
+  locale             String                @default("en")
+  active             Boolean               @default(true)
+  tokenVersion       Int                   @default(0)
+  hubId              String?
+  hub                Hub?                  @relation("HubUsers", fields: [hubId], references: [id])
+  rider              Rider?
+  assignmentsCreated PackageAssignment[]   @relation("AssignmentCreatedBy")
+  assignmentsEnded   PackageAssignment[]   @relation("AssignmentEndedBy")
+  expensesCreated    ExpenseEntry[]        @relation("ExpenseActor")
+  locationImports    LocationImportAudit[]
+  userAuditsAuthored UserAdminAudit[]       @relation("UserAdminAuditActor")
+  userAuditsTargeted UserAdminAudit[]       @relation("UserAdminAuditTarget")
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+}
+
+model UserAdminAudit {
+  id            String   @id @default(cuid())
+  action        String
+  actorId       String
+  actor         User     @relation("UserAdminAuditActor", fields: [actorId], references: [id])
+  targetUserId  String
+  targetUser    User     @relation("UserAdminAuditTarget", fields: [targetUserId], references: [id])
+  beforeJson    String?
+  afterJson     String?
+  createdAt     DateTime @default(now())
+
+  @@index([targetUserId, createdAt])
+  @@index([actorId, createdAt])
+}
+
+model Rider {
+  id                     String                       @id @default(cuid())
+  userId                 String                       @unique
+  user                   User                         @relation(fields: [userId], references: [id])
+  hubId                  String?
+  hub                    Hub?                         @relation("HubRiders", fields: [hubId], references: [id])
+  payModel               String                       @default("PERCENTAGE") // PERCENTAGE | SALARY | SALARY_PLUS_PERCENTAGE
+  commissionRateBps      Int                          @default(0) // daily % of delivery fees in basis points (4000 = 40%)
+  monthlySalary          Int                          @default(0) // integer MMK minor units; used for SALARY and SALARY_PLUS_PERCENTAGE
+  parcels                Parcel[]
+  settlements            Settlement[]
+  receivableRecognitions RiderReceivableRecognition[]
+  settlementDeclarations RiderSettlementDeclaration[]
+  ways                   DeliveryWay[]
+  assignments            PackageAssignment[]
+  createdAt              DateTime                     @default(now())
+}
+
+model Hub {
+  id             String         @id @default(cuid())
+  name           String
+  users          User[]         @relation("HubUsers")
+  riders         Rider[]        @relation("HubRiders")
+  batches        Batch[]        @relation("HubBatches")
+  zones          Zone[]
+  journalEntries JournalEntry[]
+  cashbookDays   CashbookDay[]
+  expenses       ExpenseEntry[]
+  createdAt      DateTime       @default(now())
+}
+
+model Zone {
+  id         String    @id @default(cuid())
+  name       String
+  hubId      String
+  hub        Hub       @relation(fields: [hubId], references: [id])
+  townshipId String?
+  township   Township? @relation(fields: [townshipId], references: [id])
+  parcels    Parcel[]
+  createdAt  DateTime  @default(now())
+
+  @@unique([hubId, name])
+  @@index([hubId])
+  @@index([townshipId])
+}
+
+model RegionState {
+  id        String     @id @default(cuid())
+  code      String     @unique
+  nameEn    String
+  nameMy    String
+  districts District[]
+  createdAt DateTime   @default(now())
+}
+
+model LocationImportAudit {
+  id           String   @id @default(cuid())
+  source       String
+  version      String
+  rowCount     Int
+  importedById String
+  importedBy   User     @relation(fields: [importedById], references: [id])
+  createdAt    DateTime @default(now())
+
+  @@index([source, version])
+  @@index([importedById, createdAt])
+}
+
+model District {
+  id            String      @id @default(cuid())
+  code          String      @unique
+  regionStateId String
+  regionState   RegionState @relation(fields: [regionStateId], references: [id])
+  nameEn        String
+  nameMy        String
+  townships     Township[]
+  createdAt     DateTime    @default(now())
+
+  @@unique([regionStateId, nameEn])
+}
+
+model Township {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  districtId  String
+  district    District @relation(fields: [districtId], references: [id])
+  nameEn      String
+  nameMy      String?
+  deliveryFee Int?
+  zones       Zone[]
+  parcels     Parcel[]
+  createdAt   DateTime @default(now())
+
+  @@unique([districtId, nameEn])
+}
+
+model OnlineShop {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  active    Boolean  @default(true)
+  batches   Batch[]
+  settlements OsSettlement[]
+  createdAt DateTime @default(now())
+}
+
+model ReasonCode {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  labelEn      String
+  labelMy      String
+  outcome      String
+  noteRequired Boolean  @default(false)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([outcome, active])
+}
+
+model Batch {
+  id          String     @id @default(cuid())
+  shopId      String
+  shop        OnlineShop @relation(fields: [shopId], references: [id])
+  pickupDate  DateTime
+  hubId       String?
+  hub         Hub?       @relation("HubBatches", fields: [hubId], references: [id])
+  label       String
+  advancePaid Int        @default(0)
+  parcels     Parcel[]
+  settlementLinks OsSettlementBatch[]
+  createdAt   DateTime   @default(now())
+
+  @@unique([shopId, pickupDate])
+}
+
+model Parcel {
+  id                     String              @id @default(cuid())
+  batchId                String
+  batch                  Batch               @relation(fields: [batchId], references: [id])
+  trackingNumber         String              @unique
+  orderId                String?
+  customerName           String
+  customerPhone          String?
+  address                String
+  codAmount              Int
+  deliveryFee            Int?
+  advanceAmount          Int                 @default(0)
+  actualCodCollected     Int?
+  partialReturnShortfall Int?
+  status                 String              @default("CREATED")
+  riderId                String?
+  rider                  Rider?              @relation(fields: [riderId], references: [id])
+  linkGroupId            String?
+  linkGroup              ParcelLinkGroup?    @relation(fields: [linkGroupId], references: [id])
+  assignments            PackageAssignment[]
+  zone                   String?
+  zoneId                 String?
+  zoneRelation           Zone?               @relation(fields: [zoneId], references: [id])
+  township               String?
+  townshipId             String?
+  townshipRelation       Township?           @relation(fields: [townshipId], references: [id])
+  reasonCode             String?
+  returnDueAt            DateTime?
+  statusHistory          StatusHistory[]
+  ways                   DeliveryWay[]
+  alerts                 Alert[]
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  @@index([status])
+  @@index([orderId])
+  @@index([batchId, status, riderId])
+  @@index([zone, township])
+  @@index([townshipId])
+  @@index([linkGroupId])
+}
+
+model ParcelLinkGroup {
+  id               String   @id @default(cuid())
+  address          String
+  baseDeliveryFee  Int
+  totalDeliveryFee Int
+  parcels          Parcel[]
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model PackageAssignment {
+  id           String    @id @default(cuid())
+  parcelId     String
+  parcel       Parcel    @relation(fields: [parcelId], references: [id])
+  riderId      String
+  rider        Rider     @relation(fields: [riderId], references: [id])
+  assignedById String
+  assignedBy   User      @relation("AssignmentCreatedBy", fields: [assignedById], references: [id])
+  endedById    String?
+  endedBy      User?     @relation("AssignmentEndedBy", fields: [endedById], references: [id])
+  assignedAt   DateTime  @default(now())
+  endedAt      DateTime?
+  reason       String?
+
+  @@index([parcelId, endedAt])
+  @@index([riderId, endedAt])
+}
+
+model DeliveryWay {
+  id               String    @id @default(cuid())
+  parcelId         String
+  parcel           Parcel    @relation(fields: [parcelId], references: [id])
+  riderId          String
+  rider            Rider     @relation(fields: [riderId], references: [id])
+  commissionRate   Int
+  commissionAmount Int?
+  outcome          String?
+  startedAt        DateTime  @default(now())
+  completedAt      DateTime?
+}
+
+model StatusHistory {
+  id         String   @id @default(cuid())
+  parcelId   String
+  parcel     Parcel   @relation(fields: [parcelId], references: [id])
+  fromStatus String?
+  toStatus   String
+  actorId    String
+  reasonCode String?
+  note       String?
+  createdAt  DateTime @default(now())
+}
+
+model JournalEntry {
+  id           String        @id @default(cuid())
+  sourceType   String
+  sourceId     String?
+  businessDate DateTime
+  description  String
+  hubId        String
+  hub          Hub           @relation(fields: [hubId], references: [id])
+  lines        JournalLine[]
+  expense      ExpenseEntry?
+  osSettlement OsSettlement? @relation("OsSettlementJournal")
+  createdAt    DateTime      @default(now())
+
+  @@unique([sourceType, sourceId])
+  @@index([hubId, businessDate])
+}
+
+model ExpenseCategory {
+  id        String         @id @default(cuid())
+  code      String         @unique
+  nameEn    String
+  nameMy    String
+  active    Boolean        @default(true)
+  expenses  ExpenseEntry[]
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+}
+
+model ExpenseEntry {
+  id             String          @id @default(cuid())
+  hubId          String
+  hub            Hub             @relation(fields: [hubId], references: [id])
+  categoryId     String
+  category       ExpenseCategory @relation(fields: [categoryId], references: [id])
+  wallet         String
+  businessDate   DateTime
+  description    String
+  amount         Int
+  actorId        String
+  actor          User            @relation("ExpenseActor", fields: [actorId], references: [id])
+  journalEntryId String          @unique
+  journalEntry   JournalEntry    @relation(fields: [journalEntryId], references: [id])
+  idempotencyKey String          @unique
+  createdAt      DateTime        @default(now())
+
+  @@index([hubId, businessDate])
+  @@index([actorId, createdAt])
+}
+
+model JournalLine {
+  id      String       @id @default(cuid())
+  entryId String
+  entry   JournalEntry @relation(fields: [entryId], references: [id])
+  account String
+  debit   Int          @default(0)
+  credit  Int          @default(0)
+}
+
+model CashbookDay {
+  id                 String          @id @default(cuid())
+  businessDate       DateTime
+  hubId              String
+  hub                Hub             @relation(fields: [hubId], references: [id])
+  varianceAmount     Int             @default(0)
+  varianceReason     String?
+  varianceApprovedAt DateTime?
+  varianceApprovedBy String?
+  closedAt           DateTime?
+  closedBy           String?
+  closeSummaryJson   String?
+  reopenedAt         DateTime?
+  reopenedBy         String?
+  reopenReason       String?
+  audits             CashbookAudit[]
+
+  @@unique([hubId, businessDate])
+}
+
+model CashbookAudit {
+  id            String      @id @default(cuid())
+  cashbookDayId String
+  cashbookDay   CashbookDay @relation(fields: [cashbookDayId], references: [id])
+  action        String
+  actorId       String
+  reason        String
+  fromState     String?
+  toState       String?
+  metadataJson  String?
+  createdAt     DateTime    @default(now())
+
+  @@index([cashbookDayId, createdAt])
+}
+
+model Alert {
+  id             String    @id @default(cuid())
+  type           String
+  parcelId       String?
+  parcel         Parcel?   @relation(fields: [parcelId], references: [id])
+  message        String
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+  createdAt      DateTime  @default(now())
+
+  @@index([acknowledgedAt, createdAt])
+}
+
+model Settlement {
+  id             String           @id @default(cuid())
+  riderId        String
+  rider          Rider            @relation(fields: [riderId], references: [id])
+  businessDate   DateTime
+  expectedAmount Int
+  actualAmount   Int
+  variance       Int
+  status         String           @default("OPEN")
+  idempotencyKey String           @unique
+  lines          SettlementLine[]
+  createdAt      DateTime         @default(now())
+
+  @@index([riderId, businessDate])
+}
+
+model RiderReceivableRecognition {
+  id               String   @id @default(cuid())
+  sourceType       String
+  sourceId         String
+  riderId          String
+  rider            Rider    @relation(fields: [riderId], references: [id])
+  hubId            String
+  businessDate     DateTime
+  codAmount        Int
+  deliveryFee      Int
+  commissionAmount Int
+  receivableAmount Int
+  createdAt        DateTime @default(now())
+
+  @@unique([sourceType, sourceId])
+  @@index([riderId, businessDate])
+  @@index([hubId, businessDate])
+}
+
+model SettlementLine {
+  id           String     @id @default(cuid())
+  settlementId String
+  settlement   Settlement @relation(fields: [settlementId], references: [id])
+  wallet       String
+  amount       Int
+  reference    String?
+}
+
+model OsSettlement {
+  id                       String              @id @default(cuid())
+  shopId                   String
+  shop                     OnlineShop          @relation(fields: [shopId], references: [id])
+  hubId                    String
+  businessDate             DateTime
+  grossCollectedCod        Int
+  advanceDeduction         Int
+  returnDeduction          Int
+  deliveryFeeDeduction     Int
+  adjustmentAmount         Int                 @default(0)
+  adjustmentReason         String?
+  netAmount                Int
+  wallet                    String
+  status                    String              @default("POSTED")
+  idempotencyKey            String              @unique
+  postedBy                  String
+  reversedAt                DateTime?
+  reversedBy                String?
+  reversalReason            String?
+  journalEntryId            String              @unique
+  journalEntry              JournalEntry        @relation("OsSettlementJournal", fields: [journalEntryId], references: [id])
+  batches                   OsSettlementBatch[]
+  createdAt                 DateTime             @default(now())
+
+  @@index([hubId, businessDate])
+  @@index([shopId, status, businessDate])
+}
+
+model OsSettlementBatch {
+  id             String       @id @default(cuid())
+  settlementId   String
+  settlement     OsSettlement @relation(fields: [settlementId], references: [id])
+  batchId        String
+  batch          Batch        @relation(fields: [batchId], references: [id])
+  collectedCod   Int
+  advanceAmount  Int
+  returnedAdvance Int
+  deliveryFees   Int
+
+  @@unique([settlementId, batchId])
+  @@index([batchId])
+}
+
+model RiderSettlementDeclaration {
+  id                 String    @id @default(cuid())
+  riderId            String
+  rider              Rider     @relation(fields: [riderId], references: [id])
+  businessDate       DateTime
+  cash               Int       @default(0)
+  kbzPay             Int       @default(0)
+  wavePay            Int       @default(0)
+  note               String?
+  status             String    @default("DECLARED")
+  verifiedCash       Int?
+  verifiedKbzPay     Int?
+  verifiedWavePay    Int?
+  varianceReason     String?
+  varianceApprovedAt DateTime?
+  varianceApprovedBy String?
+  verifiedAt         DateTime?
+  verifiedBy         String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@unique([riderId, businessDate])
+  @@index([businessDate, status])
+}
