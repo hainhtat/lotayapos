@@ -25,8 +25,23 @@ model User {
   locationImports    LocationImportAudit[]
   userAuditsAuthored UserAdminAudit[]       @relation("UserAdminAuditActor")
   userAuditsTargeted UserAdminAudit[]       @relation("UserAdminAuditTarget")
+  refreshTokens      RefreshToken[]
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
+}
+
+model RefreshToken {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash    String    @unique
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  replacedById String?
+  remember     Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+
+  @@index([userId, expiresAt])
 }
 
 model UserAdminAudit {

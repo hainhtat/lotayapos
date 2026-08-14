@@ -1,7 +1,7 @@
 import {createContext,useContext,useEffect,useState} from "react";
-import {api,onUnauthorized} from "@/lib/api";
+import {api,onUnauthorized,refreshSession} from "@/lib/api";
 import {requireVerifiedUser} from "@/lib/auth-response";
-import {clearAccessToken,restoreAccessToken,saveRememberedIdentifier,setAccessToken} from "@/lib/session-store";
+import {clearAccessToken,getRefreshToken,restoreAccessToken,restoreRefreshToken,saveRememberedIdentifier,setAccessToken,setRefreshToken} from "@/lib/session-store";
 
 export type User={id:string;name:string;email:string;role:string};
 type Auth={
@@ -18,8 +18,18 @@ export function AuthProvider({children}:{children:React.ReactNode}){
 
   useEffect(()=>{
     let active=true;
-    restoreAccessToken().then(async token=>{
-      if(!token)return;
+    (async()=>{
+      const access=await restoreAccessToken();
+      const refresh=await restoreRefreshToken();
+      if(!access&&refresh){
+        const refreshed=await refreshSession();
+        if(!refreshed){
+          await clearAccessToken();
+          return;
+        }
+      }else if(!access){
+        return;
+      }
       try{
         const result=await api<User>("/auth/verify");
         if(active)setUser(requireVerifiedUser(result.data));
@@ -27,24 +37,31 @@ export function AuthProvider({children}:{children:React.ReactNode}){
         await clearAccessToken();
         if(active)setUser(null);
       }
-    }).finally(()=>{if(active)setLoading(false)});
+    })().finally(()=>{if(active)setLoading(false)});
     return()=>{active=false};
   },[]);
 
   useEffect(()=>onUnauthorized(()=>{setUser(null)}),[]);
 
   const signIn=async(identifier:string,password:string,remember:boolean)=>{
-    const result=await api<{user:User;accessToken:string}>("/auth/login",{
+    const result=await api<{user:User;accessToken:string;refreshToken?:string}>("/auth/login",{
       method:"POST",
       body:JSON.stringify({identifier:identifier.trim(),password}),
     });
     await setAccessToken(result.data.accessToken);
+    if(result.data.refreshToken)await setRefreshToken(result.data.refreshToken);
     await saveRememberedIdentifier(identifier,remember);
     setUser(result.data.user);
   };
 
   const signOut=async()=>{
-    try{await api("/auth/logout",{method:"POST"})}
+    const refreshToken=await getRefreshToken();
+    try{
+      await api("/auth/logout",{
+        method:"POST",
+        body:JSON.stringify(refreshToken?{refreshToken}:{}),
+      });
+    }
     finally{await clearAccessToken();setUser(null)}
   };
 

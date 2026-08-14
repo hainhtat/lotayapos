@@ -7,6 +7,9 @@ export function postgresPoolOptions(databaseUrl: string) {
       url.searchParams.delete(key);
     }
   }
+  if (url.port === "6543" && !url.searchParams.has("pgbouncer")) {
+    url.searchParams.set("pgbouncer", "true");
+  }
 
   return {
     connectionString: url.toString(),

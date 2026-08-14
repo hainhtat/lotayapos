@@ -1,4 +1,5 @@
 import { prisma } from "../config/database.js";
+import { env } from "../config/env.js";
 import { ApiError } from "../utils/api-error.js";
 import { assertCashbookOpen } from "./finance.service.js";
 
@@ -61,13 +62,26 @@ async function assertOperationsReader(actor: BatchActor) {
 
 export async function listBatches(actor: BatchActor) {
   const user = await assertOperationsReader(actor);
-  return prisma.batch.findMany({ where: user.role === "SUPERADMIN" ? {} : { hubId: user.hubId }, include: { shop: true, parcels: { select: { status: true } } }, orderBy: { pickupDate: "desc" } });
+  return prisma.batch.findMany({
+    where: user.role === "SUPERADMIN" ? {} : { hubId: user.hubId },
+    include: { shop: true, parcels: { select: { status: true } } },
+    orderBy: { pickupDate: "desc" },
+    take: 200,
+  });
 }
 export function formatTrackingNumber(sequence: number) {
   return `LTY-${String(sequence).padStart(3, "0")}`;
 }
 
 export async function nextTrackingSequenceStart() {
+  if (env.databaseProvider === "postgresql") {
+    const rows = await prisma.$queryRaw<Array<{ max: number | null }>>`
+      SELECT MAX(CAST(SUBSTRING("trackingNumber" FROM 5) AS INTEGER)) AS max
+      FROM "Parcel"
+      WHERE "trackingNumber" ~ '^LTY-[0-9]+$'
+    `;
+    return Number(rows[0]?.max ?? 0) + 1;
+  }
   const parcels = await prisma.parcel.findMany({ where: { trackingNumber: { startsWith: "LTY-" } }, select: { trackingNumber: true } });
   const highest = parcels.reduce((max, parcel) => {
     const match = /^LTY-(\d+)$/.exec(parcel.trackingNumber);

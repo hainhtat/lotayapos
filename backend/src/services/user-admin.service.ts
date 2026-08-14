@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../config/database.js";
 import { ApiError } from "../utils/api-error.js";
+import { revokeUserRefreshTokens } from "../utils/refresh-token.js";
 
 export const USER_ROLES = ["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "DISPATCHER", "RIDER", "AUDITOR"] as const;
 type UserRole = (typeof USER_ROLES)[number];
@@ -71,6 +72,7 @@ export async function updateUser(id:string,input:Partial<UserInput>,actor:Actor)
     if(current.role==="SUPERADMIN" && role!=="SUPERADMIN" && current.active && await tx.user.count({where:{role:"SUPERADMIN",active:true}})<=1) throw new ApiError(409,"LAST_SUPERADMIN","At least one active Superadmin is required");
     const privilegeChanged=role!==current.role || hubId!==current.hubId;
     const updated=await tx.user.update({where:{id},data:{...(input.name!==undefined?{name:input.name.trim()}:{}),...(input.username!==undefined?{username:input.username.trim().toLowerCase()}:{}),...(input.email!==undefined?{email:input.email.trim().toLowerCase()}:{}),role,hubId,...(privilegeChanged?{tokenVersion:{increment:1}}:{})},select:publicSelect});
+    if(privilegeChanged) await revokeUserRefreshTokens(id,tx);
     if(role==="RIDER"){ if(current.rider) await tx.rider.update({where:{userId:id},data:{hubId}}); else await tx.rider.create({data:{userId:id,hubId}}); }
     await tx.userAdminAudit.create({data:{action:"USER_UPDATED",actorId:actor.id,targetUserId:id,beforeJson:JSON.stringify(auditState(current)),afterJson:JSON.stringify(auditState(updated))}}); return updated;
   }); } catch(error){ duplicateError(error); }
@@ -81,10 +83,10 @@ export async function setUserActive(id:string,active:boolean,actor:Actor) {
     if(id===actor.id && !active) throw new ApiError(409,"SELF_DEACTIVATION","You cannot deactivate your own account");
     if(current.role==="SUPERADMIN" && current.active && !active && await tx.user.count({where:{role:"SUPERADMIN",active:true}})<=1) throw new ApiError(409,"LAST_SUPERADMIN","At least one active Superadmin is required");
     if(current.active===active) return tx.user.findUniqueOrThrow({where:{id},select:publicSelect});
-    const updated=await tx.user.update({where:{id},data:{active,tokenVersion:{increment:1}},select:publicSelect}); await tx.userAdminAudit.create({data:{action:active?"USER_ACTIVATED":"USER_DEACTIVATED",actorId:actor.id,targetUserId:id,beforeJson:JSON.stringify(auditState(current)),afterJson:JSON.stringify(auditState(updated))}}); return updated; });
+    const updated=await tx.user.update({where:{id},data:{active,tokenVersion:{increment:1}},select:publicSelect}); await revokeUserRefreshTokens(id,tx); await tx.userAdminAudit.create({data:{action:active?"USER_ACTIVATED":"USER_DEACTIVATED",actorId:actor.id,targetUserId:id,beforeJson:JSON.stringify(auditState(current)),afterJson:JSON.stringify(auditState(updated))}}); return updated; });
 }
 
 export async function resetUserPassword(id:string,password:string,actor:Actor) {
   return prisma.$transaction(async tx=>{ await requireSuperadmin(tx,actor); const current=await tx.user.findUnique({where:{id},select:{id:true}}); if(!current) throw new ApiError(404,"USER_NOT_FOUND","User not found");
-    await tx.user.update({where:{id},data:{passwordHash:await bcrypt.hash(password,12),tokenVersion:{increment:1}}}); await tx.userAdminAudit.create({data:{action:"USER_PASSWORD_RESET",actorId:actor.id,targetUserId:id}}); return {id,passwordReset:true}; });
+    await tx.user.update({where:{id},data:{passwordHash:await bcrypt.hash(password,12),tokenVersion:{increment:1}}}); await revokeUserRefreshTokens(id,tx); await tx.userAdminAudit.create({data:{action:"USER_PASSWORD_RESET",actorId:actor.id,targetUserId:id}}); return {id,passwordReset:true}; });
 }

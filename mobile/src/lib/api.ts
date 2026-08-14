@@ -1,4 +1,4 @@
-import {clearAccessToken,getAccessToken} from "@/lib/session-store";
+import {clearAccessToken,getAccessToken,getRefreshToken,setAccessToken,setRefreshToken} from "@/lib/session-store";
 
 const base=process.env.EXPO_PUBLIC_API_BASE_URL??"http://localhost:4000/api/v1";
 
@@ -19,23 +19,69 @@ export class ApiError extends Error{
 
 type ApiSuccess<T>={success:true;data:T;pagination?:{page:number;pageSize:number;total:number;totalPages:number}};
 
-export async function api<T>(path:string,init:RequestInit={}):Promise<ApiSuccess<T>>{
+function skipRefresh(path:string){
+  return path.startsWith("/auth/login")||path.startsWith("/auth/refresh")||path.startsWith("/auth/register");
+}
+
+let refreshInFlight:Promise<boolean>|null=null;
+
+async function persistSession(data:{accessToken?:string;refreshToken?:string}|null|undefined){
+  if(!data?.accessToken)return false;
+  await setAccessToken(data.accessToken);
+  if(data.refreshToken)await setRefreshToken(data.refreshToken);
+  return true;
+}
+
+export async function refreshSession():Promise<boolean>{
+  if(refreshInFlight)return refreshInFlight;
+  refreshInFlight=(async()=>{
+    const refreshToken=await getRefreshToken();
+    if(!refreshToken)return false;
+    try{
+      const response=await fetch(`${base}/auth/refresh`,{
+        method:"POST",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify({refreshToken}),
+      });
+      const body=await response.json().catch(()=>null);
+      if(!response.ok)return false;
+      return persistSession(body?.data);
+    }catch{
+      return false;
+    }
+  })().finally(()=>{refreshInFlight=null});
+  return refreshInFlight;
+}
+
+async function send(path:string,init:RequestInit){
+  const token=await getAccessToken();
+  return fetch(`${base}${path}`,{
+    ...init,
+    headers:{
+      "content-type":"application/json",
+      ...(token?{authorization:`Bearer ${token}`}:{}),
+    },
+  });
+}
+
+export async function api<T>(path:string,init:RequestInit={},retried=false):Promise<ApiSuccess<T>>{
   const token=await getAccessToken();
   let response:Response;
   try{
-    response=await fetch(`${base}${path}`,{
-      ...init,
-      headers:{
-        "content-type":"application/json",
-        ...(token?{authorization:`Bearer ${token}`}:{}),
-      },
-    });
+    response=await send(path,init);
   }catch{
     throw new ApiError("Unable to reach the API. Start the backend on port 4000 and check EXPO_PUBLIC_API_BASE_URL.",0);
   }
   const body=await response.json().catch(()=>null);
   if(!response.ok){
-    if(response.status===401&&token){
+    if(response.status===401&&!skipRefresh(path)&&!retried){
+      const refreshed=await refreshSession();
+      if(refreshed)return api<T>(path,init,true);
+      if(token){
+        await clearAccessToken();
+        notifyUnauthorized();
+      }
+    }else if(response.status===401&&token){
       await clearAccessToken();
       notifyUnauthorized();
     }

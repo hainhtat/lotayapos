@@ -1,3 +1,24 @@
 import type { RequestHandler } from "express"; import { ApiError } from "../utils/api-error.js"; import { verifyAccessToken } from "../utils/jwt.js"; import { t } from "../i18n/messages.js"; import { prisma } from "../config/database.js";
-export const requireAuth: RequestHandler = async (req,_res,next) => { try { const header = req.headers.authorization; const cookie = req.headers.cookie?.match(/(?:^|; )accessToken=([^;]+)/)?.[1]; const token = header?.startsWith("Bearer ") ? header.slice(7) : cookie; if (!token) throw new Error(); const claims = verifyAccessToken(token); const user = await prisma.user.findUnique({where:{id:claims.sub},select:{active:true,role:true,email:true,tokenVersion:true}}); if (!user?.active || user.tokenVersion !== claims.tokenVersion) throw new Error(); req.auth = {sub:claims.sub,role:user.role,email:user.email,tokenVersion:user.tokenVersion}; next(); } catch { next(new ApiError(401,"AUTH_REQUIRED",t(req.locale,"authRequired"))); } };
+
+async function authenticate(req: Parameters<RequestHandler>[0]) {
+  const header = req.headers.authorization;
+  const cookie = req.headers.cookie?.match(/(?:^|; )accessToken=([^;]+)/)?.[1];
+  const token = header?.startsWith("Bearer ") ? header.slice(7) : cookie ? decodeURIComponent(cookie) : undefined;
+  if (!token) throw new Error();
+  const claims = verifyAccessToken(token);
+  const user = await prisma.user.findUnique({where:{id:claims.sub},select:{active:true,role:true,email:true,tokenVersion:true}});
+  if (!user?.active || user.tokenVersion !== claims.tokenVersion) throw new Error();
+  req.auth = {sub:claims.sub,role:user.role,email:user.email,tokenVersion:user.tokenVersion};
+}
+
+export const requireAuth: RequestHandler = async (req,_res,next) => {
+  try { await authenticate(req); next(); }
+  catch { next(new ApiError(401,"AUTH_REQUIRED",t(req.locale,"authRequired"))); }
+};
+
+export const optionalAuth: RequestHandler = async (req,_res,next) => {
+  try { await authenticate(req); } catch { /* anonymous logout still clears refresh cookies */ }
+  next();
+};
+
 export const requireRoles = (...roles: string[]): RequestHandler => (req,_res,next) => roles.includes(req.auth?.role ?? "") ? next() : next(new ApiError(403,"FORBIDDEN","You do not have permission for this action"));

@@ -1,10 +1,13 @@
 jest.mock("./session-store", () => ({
   getAccessToken: jest.fn(() => Promise.resolve("test-token")),
+  getRefreshToken: jest.fn(() => Promise.resolve(null)),
+  setAccessToken: jest.fn(() => Promise.resolve()),
+  setRefreshToken: jest.fn(() => Promise.resolve()),
   clearAccessToken: jest.fn(() => Promise.resolve()),
 }));
 
 import { api, getAssignedParcel, getAssignedParcels, onUnauthorized } from "./api";
-import { clearAccessToken, getAccessToken } from "./session-store";
+import { clearAccessToken, getAccessToken, getRefreshToken, setAccessToken, setRefreshToken } from "./session-store";
 
 function okJson(data: unknown, pagination?: { page: number; pageSize: number; total: number; totalPages: number }) {
   return Promise.resolve({
@@ -146,25 +149,72 @@ describe("api unauthorized handling", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (getAccessToken as jest.Mock).mockResolvedValue("expired-token");
+    (getRefreshToken as jest.Mock).mockResolvedValue(null);
     globalThis.fetch = jest.fn();
   });
 
-  it("clears the session and notifies listeners on authenticated 401", async () => {
+  it("retries the original request after a successful refresh and does not notify listeners", async () => {
     const listener = jest.fn();
     const unsubscribe = onUnauthorized(listener);
-    (globalThis.fetch as jest.Mock).mockResolvedValue({
-      ok: false,
-      status: 401,
-      json: async () => ({ error: { message: "Unauthorized" } }),
+    (getRefreshToken as jest.Mock).mockResolvedValue("refresh-token");
+    (setAccessToken as jest.Mock).mockImplementation((token: string) => {
+      (getAccessToken as jest.Mock).mockResolvedValue(token);
+      return Promise.resolve();
     });
+    (globalThis.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: { message: "Unauthorized" } }),
+      })
+      .mockImplementationOnce(() => okJson({ accessToken: "new-access", refreshToken: "new-refresh" }))
+      .mockImplementationOnce(() => okJson([]));
+
+    await expect(api("/parcels?assignedToMe=true")).resolves.toMatchObject({ success: true, data: [] });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/auth/refresh"),
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ refreshToken: "refresh-token" }) }),
+    );
+    expect(setAccessToken).toHaveBeenCalledWith("new-access");
+    expect(setRefreshToken).toHaveBeenCalledWith("new-refresh");
+    expect(clearAccessToken).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining("/parcels?assignedToMe=true"),
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: "Bearer new-access" }),
+      }),
+    );
+    unsubscribe();
+  });
+
+  it("clears the session and notifies listeners when authenticated 401 refresh fails", async () => {
+    const listener = jest.fn();
+    const unsubscribe = onUnauthorized(listener);
+    (getRefreshToken as jest.Mock).mockResolvedValue("refresh-token");
+    (globalThis.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: { message: "Unauthorized" } }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: { message: "Unauthorized" } }),
+      });
 
     await expect(api("/parcels?assignedToMe=true")).rejects.toMatchObject({ status: 401 });
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(2, expect.stringContaining("/auth/refresh"), expect.any(Object));
     expect(clearAccessToken).toHaveBeenCalled();
     expect(listener).toHaveBeenCalled();
     unsubscribe();
   });
 
-  it("does not clear the session on login 401 without a stored token", async () => {
+  it("does not refresh, clear, or notify on login 401 without a stored token", async () => {
     (getAccessToken as jest.Mock).mockResolvedValue(null);
     const listener = jest.fn();
     const unsubscribe = onUnauthorized(listener);
@@ -175,6 +225,8 @@ describe("api unauthorized handling", () => {
     });
 
     await expect(api("/auth/login", { method: "POST", body: "{}" })).rejects.toMatchObject({ status: 401 });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/auth/refresh"), expect.any(Object));
     expect(clearAccessToken).not.toHaveBeenCalled();
     expect(listener).not.toHaveBeenCalled();
     unsubscribe();

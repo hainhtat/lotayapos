@@ -25,4 +25,13 @@ describe("postgresPoolOptions", () => {
     expect(options.connectionString).toContain("db.example.com");
     expect(options.ssl).toEqual({ rejectUnauthorized: false });
   });
+
+  test("adds pgbouncer=true for transaction pooler port 6543", () => {
+    const options = postgresPoolOptions(
+      "postgresql://user:pass@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?schema=public",
+    );
+
+    expect(options.connectionString).toContain("pgbouncer=true");
+    expect(options.connectionString).toContain("aws-0-ap-southeast-1.pooler.supabase.com:6543");
+  });
 });

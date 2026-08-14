@@ -32,15 +32,21 @@ describe("AuthPage",()=>{
   });
 
   it("sends riders to the app download page after login",async()=>{
-    vi.stubGlobal("fetch",vi.fn().mockResolvedValue({
-      ok:true,
-      json:async()=>({
-        success:true,
-        data:{
-          user:{id:"rider-1",name:"Rider One",email:"rider@example.com",role:"RIDER"},
-          accessToken:"rider-token",
-        },
-      }),
+    vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>{
+      const url=String(input);
+      if(url.includes("/auth/refresh")){
+        return{ok:false,status:401,json:async()=>({success:false,error:{message:"unauthorized"}})};
+      }
+      return{
+        ok:true,
+        json:async()=>({
+          success:true,
+          data:{
+            user:{id:"rider-1",name:"Rider One",email:"rider@example.com",role:"RIDER"},
+            accessToken:"rider-token",
+          },
+        }),
+      };
     }));
     render(
       <MemoryRouter initialEntries={["/login"]}>

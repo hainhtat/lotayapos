@@ -40,7 +40,8 @@ export DATABASE_PROVIDER=postgresql
 cd "${REPO}/backend"
 npm ci --include=dev
 DATABASE_PROVIDER=postgresql npx prisma generate --schema prisma/schema.postgresql.prisma
-npx prisma migrate deploy --schema prisma/schema.postgresql.prisma
+MIGRATE_URL="${DIRECT_DATABASE_URL:-$DATABASE_URL}"
+DATABASE_URL="$MIGRATE_URL" npx prisma migrate deploy --schema prisma/schema.postgresql.prisma
 rm -rf dist
 npx tsc -p tsconfig.build.json
 rsync -a --delete --exclude node_modules --exclude .env dist package.json package-lock.json prisma "${ROOT}/backend/"

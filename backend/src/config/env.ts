@@ -16,8 +16,10 @@ if (!jwtSecret) throw new Error("Missing environment variable: JWT_SECRET");
 if (jwtSecret.length < 32) throw new Error("JWT_SECRET must be at least 32 characters");
 
 const databaseUrl = required("DATABASE_URL", nodeEnv === "production" ? undefined : "file:./dev.db");
+const directDatabaseUrl = process.env.DIRECT_DATABASE_URL;
 if (databaseProvider === "sqlite" && !databaseUrl.startsWith("file:")) throw new Error("SQLite DATABASE_URL must use file:");
 if (databaseProvider === "postgresql" && !/^postgres(ql)?:\/\//.test(databaseUrl)) throw new Error("PostgreSQL DATABASE_URL must use postgresql://");
+if (directDatabaseUrl && !/^postgres(ql)?:\/\//.test(directDatabaseUrl)) throw new Error("DIRECT_DATABASE_URL must use postgresql://");
 
 const hubTimezone = process.env.HUB_TIMEZONE ?? "Asia/Yangon";
 try { new Intl.DateTimeFormat("en-US", { timeZone: hubTimezone }).format(); } catch { throw new Error("HUB_TIMEZONE must be a valid IANA timezone"); }
@@ -35,4 +37,4 @@ function parseWebOrigins() {
   return configured;
 }
 
-export const env = { nodeEnv, port: Number(process.env.PORT ?? 4000), listenHost: process.env.LISTEN_HOST ?? (nodeEnv === "production" ? "127.0.0.1" : "0.0.0.0"), databaseProvider, databaseUrl, jwtSecret, jwtIssuer: required("JWT_ISSUER", "lotaya-api"), jwtAudience: required("JWT_AUDIENCE", "lotaya-clients"), webOrigins: parseWebOrigins(), defaultLocale: process.env.DEFAULT_LOCALE ?? "en", riderCommissionRateBps: Number(process.env.RIDER_COMMISSION_RATE_BPS ?? 1000), hubTimezone };
+export const env = { nodeEnv, port: Number(process.env.PORT ?? 4000), listenHost: process.env.LISTEN_HOST ?? (nodeEnv === "production" ? "127.0.0.1" : "0.0.0.0"), databaseProvider, databaseUrl, directDatabaseUrl, jwtSecret, jwtIssuer: required("JWT_ISSUER", "lotaya-api"), jwtAudience: required("JWT_AUDIENCE", "lotaya-clients"), webOrigins: parseWebOrigins(), defaultLocale: process.env.DEFAULT_LOCALE ?? "en", riderCommissionRateBps: Number(process.env.RIDER_COMMISSION_RATE_BPS ?? 1000), hubTimezone };
