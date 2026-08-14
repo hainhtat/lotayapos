@@ -1,5 +1,6 @@
 import type { RequestHandler } from "express";
 import * as service from "../services/operations.service.js";
+import * as parcelService from "../services/parcel.service.js";
 import { generateDispatchManifestPdf } from "../utils/manifest-pdf.js";
 import { previewManifestPdf } from "../services/manifest-import.service.js";
 
@@ -55,5 +56,7 @@ export const downloadManifest: RequestHandler = async (req, res) => {
 };
 
 export const linkParcels: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await service.linkParcels(req.body, actor(req)) });
+export const correctDeliveredRider: RequestHandler = async (req, res) =>
+  res.json({ success: true, data: await parcelService.correctDeliveredRider(String(req.params.id), req.body, actor(req)) });
 export const reassignParcel: RequestHandler = async (req, res) => res.json({ success: true, data: await service.reassignParcel(String(req.params.id), req.body, actor(req)) });
 export const extendPendingReturn: RequestHandler = async (req, res) => res.json({ success: true, data: await service.extendPendingReturn(String(req.params.id), req.body, actor(req)) });

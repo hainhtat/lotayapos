@@ -23,6 +23,8 @@ type SavedParcel = {
   deliveryFee?: number | null;
   townshipId?: string | null;
   zoneId?: string | null;
+  linkGroupId?: string | null;
+  linkGroup?: { id: string } | null;
   townshipRelation?: { id: string; nameEn: string; deliveryFee: number; district?: { id: string; regionStateId: string } } | null;
   zoneRelation?: { id: string; name: string } | null;
 };
@@ -197,6 +199,7 @@ function DeliveryFeeCell({ row, regions }: { row: ParcelRow; regions: Location[]
 }
 
 const SAVED_PARCELS_PAGE_SIZE = 50;
+const fieldEditableStatuses = new Set(["CREATED", "PICKED_UP", "ASSIGNED"]);
 
 export function BatchDetailPage() {
   const { id = "" } = useParams();
@@ -211,7 +214,7 @@ export function BatchDetailPage() {
   const [preview, setPreview] = useState<ManifestPreview | null>(null);
   const [editing, setEditing] = useState<SavedParcel | null>(null);
   const [savedPage, setSavedPage] = useState(1);
-  const [editForm, setEditForm] = useState({ orderId: "", customerName: "", address: "", customerPhone: "", codAmount: "", townshipId: "", zoneId: "" });
+  const [editForm, setEditForm] = useState({ orderId: "", customerName: "", address: "", customerPhone: "", codAmount: "", deliveryFee: "", townshipId: "", zoneId: "" });
   const batch = useQuery({
     queryKey: ["batch", id],
     queryFn: () => api<Batch>(`/operations/batches/${id}`).then((response) => response.data),
@@ -242,6 +245,7 @@ export function BatchDetailPage() {
       address: editing.address,
       customerPhone: editing.customerPhone ?? "",
       codAmount: String(editing.codAmount),
+      deliveryFee: String(editing.deliveryFee ?? 0),
       townshipId: editing.townshipId ?? "",
       zoneId: editing.zoneId ?? "",
     });
@@ -260,19 +264,26 @@ export function BatchDetailPage() {
   }, [savedPage, savedPageCount]);
   const remainingToOs = batch.data?.remainingToOs ?? 0;
   const updateParcel = useMutation({
-    mutationFn: () =>
-      api(`/parcels/${editing!.id}`, {
+    mutationFn: () => {
+      const canEditDeliveryFields = fieldEditableStatuses.has(editing!.status) && !editing!.linkGroupId;
+      return api(`/parcels/${editing!.id}`, {
         method: "PATCH",
         body: JSON.stringify({
           orderId: editForm.orderId.trim() || null,
           customerName: editForm.customerName.trim(),
           address: editForm.address.trim(),
           customerPhone: editForm.customerPhone.trim() || null,
-          codAmount: Number(editForm.codAmount),
-          townshipId: editForm.townshipId,
-          zoneId: editForm.zoneId || null,
+          ...(canEditDeliveryFields
+            ? {
+                codAmount: Number(editForm.codAmount),
+                deliveryFee: Number(editForm.deliveryFee),
+                townshipId: editForm.townshipId,
+                zoneId: editForm.zoneId || null,
+              }
+            : {}),
         }),
-      }),
+      });
+    },
     onSuccess: async () => {
       setMessage(t("parcelUpdated"));
       setEditing(null);
@@ -686,21 +697,28 @@ export function BatchDetailPage() {
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              if (!editForm.customerName.trim() || !editForm.address.trim() || !editForm.townshipId || !/^\d+$/.test(editForm.codAmount)) return;
+              if (!editForm.customerName.trim() || !editForm.address.trim() ||
+                (fieldEditableStatuses.has(editing.status) && !editing.linkGroupId && (!editForm.townshipId || !/^\d+$/.test(editForm.codAmount) || !/^\d+$/.test(editForm.deliveryFee)))) return;
               updateParcel.mutate();
             }}
             className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl dark:bg-[#181a1d]"
           >
             <h2 className="font-display text-xl font-bold">{t("editParcel")}</h2>
             <p className="mt-1 text-sm text-slate-500">{editing.trackingNumber}</p>
+            {editing.linkGroupId ? (
+              <p role="note" className="mt-4 rounded-xl bg-amber-50 p-3 text-sm font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                {t("parcelUpdateError.PARCEL_LINKED")}
+              </p>
+            ) : null}
             <div className="mt-4 grid gap-3">
               <label className="text-xs font-bold text-slate-500">{t("orderId")}<input value={editForm.orderId} onChange={(e) => setEditForm((v) => ({ ...v, orderId: e.target.value }))} className={field} /></label>
               <label className="text-xs font-bold text-slate-500">{t("customer")}<input required value={editForm.customerName} onChange={(e) => setEditForm((v) => ({ ...v, customerName: e.target.value }))} className={field} /></label>
               <label className="text-xs font-bold text-slate-500">{t("address")}<input required value={editForm.address} onChange={(e) => setEditForm((v) => ({ ...v, address: e.target.value }))} className={field} /></label>
               <label className="text-xs font-bold text-slate-500">{t("customerPhone")}<input value={editForm.customerPhone} onChange={(e) => setEditForm((v) => ({ ...v, customerPhone: e.target.value }))} className={field} /></label>
-              <label className="text-xs font-bold text-slate-500">{t("township")}<select required value={editForm.townshipId} onChange={(e) => setEditForm((v) => ({ ...v, townshipId: e.target.value, zoneId: "" }))} className={field}><option value="">{t("township")}</option>{allTownships.data?.map((township) => <option key={township.id} value={township.id}>{township.district?.regionState?.nameEn ? `${township.district.regionState.nameEn} · ` : ""}{township.district?.nameEn ? `${township.district.nameEn} · ` : ""}{township.nameEn}</option>)}</select></label>
-              <label className="text-xs font-bold text-slate-500">{t("zone")}<select value={editForm.zoneId} onChange={(e) => setEditForm((v) => ({ ...v, zoneId: e.target.value }))} className={field}><option value="">—</option>{editZones.data?.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}</select></label>
-              <label className="text-xs font-bold text-slate-500">{t("cod")}<input required type="number" min={0} value={editForm.codAmount} onChange={(e) => setEditForm((v) => ({ ...v, codAmount: e.target.value }))} className={field} /></label>
+              <label className="text-xs font-bold text-slate-500">{t("township")}<select required disabled={!fieldEditableStatuses.has(editing.status) || Boolean(editing.linkGroupId)} value={editForm.townshipId} onChange={(e) => { const townshipId = e.target.value; const township = allTownships.data?.find((item) => item.id === townshipId); setEditForm((v) => ({ ...v, townshipId, zoneId: "", ...(township ? { deliveryFee: String(township.deliveryFee) } : {}) })); }} className={field}><option value="">{t("township")}</option>{allTownships.data?.map((township) => <option key={township.id} value={township.id}>{township.district?.regionState?.nameEn ? `${township.district.regionState.nameEn} · ` : ""}{township.district?.nameEn ? `${township.district.nameEn} · ` : ""}{township.nameEn}</option>)}</select></label>
+              <label className="text-xs font-bold text-slate-500">{t("zone")}<select disabled={!fieldEditableStatuses.has(editing.status) || Boolean(editing.linkGroupId)} value={editForm.zoneId} onChange={(e) => setEditForm((v) => ({ ...v, zoneId: e.target.value }))} className={field}><option value="">—</option>{editZones.data?.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}</select></label>
+              <label className="text-xs font-bold text-slate-500">{t("deliveryFee")}<input required disabled={!fieldEditableStatuses.has(editing.status) || Boolean(editing.linkGroupId)} type="number" min={0} aria-label={t("deliveryFee")} value={editForm.deliveryFee} onChange={(e) => setEditForm((v) => ({ ...v, deliveryFee: e.target.value }))} className={field} /></label>
+              <label className="text-xs font-bold text-slate-500">{t("cod")}<input required disabled={!fieldEditableStatuses.has(editing.status) || Boolean(editing.linkGroupId)} type="number" min={0} value={editForm.codAmount} onChange={(e) => setEditForm((v) => ({ ...v, codAmount: e.target.value }))} className={field} /></label>
             </div>
             <div className="mt-6 flex justify-end gap-3">
               <button type="button" onClick={() => setEditing(null)} className="rounded-xl border px-4 py-2 text-sm font-bold">{t("cancel")}</button>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Link2, Pencil, RefreshCw, Search, UserPlus } from "lucide-react";
+import { Download, Link2, Pencil, RefreshCw, Search, UserPlus, UserRoundPen } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@/app/auth";
@@ -38,6 +38,7 @@ type Township = {
   id: string;
   nameEn: string;
   nameMy?: string | null;
+  deliveryFee: number;
   district?: { nameEn: string; regionState?: { nameEn: string } };
 };
 type Zone = { id: string; name: string };
@@ -155,9 +156,13 @@ export function OperationsPage() {
     address: "",
     customerPhone: "",
     codAmount: "",
+    deliveryFee: "",
     townshipId: "",
     zoneId: "",
   });
+  const [correctingRider, setCorrectingRider] = useState<Parcel | null>(null);
+  const [correctRiderId, setCorrectRiderId] = useState("");
+  const [correctReason, setCorrectReason] = useState("");
   const [reasonPrompt, setReasonPrompt] = useState<{ parcel: Parcel; status: "FAILED" | "REJECTED" } | null>(null);
   const [actualCod, setActualCod] = useState("");
   const [collectionWallet, setCollectionWallet] = useState("");
@@ -222,6 +227,7 @@ export function OperationsPage() {
       address: editing.address ?? "",
       customerPhone: editing.customerPhone ?? "",
       codAmount: String(editing.codAmount),
+      deliveryFee: String(editing.deliveryFee ?? 0),
       townshipId: editing.townshipId ?? "",
       zoneId: editing.zoneId ?? "",
     });
@@ -269,6 +275,31 @@ export function OperationsPage() {
       await invalidateParcels();
     },
     onError: (e) => setMessage(e instanceof Error ? e.message : t("loadError")),
+  });
+
+  const correctRider = useMutation({
+    mutationFn: () =>
+      api(`/operations/parcels/${correctingRider!.id}/correct-rider`, {
+        method: "POST",
+        body: JSON.stringify({ riderId: correctRiderId, reason: correctReason.trim() }),
+      }),
+    onSuccess: async () => {
+      setCorrectingRider(null);
+      setCorrectRiderId("");
+      setCorrectReason("");
+      setMessage(t("correctRiderComplete"));
+      await invalidateParcels();
+    },
+    onError: (e) => {
+      const code = e instanceof ApiError ? e.code : undefined;
+      setMessage(
+        code && ["PARCEL_NOT_DELIVERED", "PARCEL_LINKED", "MONEY_POSTED", "RECOGNITION_NOT_FOUND", "SAME_RIDER", "HUB_MISMATCH", "ASSIGNMENT_CONFLICT", "DAY_CLOSED", "PARCEL_UNASSIGNED"].includes(code)
+          ? t(`correctRiderError.${code}`)
+          : e instanceof Error
+            ? e.message
+            : t("loadError"),
+      );
+    },
   });
 
   const updateStatus = useMutation({
@@ -365,7 +396,14 @@ export function OperationsPage() {
           customerName: editForm.customerName.trim(),
           address: editForm.address.trim(),
           customerPhone: editForm.customerPhone.trim() || null,
-          ...(canEditDeliveryFields ? { codAmount: Number(editForm.codAmount), townshipId: editForm.townshipId, zoneId: editForm.zoneId || null } : {}),
+          ...(canEditDeliveryFields
+            ? {
+                codAmount: Number(editForm.codAmount),
+                deliveryFee: Number(editForm.deliveryFee),
+                townshipId: editForm.townshipId,
+                zoneId: editForm.zoneId || null,
+              }
+            : {}),
         }),
       });
     },
@@ -523,6 +561,12 @@ export function OperationsPage() {
 
   const handleRiderChange = async (parcel: Parcel, nextRiderId: string) => {
     if (!nextRiderId || nextRiderId === (parcel.rider?.id ?? "")) return;
+    if (parcel.status === "DELIVERED") {
+      setCorrectingRider(parcel);
+      setCorrectRiderId(nextRiderId);
+      setCorrectReason("");
+      return;
+    }
     if (!parcel.rider?.id) {
       if (!assignmentEligibleStatuses.has(parcel.status)) {
         setMessage(t("assignmentSelectionHint"));
@@ -923,6 +967,7 @@ export function OperationsPage() {
                   const fee = p.deliveryFee ?? 0;
                   const total = p.codAmount + fee;
                   const canEditFields = fieldEditableStatuses.has(p.status) && !p.linkGroup;
+                  const canCorrectRider = p.status === "DELIVERED" && Boolean(p.rider?.id) && !p.linkGroup;
                   return (
                     <tr key={p.id} className="border-b border-slate-100 hover:bg-slate-50/80 dark:border-white/5 dark:hover:bg-white/[0.03]">
                       <td className="py-1.5 pr-2">
@@ -949,7 +994,8 @@ export function OperationsPage() {
                         <select
                           aria-label={`${t("rider")} ${p.trackingNumber}`}
                           value={p.rider?.id ?? ""}
-                          disabled={!canDispatchEdit || assign.isPending || reassignOne.isPending}
+                          disabled={!canDispatchEdit || assign.isPending || reassignOne.isPending || correctRider.isPending}
+                          title={p.status === "DELIVERED" ? t("correctRider") : undefined}
                           onChange={(e) => void handleRiderChange(p, e.target.value)}
                           className={`${controlSm} max-w-[140px]`}
                         >
@@ -977,7 +1023,25 @@ export function OperationsPage() {
                         </select>
                       </td>
                       <td className="py-1.5 text-right">
-                        <button
+                        <div className="flex justify-end gap-1">
+                          {canCorrectRider ? (
+                            <button
+                              type="button"
+                              aria-label={`${t("correctRider")} ${p.trackingNumber}`}
+                              disabled={!canDispatchEdit || correctRider.isPending}
+                              title={t("correctRider")}
+                              onClick={() => {
+                                setCorrectingRider(p);
+                                setCorrectRiderId("");
+                                setCorrectReason("");
+                              }}
+                              className="rounded-md border border-amber-500 px-2 py-1 text-[11px] font-bold text-amber-700 disabled:opacity-40 dark:text-amber-300"
+                            >
+                              <UserRoundPen size={12} className="mr-1 inline" />
+                              {t("correctRider")}
+                            </button>
+                          ) : null}
+                          <button
                           type="button"
                           aria-label={`${t("editParcel")} ${p.trackingNumber}`}
                           disabled={!canDispatchEdit}
@@ -999,6 +1063,7 @@ export function OperationsPage() {
                           <Pencil size={12} className="mr-1 inline" />
                           {t("edit")}
                         </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1134,7 +1199,7 @@ export function OperationsPage() {
               event.preventDefault();
               const canEditDeliveryFields = fieldEditableStatuses.has(editing.status) && !editing.linkGroup;
               if (!editForm.customerName.trim() || !editForm.address.trim() ||
-                (canEditDeliveryFields && (!editForm.townshipId || !/^\d+$/.test(editForm.codAmount)))) {
+                (canEditDeliveryFields && (!editForm.townshipId || !/^\d+$/.test(editForm.codAmount) || !/^\d+$/.test(editForm.deliveryFee)))) {
                 return;
               }
               updateParcel.mutate();
@@ -1195,7 +1260,16 @@ export function OperationsPage() {
                   disabled={!fieldEditableStatuses.has(editing.status) || Boolean(editing.linkGroup)}
                   aria-label={t("township")}
                   value={editForm.townshipId}
-                  onChange={(e) => setEditForm((v) => ({ ...v, townshipId: e.target.value, zoneId: "" }))}
+                  onChange={(e) => {
+                    const townshipId = e.target.value;
+                    const township = townships.data?.find((item) => item.id === townshipId);
+                    setEditForm((v) => ({
+                      ...v,
+                      townshipId,
+                      zoneId: "",
+                      ...(township ? { deliveryFee: String(township.deliveryFee) } : {}),
+                    }));
+                  }}
                   className={`${control} mt-1 w-full`}
                 >
                   <option value="">{t("township")}</option>
@@ -1226,6 +1300,19 @@ export function OperationsPage() {
                 </select>
               </label>
               <label className="text-xs font-bold text-slate-500">
+                {t("deliveryFee")}
+                <input
+                  required
+                  disabled={!fieldEditableStatuses.has(editing.status) || Boolean(editing.linkGroup)}
+                  type="number"
+                  min={0}
+                  aria-label={t("deliveryFee")}
+                  value={editForm.deliveryFee}
+                  onChange={(e) => setEditForm((v) => ({ ...v, deliveryFee: e.target.value }))}
+                  className={`${control} mt-1 w-full`}
+                />
+              </label>
+              <label className="text-xs font-bold text-slate-500">
                 {t("cod")}
                 <input
                   required
@@ -1248,6 +1335,85 @@ export function OperationsPage() {
                 className="rounded-lg bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
               >
                 {updateParcel.isPending ? t("loading") : t("save")}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {correctingRider && (
+        <div role="dialog" aria-modal="true" aria-labelledby="correct-rider-title" className="fixed inset-0 z-20 grid place-items-center bg-black/40 p-4">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!correctRiderId || correctReason.trim().length < 3 || correctRiderId === correctingRider.rider?.id) return;
+              correctRider.mutate();
+            }}
+            className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl dark:bg-[#181a1d]"
+          >
+            <h2 id="correct-rider-title" className="font-display text-xl font-bold">
+              {t("correctRider")}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">{correctingRider.trackingNumber}</p>
+            <p role="note" className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+              {t("correctRiderDescription")}
+            </p>
+            {message && correctRider.isError ? (
+              <p role="alert" className="mt-4 rounded-xl bg-rose-50 p-3 text-sm font-medium text-rose-700 dark:bg-rose-950/40 dark:text-rose-200">
+                {message}
+              </p>
+            ) : null}
+            <div className="mt-4 grid gap-3">
+              <label className="text-xs font-bold text-slate-500">
+                {t("newRider")}
+                <select
+                  required
+                  aria-label={t("newRider")}
+                  value={correctRiderId}
+                  onChange={(e) => setCorrectRiderId(e.target.value)}
+                  className={`${control} mt-1 w-full`}
+                >
+                  <option value="">{t("selectRider")}</option>
+                  {riders
+                    .filter((rider) => rider.id !== correctingRider.rider?.id)
+                    .map((rider) => (
+                      <option key={rider.id} value={rider.id}>
+                        {rider.user.name}
+                        {rider.hub?.name ? ` · ${rider.hub.name}` : ""}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="text-xs font-bold text-slate-500">
+                {t("correctRiderReason")}
+                <textarea
+                  required
+                  minLength={3}
+                  aria-label={t("correctRiderReason")}
+                  value={correctReason}
+                  onChange={(e) => setCorrectReason(e.target.value)}
+                  className={`${control} mt-1 min-h-24 w-full`}
+                />
+              </label>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setCorrectingRider(null);
+                  setCorrectRiderId("");
+                  setCorrectReason("");
+                }}
+                className={control}
+              >
+                {t("cancel")}
+              </button>
+              <button
+                type="submit"
+                disabled={correctRider.isPending || !correctRiderId || correctReason.trim().length < 3}
+                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+              >
+                {correctRider.isPending ? t("loading") : t("correctRider")}
               </button>
             </div>
           </form>

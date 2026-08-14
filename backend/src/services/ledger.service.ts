@@ -236,18 +236,41 @@ async function assertOriginalScope(actor: LedgerActor, entry: { sourceType: stri
   throw new ApiError(403, "FORBIDDEN", "This entry type cannot be reversed");
 }
 
+export async function reverseJournalEntryInTx(
+  tx: Prisma.TransactionClient,
+  input: { sourceType: string; sourceId: string; businessDate: Date; reason: string },
+) {
+  const original = await tx.journalEntry.findUnique({ where: sourceKey(input.sourceType, input.sourceId), include: { lines: true } });
+  if (!original) return null;
+  if (!original.hubId) throw new ApiError(409, "ENTRY_HUB_REQUIRED", "Legacy unscoped entry requires migration before reversal");
+  const existing = await tx.journalEntry.findUnique({ where: sourceKey("LEDGER_REVERSAL", original.id) });
+  if (existing) return existing;
+  await assertCashbookOpen(tx, input.businessDate, original.hubId);
+  return tx.journalEntry.create({
+    data: {
+      sourceType: "LEDGER_REVERSAL",
+      sourceId: original.id,
+      hubId: original.hubId,
+      businessDate: input.businessDate,
+      description: `Reversal: ${input.reason}`,
+      lines: { create: original.lines.map((line) => ({ account: line.account, debit: line.credit, credit: line.debit })) },
+    },
+    include: { lines: true },
+  });
+}
+
 export async function reverseJournalEntry(input: { sourceType: string; sourceId: string; businessDate: string; reason: string }, actor: LedgerActor) {
   if (input.sourceType === "LEDGER_REVERSAL") throw new ApiError(400, "INVALID_REVERSAL", "A reversal cannot reverse another reversal");
   const date = businessDay(input.businessDate);
   const original = await prisma.journalEntry.findUnique({ where: sourceKey(input.sourceType, input.sourceId), include: { lines: true } });
   if (!original) throw new ApiError(404, "ENTRY_NOT_FOUND", "Ledger entry not found");
   await assertOriginalScope(actor, original);
+  const priorReversal = await prisma.journalEntry.findUnique({ where: sourceKey("LEDGER_REVERSAL", original.id) });
+  if (priorReversal) throw new ApiError(409, "REVERSAL_EXISTS", "This ledger entry has already been reversed");
   return prisma.$transaction(async (tx) => {
-    if (!original.hubId) throw new ApiError(409, "ENTRY_HUB_REQUIRED", "Legacy unscoped entry requires migration before reversal");
-    await assertCashbookOpen(tx, date, original.hubId);
-    const existing = await tx.journalEntry.findUnique({ where: sourceKey("LEDGER_REVERSAL", original.id) });
-    if (existing) throw new ApiError(409, "REVERSAL_EXISTS", "This ledger entry has already been reversed");
-    return tx.journalEntry.create({ data: { sourceType: "LEDGER_REVERSAL", sourceId: original.id, hubId: original.hubId, businessDate: date, description: `Reversal: ${input.reason}`, lines: { create: original.lines.map((line) => ({ account: line.account, debit: line.credit, credit: line.debit })) } }, include: { lines: true } });
+    const reversed = await reverseJournalEntryInTx(tx, { sourceType: input.sourceType, sourceId: input.sourceId, businessDate: date, reason: input.reason });
+    if (!reversed) throw new ApiError(404, "ENTRY_NOT_FOUND", "Ledger entry not found");
+    return reversed;
   });
 }
 

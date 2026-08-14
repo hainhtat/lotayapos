@@ -291,6 +291,26 @@ describe("protected API contracts", () => {
     expect(response.body.error.code).toBe("VALIDATION_ERROR");
   });
 
+  test("requires a reason when correcting a delivered parcel rider", async () => {
+    const response = await request(app)
+      .post("/api/v1/operations/parcels/parcel-1/correct-rider")
+      .set("Authorization", `Bearer ${token("DISPATCHER")}`)
+      .send({ riderId: "rider-2", reason: "x" });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("blocks finance from correcting delivered parcel riders", async () => {
+    const response = await request(app)
+      .post("/api/v1/operations/parcels/parcel-1/correct-rider")
+      .set("Authorization", `Bearer ${token("FINANCE")}`)
+      .send({ riderId: "rider-2", reason: "Wrong rider before settlement" });
+
+    expect(response.status).toBe(403);
+    expect(response.body.error.code).toBe("FORBIDDEN");
+  });
+
   test("accepts actual COD in the partial-return request contract", async () => {
     const response = await request(app)
       .post("/api/v1/parcels/parcel-1/status")
@@ -618,6 +638,16 @@ describe("protected API contracts", () => {
       .patch("/api/v1/parcels/parcel-1")
       .set("Authorization", `Bearer ${token("DISPATCHER")}`)
       .send({ codAmount: -5 });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("rejects negative parcel delivery fee before persistence", async () => {
+    const response = await request(app)
+      .patch("/api/v1/parcels/parcel-1")
+      .set("Authorization", `Bearer ${token("DISPATCHER")}`)
+      .send({ deliveryFee: -1 });
 
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe("VALIDATION_ERROR");

@@ -3,7 +3,7 @@ import { requireAuth, requireRoles } from "../../middleware/auth.js";
 import { validation } from "../../middleware/error.js";
 import { asyncHandler } from "../../utils/async-handler.js";
 import express from "express";
-import { acknowledgeAlert, alerts, batchDetail, batches, bulkAssign, bulkCreateParcels, createBatch, downloadManifest, extendPendingReturn, linkParcels, postPickupAdvances, previewManifest, previewManifestImport, reassignParcel } from "../../controllers/operations.controller.js";
+import { acknowledgeAlert, alerts, batchDetail, batches, bulkAssign, bulkCreateParcels, correctDeliveredRider, createBatch, downloadManifest, extendPendingReturn, linkParcels, postPickupAdvances, previewManifest, previewManifestImport, reassignParcel } from "../../controllers/operations.controller.js";
 import { MAX_MANIFEST_BYTES } from "../../services/manifest-import.service.js";
 import { alertIdValidation, batchIdValidation, bulkAssignmentValidation, bulkParcelCreateValidation, createBatchValidation, linkParcelsValidation, manifestDownloadValidation, parcelIdValidation, pendingReturnExtensionValidation, pickupAdvanceValidation, reassignParcelValidation } from "../../validators/operations.js";
 
@@ -19,6 +19,7 @@ operationsRouter.post("/parcels/manifest/preview", requireAuth, requireRoles("SU
 operationsRouter.post("/parcels/manifest", requireAuth, requireRoles("SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER", "FINANCE", "AUDITOR"), manifestDownloadValidation, validation, asyncHandler(downloadManifest));
 operationsRouter.post("/parcels/link", requireAuth, requireRoles("SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"), linkParcelsValidation, validation, asyncHandler(linkParcels));
 operationsRouter.post("/parcels/:id/reassign", requireAuth, requireRoles("SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"), parcelIdValidation, reassignParcelValidation, validation, asyncHandler(reassignParcel));
+operationsRouter.post("/parcels/:id/correct-rider", requireAuth, requireRoles("SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"), parcelIdValidation, reassignParcelValidation, validation, asyncHandler(correctDeliveredRider));
 operationsRouter.post("/parcels/:id/return-extension", requireAuth, requireRoles("SUPERADMIN", "OPERATIONS_MANAGER"), parcelIdValidation, pendingReturnExtensionValidation, validation, asyncHandler(extendPendingReturn));
 operationsRouter.get("/alerts", requireAuth, requireRoles("SUPERADMIN", "OPERATIONS_MANAGER"), asyncHandler(alerts));
 operationsRouter.post("/alerts/:id/acknowledge", requireAuth, requireRoles("SUPERADMIN", "OPERATIONS_MANAGER"), alertIdValidation, validation, asyncHandler(acknowledgeAlert));

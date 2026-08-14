@@ -48,7 +48,7 @@
   "parcelEditForbidden": "သင့်အခန်းကဏ္ဍဖြင့် ပါဆယ်ကို ပြင်ဆင်ခွင့်မရှိပါ။",
   "parcelUpdateError": {
     "MONEY_POSTED": "ဤပါဆယ်တွင် ငွေစာရင်းတင်ပြီးဖြစ်သည်။ မပြင်ဆင်မီ Finance မှ စာရင်းပြန်လှန်ရပါမည်။",
-    "ADVANCE_POSTED": "Batch pickup advance တင်ပြီးနောက် COD နှင့် မြို့နယ်ကို ပြင်၍မရပါ။",
+    "ADVANCE_POSTED": "Batch pickup advance တင်ပြီးနောက် COD၊ ပို့ခနှင့် မြို့နယ်ကို ပြင်၍မရပါ။",
     "PARCEL_NOT_EDITABLE": "Created၊ Picked up သို့မဟုတ် Assigned ပါဆယ်များကိုသာ ပြင်နိုင်သဖြင့် ဤပါဆယ်သည် ဖတ်ရန်သာဖြစ်သည်။",
     "PARCEL_LINKED": "ပို့ဆောင်မှုအချက်အလက်မပြင်မီ ဤပါဆယ်ကို ချိတ်ဆက်မှုဖြုတ်ပါ။"
   },
@@ -143,6 +143,22 @@
   "reassignmentReason": "ပြန်လည်တာဝန်ပေးသည့် အကြောင်းပြချက်",
   "reassign": "ပြန်လည်တာဝန်ပေးမည်",
   "reassignmentComplete": "ပါဆယ်ကို ပြန်လည်တာဝန်ပေးပြီးပါပြီ။",
+  "correctRider": "Rider ပြင်ရန်",
+  "correctRiderDescription": "မှားယွင်းသော rider ၏ receivable ကို ပြန်လှန်ပြီး မှန်ကန်သော rider တွင် ပြန်တင်ပါမည်။ ပါဆယ် Delivered အခြေအနေတွင် ရှိနေပါမည်။",
+  "correctRiderReason": "ပြင်ဆင်ရသည့် အကြောင်းပြချက်",
+  "correctRiderComplete": "Rider ပြင်ပြီး receivable ပြန်တင်ပြီးပါပြီ။",
+  "correctRiderError": {
+    "PARCEL_NOT_DELIVERED": "Delivered ပါဆယ်များအတွက်သာ rider ပြင်နိုင်ပါသည်။",
+    "PARCEL_LINKED": "Rider မပြင်မီ ဤပါဆယ်ကို unlink လုပ်ပါ။",
+    "MONEY_POSTED": "Finance collection တင်ပြီးဖြစ်သည်။ Rider မပြင်မီ ပြန်လှန်ပါ။",
+    "RECOGNITION_NOT_FOUND": "ဤ delivery အတွက် rider receivable မရှိပါ။",
+    "SAME_RIDER": "မတူညီသော rider တစ်ဦးကို ရွေးပါ။",
+    "PARCEL_NOT_REASSIGNABLE": "Delivered ပါဆယ်များအတွက် Correct rider ကို သုံးပါ။",
+    "HUB_MISMATCH": "Rider သည် ပါဆယ် hub နှင့် တူညီရပါမည်။",
+    "ASSIGNMENT_CONFLICT": "ပါဆယ်သည် ပြင်နေစဉ် ပြောင်းသွားပါပြီ။ Refresh လုပ်ပြီး ထပ်စမ်းပါ။",
+    "DAY_CLOSED": "ဤ delivery ၏ cashbook day ပိတ်ထားပါသည်။",
+    "PARCEL_UNASSIGNED": "ဤပါဆယ်တွင် rider မရှိပါ။"
+  },
   "alertAcknowledged": "သတိပေးချက်ကို လက်ခံပြီးပါပြီ။",
   "acknowledge": "လက်ခံမည်",
   "postPickupAdvances": "ပစ္စည်းလက်ခံ ကြိုတင်ငွေ စာရင်းတင်မည်",

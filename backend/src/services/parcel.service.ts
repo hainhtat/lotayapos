@@ -4,7 +4,7 @@ import { resolveCommissionRateBps } from "../utils/commission.js";
 import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { assertCashbookOpen } from "./finance.service.js";
-import { assertBalancedLines, buildPartialReturnAdjustmentLines, buildPartialReturnCollectionLines, calculateLinkedDeliveryAmounts, calculatePartialReturnAmounts } from "./ledger.service.js";
+import { assertBalancedLines, buildPartialReturnAdjustmentLines, buildPartialReturnCollectionLines, calculateLinkedDeliveryAmounts, calculatePartialReturnAmounts, reverseJournalEntryInTx } from "./ledger.service.js";
 
 export { resolveCommissionRateBps };
 
@@ -69,6 +69,64 @@ export async function nextRiderCommissionSourceId(tx: Prisma.TransactionClient, 
   if (!base) return parcelId;
   if (await journalEntryIsUnreversed(tx, base.id)) return null;
   return `${parcelId}:${randomUUID()}`;
+}
+
+/** Allocate a free RIDER_RECEIVABLE_RECOGNITION sourceId after reversal. */
+export async function nextRiderReceivableSourceId(tx: Prisma.TransactionClient, parcelId: string) {
+  const base = await tx.journalEntry.findUnique({
+    where: { sourceType_sourceId: { sourceType: "RIDER_RECEIVABLE_RECOGNITION", sourceId: parcelId } },
+    select: { id: true },
+  });
+  if (!base) return parcelId;
+  if (await journalEntryIsUnreversed(tx, base.id)) return null;
+  return `${parcelId}:${randomUUID()}`;
+}
+
+async function findActiveReceivableRecognition(tx: Prisma.TransactionClient, parcelId: string) {
+  const entries = await tx.journalEntry.findMany({
+    where: {
+      sourceType: "RIDER_RECEIVABLE_RECOGNITION",
+      OR: [{ sourceId: parcelId }, { sourceId: { startsWith: `${parcelId}:` } }],
+    },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, sourceId: true },
+  });
+  for (const entry of entries) {
+    if (!entry.sourceId || !(await journalEntryIsUnreversed(tx, entry.id))) continue;
+    const recognition = await tx.riderReceivableRecognition.findUnique({
+      where: { sourceType_sourceId: { sourceType: "RIDER_RECEIVABLE_RECOGNITION", sourceId: entry.sourceId } },
+    });
+    if (recognition) return { entry, recognition };
+  }
+  return null;
+}
+
+async function recordRiderReceivableCorrection(
+  tx: Prisma.TransactionClient,
+  input: {
+    sourceId: string;
+    riderId: string;
+    hubId: string;
+    businessDate: Date;
+    codAmount: number;
+    deliveryFee: number;
+    commissionAmount: number;
+    receivableAmount: number;
+  },
+) {
+  return tx.riderReceivableRecognition.create({
+    data: {
+      sourceType: "RIDER_RECEIVABLE_CORRECTION",
+      sourceId: input.sourceId,
+      riderId: input.riderId,
+      hubId: input.hubId,
+      businessDate: input.businessDate,
+      codAmount: -input.codAmount,
+      deliveryFee: -input.deliveryFee,
+      commissionAmount: -input.commissionAmount,
+      receivableAmount: -input.receivableAmount,
+    },
+  });
 }
 export function buildRiderCommissionLines(commissionAmount: number) {
   if (!Number.isInteger(commissionAmount) || commissionAmount <= 0) throw new ApiError(400, "INVALID_COMMISSION", "Commission must be a positive integer");
@@ -229,6 +287,143 @@ export async function getParcelHistory(id: string, actor: Actor) {
   return prisma.statusHistory.findMany({ where: { parcelId: parcel.id }, orderBy: { createdAt: "asc" } });
 }
 
+const correctDeliveredRiderRoles = ["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"];
+
+export async function correctDeliveredRider(id: string, input: { riderId: string; reason: string }, actor: Actor) {
+  const scope = await actorScope(actor);
+  if (!correctDeliveredRiderRoles.includes(scope.role)) throw new ApiError(403, "FORBIDDEN", "You may not correct delivered rider assignments");
+  const accessScope = buildParcelScope(scope);
+  const parcel = await prisma.parcel.findFirst({
+    where: { id, ...(accessScope ?? {}) },
+    include: {
+      batch: { select: { hubId: true } },
+      rider: { select: { id: true, user: { select: { name: true } } } },
+    },
+  });
+  if (!parcel) throw new ApiError(404, "PARCEL_NOT_FOUND", "Parcel not found");
+  if (parcel.status !== "DELIVERED") throw new ApiError(409, "PARCEL_NOT_DELIVERED", "Correct rider is only available for delivered parcels");
+  if (!parcel.riderId) throw new ApiError(409, "PARCEL_UNASSIGNED", "Parcel has no rider to correct");
+  if (parcel.linkGroupId) throw new ApiError(409, "PARCEL_LINKED", "Unlink the parcel before correcting its rider");
+  if (parcel.riderId === input.riderId) throw new ApiError(409, "SAME_RIDER", "Choose a different rider");
+  if (!parcel.batch.hubId) throw new ApiError(409, "PARCEL_HUB_REQUIRED", "Parcel batch must belong to a hub");
+  const hubId = parcel.batch.hubId;
+  const newRider = await prisma.rider.findUnique({
+    where: { id: input.riderId },
+    select: { id: true, hubId: true, payModel: true, commissionRateBps: true, user: { select: { name: true, active: true, role: true } } },
+  });
+  if (!newRider || !newRider.user.active || newRider.user.role !== "RIDER") throw new ApiError(404, "RIDER_NOT_FOUND", "Active rider not found");
+  if (newRider.hubId !== hubId) throw new ApiError(409, "HUB_MISMATCH", "Parcel and rider must belong to the same hub");
+
+  return serializableTransaction(async (tx) => {
+    const collection = await tx.journalEntry.findUnique({ where: { sourceType_sourceId: { sourceType: "DELIVERY_COLLECTION", sourceId: id } } });
+    if (collection && await journalEntryIsUnreversed(tx, collection.id)) {
+      throw new ApiError(409, "MONEY_POSTED", "Finance collection is already posted; reverse it before correcting the rider");
+    }
+
+    const activeReceivable = await findActiveReceivableRecognition(tx, id);
+    if (!activeReceivable) throw new ApiError(409, "RECOGNITION_NOT_FOUND", "Rider receivable must be posted and unreversed before correction");
+    const { entry: receivableEntry, recognition } = activeReceivable;
+
+    const businessDate = recognition.businessDate;
+    const oldRiderId = parcel.riderId!;
+    const riderSettled = await tx.settlement.findFirst({
+      where: {
+        riderId: { in: [oldRiderId, input.riderId] },
+        businessDate,
+      },
+      select: { id: true, riderId: true },
+    });
+    if (riderSettled) {
+      throw new ApiError(409, "MONEY_POSTED", "A rider settlement already exists for this delivery date; reverse it before correcting the rider");
+    }
+
+    const reason = `Correct rider: ${input.reason.trim()}`;
+    const oldRiderName = parcel.rider?.user.name ?? oldRiderId;
+    const receivableSourceId = receivableEntry.sourceId!;
+
+    await reverseJournalEntryInTx(tx, { sourceType: "RIDER_RECEIVABLE_RECOGNITION", sourceId: receivableSourceId, businessDate, reason });
+    await recordRiderReceivableCorrection(tx, {
+      sourceId: `${id}:reverse:${randomUUID()}`,
+      riderId: recognition.riderId,
+      hubId: recognition.hubId,
+      businessDate,
+      codAmount: recognition.codAmount,
+      deliveryFee: recognition.deliveryFee,
+      commissionAmount: recognition.commissionAmount,
+      receivableAmount: recognition.receivableAmount,
+    });
+
+    const commissionEntries = await tx.journalEntry.findMany({
+      where: { sourceType: "RIDER_COMMISSION", OR: [{ sourceId: id }, { sourceId: { startsWith: `${id}:` } }] },
+    });
+    for (const entry of commissionEntries) {
+      if (entry.sourceId && await journalEntryIsUnreversed(tx, entry.id)) {
+        await reverseJournalEntryInTx(tx, { sourceType: "RIDER_COMMISSION", sourceId: entry.sourceId, businessDate, reason });
+      }
+    }
+
+    const changed = await tx.parcel.updateMany({ where: { id, riderId: oldRiderId, status: "DELIVERED" }, data: { riderId: newRider.id } });
+    if (changed.count !== 1) throw new ApiError(409, "ASSIGNMENT_CONFLICT", "Parcel assignment changed; refresh and retry");
+
+    await tx.packageAssignment.updateMany({ where: { parcelId: id, endedAt: null }, data: { endedAt: new Date(), endedById: actor.id, reason } });
+    await tx.packageAssignment.create({ data: { parcelId: id, riderId: newRider.id, assignedById: actor.id } });
+
+    const commissionRateBps = resolveCommissionRateBps({ payModel: newRider.payModel, commissionRateBps: newRider.commissionRateBps });
+    const commissionAmount = calculateCommissionAmount(parcel.deliveryFee ?? 0, commissionRateBps);
+
+    await tx.deliveryWay.updateMany({
+      where: { parcelId: id, outcome: "DELIVERED" },
+      data: { riderId: newRider.id, commissionRate: commissionRateBps, commissionAmount },
+    });
+
+    if (commissionAmount > 0) {
+      await assertCashbookOpen(tx, businessDate, hubId);
+      const commissionSourceId = await nextRiderCommissionSourceId(tx, id);
+      if (commissionSourceId) {
+        await tx.journalEntry.create({
+          data: {
+            sourceType: "RIDER_COMMISSION",
+            sourceId: commissionSourceId,
+            hubId,
+            businessDate,
+            description: `Rider commission for ${parcel.trackingNumber} (corrected rider)`,
+            lines: { create: buildRiderCommissionLines(commissionAmount) },
+          },
+        });
+      }
+    }
+
+    const receivableRepostSourceId = await nextRiderReceivableSourceId(tx, id);
+    if (!receivableRepostSourceId) throw new ApiError(409, "RECOGNITION_CONFLICT", "An active rider receivable already exists for this parcel");
+    await recognizeRiderReceivable(tx, {
+      sourceType: "RIDER_RECEIVABLE_RECOGNITION",
+      sourceId: receivableRepostSourceId,
+      riderId: newRider.id,
+      hubId,
+      businessDate,
+      codAmount: parcel.codAmount,
+      deliveryFee: parcel.deliveryFee ?? 0,
+      commissionAmount,
+      description: `Rider receivable for ${parcel.trackingNumber} (corrected rider)`,
+    });
+
+    await tx.statusHistory.create({
+      data: {
+        parcelId: id,
+        fromStatus: "DELIVERED",
+        toStatus: "DELIVERED",
+        actorId: actor.id,
+        note: `${reason} | ${oldRiderName} -> ${newRider.user.name}`,
+      },
+    });
+
+    return tx.parcel.findUniqueOrThrow({
+      where: { id },
+      include: { rider: { include: { user: { select: { name: true } } } } },
+    });
+  });
+}
+
 export async function getParcelDetail(id: string, actor: Actor) {
   const scope = await actorScope(actor);
   if (!parcelReadRoles.includes(scope.role)) throw new ApiError(403, "FORBIDDEN", "You may not view parcels");
@@ -258,6 +453,7 @@ export async function updateParcel(
     customerPhone?: string | null;
     address?: string;
     codAmount?: number;
+    deliveryFee?: number;
     townshipId?: string;
     zoneId?: string | null;
   },
@@ -268,20 +464,21 @@ export async function updateParcel(
   const accessScope = buildParcelScope(scope);
   const parcel = await prisma.parcel.findFirst({
     where: { id, ...(accessScope ?? {}) },
-    include: { batch: { select: { hubId: true } } },
+    include: { batch: { select: { id: true, hubId: true } } },
   });
   if (!parcel) throw new ApiError(404, "PARCEL_NOT_FOUND", "Parcel not found");
-  const changesDeliveryAttributes = input.codAmount !== undefined || input.townshipId !== undefined || input.zoneId !== undefined;
-  if (changesDeliveryAttributes && !editableStatuses.has(parcel.status)) throw new ApiError(409, "PARCEL_NOT_EDITABLE", "COD, township, and zone may only be edited for Created, Picked up, or Assigned parcels");
+  const changesDeliveryAttributes = input.codAmount !== undefined || input.deliveryFee !== undefined || input.townshipId !== undefined || input.zoneId !== undefined;
+  if (changesDeliveryAttributes && !editableStatuses.has(parcel.status)) throw new ApiError(409, "PARCEL_NOT_EDITABLE", "COD, delivery fee, township, and zone may only be edited for Created, Picked up, or Assigned parcels");
   if (changesDeliveryAttributes && parcel.linkGroupId) throw new ApiError(409, "PARCEL_LINKED", "Unlink the parcel before editing delivery attributes");
-  if (input.codAmount !== undefined || input.townshipId !== undefined) {
+  if (input.codAmount !== undefined || input.townshipId !== undefined || input.deliveryFee !== undefined) {
     const advancePosted = await prisma.journalEntry.findUnique({
       where: { sourceType_sourceId: { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: parcel.batchId } },
       select: { id: true },
     });
     if (advancePosted) {
       if (input.codAmount !== undefined) throw new ApiError(409, "ADVANCE_POSTED", "COD cannot be edited after the batch pickup advance is posted");
-      throw new ApiError(409, "ADVANCE_POSTED", "Township cannot be edited after the batch pickup advance is posted");
+      if (input.townshipId !== undefined) throw new ApiError(409, "ADVANCE_POSTED", "Township cannot be edited after the batch pickup advance is posted");
+      throw new ApiError(409, "ADVANCE_POSTED", "Delivery fee cannot be edited after the batch pickup advance is posted");
     }
   }
 
@@ -291,7 +488,9 @@ export async function updateParcel(
     const township = await prisma.township.findUnique({ where: { id: input.townshipId }, select: { id: true, nameEn: true, deliveryFee: true } });
     if (!township) throw new ApiError(400, "INVALID_TOWNSHIP", "Township is invalid");
     townshipName = township.nameEn;
-    deliveryFee = township.deliveryFee;
+    deliveryFee = input.deliveryFee ?? township.deliveryFee;
+  } else if (input.deliveryFee !== undefined) {
+    deliveryFee = input.deliveryFee;
   }
   const nextTownshipId = input.townshipId ?? parcel.townshipId;
   let zoneName = parcel.zone;
@@ -313,11 +512,12 @@ export async function updateParcel(
     ...(input.customerPhone !== undefined ? { customerPhone: input.customerPhone?.trim() || null } : {}),
     ...(input.address !== undefined ? { address: input.address.trim() } : {}),
     ...(input.codAmount !== undefined ? { codAmount: input.codAmount } : {}),
-    ...(input.townshipId !== undefined ? { townshipId: input.townshipId, township: townshipName, deliveryFee } : {}),
+    ...(input.townshipId !== undefined ? { townshipId: input.townshipId, township: townshipName } : {}),
+    ...(input.deliveryFee !== undefined || input.townshipId !== undefined ? { deliveryFee } : {}),
     ...(input.zoneId !== undefined ? { zoneId, zone: zoneName } : {}),
   };
   const result = await prisma.parcel.updateMany({ where: { id, ...(changesDeliveryAttributes ? {status: { in: [...editableStatuses] }} : {}) }, data });
-  if (result.count !== 1) throw new ApiError(409, "PARCEL_NOT_EDITABLE", "COD, township, and zone may only be edited for Created, Picked up, or Assigned parcels");
+  if (result.count !== 1) throw new ApiError(409, "PARCEL_NOT_EDITABLE", "COD, delivery fee, township, and zone may only be edited for Created, Picked up, or Assigned parcels");
   return prisma.parcel.findUniqueOrThrow({
     where: { id },
     include: { townshipRelation: { include: { district: { include: { regionState: true } } } }, zoneRelation: true },

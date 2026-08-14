@@ -379,6 +379,37 @@ describe("OperationsPage", () => {
     );
   });
 
+  it("shows correct rider action for delivered parcels", async () => {
+    mockParcelList([
+      {
+        id: "parcel-delivered",
+        trackingNumber: "TRK-DLV",
+        customerName: "Customer",
+        address: "Address",
+        status: "DELIVERED",
+        codAmount: 25000,
+        batch: { label: "Batch", shop: { name: "Shop" } },
+        rider: { id: "rider-1", user: { name: "Wrong Rider" } },
+      },
+    ]);
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/master-data") {
+        return Promise.resolve({
+          data: {
+            riders: [
+              { id: "rider-1", user: { name: "Wrong Rider" } },
+              { id: "rider-2", user: { name: "Correct Rider" } },
+            ],
+          },
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("TRK-DLV")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /Correct rider TRK-DLV/i })).toBeInTheDocument();
+  });
+
   it("uses the dashboard batch link as a parcel query filter", async () => {
     mockParcelList([]);
     apiMock.mockImplementation((path: string) => {

@@ -38,7 +38,8 @@ export const parcelUpdateValidation = [
   body("customerPhone").optional({ nullable: true }).isString().trim().isLength({ max: 50 }),
   body("address").optional().isString().trim().isLength({ min: 1, max: 500 }),
   body("codAmount").optional().isInt({ min: 0 }).toInt(),
+  body("deliveryFee").optional().isInt({ min: 0 }).toInt(),
   body("townshipId").optional().isString().trim().notEmpty(),
   body("zoneId").optional({ nullable: true }).isString().trim().notEmpty(),
-  body().custom((value) => ["orderId", "customerName", "customerPhone", "address", "codAmount", "townshipId", "zoneId"].some((key) => key in value)).withMessage("At least one editable field is required"),
+  body().custom((value) => ["orderId", "customerName", "customerPhone", "address", "codAmount", "deliveryFee", "townshipId", "zoneId"].some((key) => key in value)).withMessage("At least one editable field is required"),
 ];

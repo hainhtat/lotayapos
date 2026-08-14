@@ -48,7 +48,7 @@
   "parcelEditForbidden": "Your role cannot edit parcels.",
   "parcelUpdateError": {
     "MONEY_POSTED": "This parcel has posted money entries. Finance must reverse them before it can be changed.",
-    "ADVANCE_POSTED": "COD and township cannot be changed after the batch pickup advance is posted.",
+    "ADVANCE_POSTED": "COD, delivery fee, and township cannot be changed after the batch pickup advance is posted.",
     "PARCEL_NOT_EDITABLE": "This parcel is read-only because only Created, Picked up, or Assigned parcels can be edited.",
     "PARCEL_LINKED": "Unlink this parcel before editing its delivery details."
   },
@@ -143,6 +143,22 @@
   "reassignmentReason": "Reassignment reason",
   "reassign": "Reassign",
   "reassignmentComplete": "Parcel reassigned successfully.",
+  "correctRider": "Correct rider",
+  "correctRiderDescription": "Reverse the posted receivable on the wrong rider and re-post it on the correct rider. The parcel stays Delivered.",
+  "correctRiderReason": "Correction reason",
+  "correctRiderComplete": "Rider corrected and receivable re-posted.",
+  "correctRiderError": {
+    "PARCEL_NOT_DELIVERED": "Correct rider is only available for delivered parcels.",
+    "PARCEL_LINKED": "Unlink this parcel before correcting its rider.",
+    "MONEY_POSTED": "Finance collection is already posted. Reverse it before correcting the rider.",
+    "RECOGNITION_NOT_FOUND": "No posted rider receivable exists for this delivery.",
+    "SAME_RIDER": "Choose a different rider.",
+    "PARCEL_NOT_REASSIGNABLE": "Use Correct rider for delivered parcels.",
+    "HUB_MISMATCH": "The rider must belong to the same hub as the parcel.",
+    "ASSIGNMENT_CONFLICT": "The parcel changed while you were editing. Refresh and try again.",
+    "DAY_CLOSED": "The cashbook day for this delivery is closed. Reopen it or choose another business date.",
+    "PARCEL_UNASSIGNED": "This parcel has no rider assigned."
+  },
   "alertAcknowledged": "Alert acknowledged.",
   "acknowledge": "Acknowledge",
   "postPickupAdvances": "Post pickup advances",
