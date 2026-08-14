@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useLocation, useSearchParams } from "react-router-dom";
-import { api } from "@/lib/api";
 import { useTranslation } from "react-i18next";
-import { ArrowUpRight, CheckCircle2, WalletCards, X } from "lucide-react";
+import { ArrowUpRight, WalletCards } from "lucide-react";
+import { OsCashbookOverview } from "@/components/os-cashbook-overview";
+import { PostPickupAdvancesPanel } from "@/components/post-pickup-advances-panel";
+import { api } from "@/lib/api";
 import { ledgerAccounts, type LedgerReport } from "@/lib/ledger";
 import { CashbookExpenses } from "./cashbook-expenses";
 import { SettlementWorkspaces } from "./settlement-workspaces";
@@ -13,15 +15,15 @@ type Batch = {
   label: string;
   pickupDate: string;
   advancePaid: number;
+  advancePosted?: boolean;
   shop: { name: string };
   parcels: Array<{ status: string }>;
 };
-type PostingResult = { batchId: string; postedCount: number; alreadyPosted: boolean };
 type LedgerFilters = { from: string; to: string; account: string };
 type FinanceTab = "overview" | "settlements";
 
 const control =
-  "rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-[#1598ef] focus:ring-2 focus:ring-[#1598ef]/20 dark:border-white/10 dark:bg-[#121416] dark:text-slate-100";
+  "rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#1598ef] dark:border-white/10 dark:bg-[#121416]";
 
 function resolveFinanceTab(searchParams: URLSearchParams, hash: string): FinanceTab {
   if (searchParams.get("tab") === "settlements") return "settlements";
@@ -31,16 +33,12 @@ function resolveFinanceTab(searchParams: URLSearchParams, hash: string): Finance
 
 export function FinancePage() {
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState<FinanceTab>(() => resolveFinanceTab(searchParams, location.hash));
   const [filters, setFilters] = useState<LedgerFilters>({ from: "", to: "", account: "" });
   const [draftFilters, setDraftFilters] = useState(filters);
   const [showFilters, setShowFilters] = useState(false);
-  const [batchId, setBatchId] = useState("");
-  const [wallet, setWallet] = useState<"CASH" | "KBZ_PAY" | "WAVE_PAY">("CASH");
-  const [confirming, setConfirming] = useState(false);
   const [message, setMessage] = useState("");
   const queryString = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString();
   const ledger = useQuery({
@@ -50,21 +48,7 @@ export function FinancePage() {
   const batches = useQuery({
     queryKey: ["operations-batches"],
     queryFn: () => api<Batch[]>("/operations/batches").then((r) => r.data),
-  });
-  const selectedBatch = batches.data?.find((batch) => batch.id === batchId);
-  const postAdvances = useMutation({
-    mutationFn: () =>
-      api<PostingResult>(`/operations/batches/${batchId}/pickup-advances`, {
-        method: "POST",
-        body: JSON.stringify({ fundingWallet: wallet }),
-      }),
-    onSuccess: async ({ data }) => {
-      setConfirming(false);
-      setBatchId("");
-      setMessage(data.alreadyPosted ? t("pickupAdvancesAlreadyPosted") : t("pickupAdvancesPosted", { count: data.postedCount }));
-      await queryClient.invalidateQueries({ queryKey: ["ledger"] });
-    },
-    onError: (error) => setMessage(error instanceof Error ? error.message : t("loadError")),
+    enabled: tab === "overview",
   });
 
   useEffect(() => {
@@ -111,44 +95,14 @@ export function FinancePage() {
 
       {tab === "overview" ? (
         <>
-          <section className="mt-7 rounded-2xl border border-black/5 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 className="font-display text-lg font-bold">{t("postPickupAdvances")}</h2>
-                <p className="mt-1 text-sm text-slate-500">{t("postPickupAdvancesDescription")}</p>
-              </div>
-              <CheckCircle2 className="text-[#12a66a]" />
-            </div>
-            <div className="mt-5 grid gap-3 md:grid-cols-[2fr_1fr_auto]">
-              <label className="text-xs font-bold text-slate-500">
-                {t("batch")}
-                <select aria-label={t("batch")} value={batchId} onChange={(event) => setBatchId(event.target.value)} className={`${control} mt-1 w-full`}>
-                  <option value="">{batches.isLoading ? t("loading") : t("selectBatch")}</option>
-                  {batches.data?.map((batch) => (
-                    <option key={batch.id} value={batch.id}>
-                      {batch.label} · {batch.shop.name} · {batch.parcels.length} {t("records")}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="text-xs font-bold text-slate-500">
-                {t("fundingWallet")}
-                <select aria-label={t("fundingWallet")} value={wallet} onChange={(event) => setWallet(event.target.value as typeof wallet)} className={`${control} mt-1 w-full`}>
-                  <option value="CASH">Cash</option>
-                  <option value="KBZ_PAY">KBZ Pay</option>
-                  <option value="WAVE_PAY">Wave Pay</option>
-                </select>
-              </label>
-              <button disabled={!batchId || postAdvances.isPending} onClick={() => setConfirming(true)} className="self-end rounded-xl bg-[#1598ef] px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">
-                {t("reviewPosting")}
-              </button>
-            </div>
-            {batches.isError && (
-              <button onClick={() => void batches.refetch()} className="mt-3 text-sm font-bold text-[#0787df]">
-                {t("retry")}
-              </button>
-            )}
-          </section>
+          <OsCashbookOverview ledger={ledger.data ?? []} />
+          <PostPickupAdvancesPanel
+            batches={batches.data ?? []}
+            loading={batches.isLoading}
+            error={batches.isError}
+            onRetry={() => void batches.refetch()}
+            onMessage={setMessage}
+          />
 
           <div className="mt-6 grid gap-4 sm:grid-cols-3">
             <div className="rounded-2xl bg-[#101318] p-5 text-white">
@@ -157,11 +111,11 @@ export function FinancePage() {
               <p className="mt-1 font-display text-2xl font-bold">{formatBalance("WALLET_CASH")}</p>
             </div>
             <div className="rounded-2xl bg-white p-5 shadow-sm dark:bg-[#181a1d]">
-              <p className="text-sm text-slate-500">KBZ Pay</p>
+              <p className="text-sm text-slate-500">{t("kbzPay")}</p>
               <p className="mt-7 font-display text-2xl font-bold">{formatBalance("WALLET_KBZ_PAY")}</p>
             </div>
             <div className="rounded-2xl bg-white p-5 shadow-sm dark:bg-[#181a1d]">
-              <p className="text-sm text-slate-500">Wave Pay</p>
+              <p className="text-sm text-slate-500">{t("wavePay")}</p>
               <p className="mt-7 font-display text-2xl font-bold">{formatBalance("WALLET_WAVE_PAY")}</p>
             </div>
           </div>
@@ -236,44 +190,6 @@ export function FinancePage() {
         </>
       ) : (
         <SettlementWorkspaces />
-      )}
-
-      {confirming && selectedBatch && (
-        <div className="fixed inset-0 z-30 grid place-items-center bg-black/45 p-4">
-          <div role="dialog" aria-modal="true" aria-labelledby="posting-title" className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl dark:bg-[#181a1d]">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 id="posting-title" className="font-display text-xl font-bold">
-                  {t("confirmPickupAdvances")}
-                </h2>
-                <p className="mt-2 text-sm text-slate-500">
-                  {t("confirmPickupAdvancesDescription")} · {t("totalAdvancePaid")}: {(selectedBatch.advancePaid ?? 0).toLocaleString()} MMK
-                </p>
-              </div>
-              <button aria-label={t("cancel")} onClick={() => setConfirming(false)}>
-                <X />
-              </button>
-            </div>
-            <dl className="mt-5 grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-4 text-sm dark:bg-white/5">
-              <dt className="text-slate-500">{t("batch")}</dt>
-              <dd className="text-right font-bold">{selectedBatch.label}</dd>
-              <dt className="text-slate-500">{t("pickupDate")}</dt>
-              <dd className="text-right font-bold">{new Date(selectedBatch.pickupDate).toLocaleDateString()}</dd>
-              <dt className="text-slate-500">{t("parcels")}</dt>
-              <dd className="text-right font-bold">{selectedBatch.parcels.length}</dd>
-              <dt className="text-slate-500">{t("fundingWallet")}</dt>
-              <dd className="text-right font-bold">{wallet.replace("_", " ")}</dd>
-            </dl>
-            <div className="mt-6 flex justify-end gap-3">
-              <button onClick={() => setConfirming(false)} className={control}>
-                {t("cancel")}
-              </button>
-              <button disabled={postAdvances.isPending} onClick={() => postAdvances.mutate()} className="rounded-xl bg-[#1598ef] px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">
-                {postAdvances.isPending ? t("loading") : t("confirmAndPost")}
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );

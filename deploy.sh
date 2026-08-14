@@ -44,7 +44,7 @@ MIGRATE_URL="${DIRECT_DATABASE_URL:-$DATABASE_URL}"
 DATABASE_URL="$MIGRATE_URL" npx prisma migrate deploy --schema prisma/schema.postgresql.prisma
 rm -rf dist
 npx tsc -p tsconfig.build.json
-rsync -a --delete --exclude node_modules --exclude .env dist package.json package-lock.json prisma "${ROOT}/backend/"
+rsync -a --delete --exclude node_modules --exclude .env dist package.json package-lock.json prisma assets "${ROOT}/backend/"
 mkdir -p "${ROOT}/backend/node_modules"
 rsync -a node_modules/ "${ROOT}/backend/node_modules/"
 install -m 600 "${SHARED}/lotaya.env" "${ROOT}/backend/.env"

@@ -6,6 +6,7 @@ import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@/app/auth";
 import { DeliveryStatusPanel, type ManifestPreviewData } from "@/components/delivery-status-panel";
 import { ApiError, api, apiRaw } from "@/lib/api";
+import { isDateChangeReason } from "@/lib/exception-reasons";
 import {
   buildManifestBody,
   MANIFEST_DATE_PRESETS,
@@ -33,6 +34,7 @@ type Parcel = {
   zone?: string | null;
   township?: string | null;
   linkGroup?: { id: string; address: string; baseDeliveryFee: number; totalDeliveryFee: number } | null;
+  reasonCode?: string | null;
 };
 type Township = {
   id: string;
@@ -949,7 +951,8 @@ export function OperationsPage() {
                     <input aria-label={t("selectAll")} type="checkbox" checked={allSelected} onChange={toggleAll} />
                   </th>
                   <th className="py-2 pr-2">{t("rowNumber")}</th>
-                  <th className="py-2 pr-2">{t("tracking")} / {t("orderId")}</th>
+                  <th className="py-2 pr-2">{t("orderId")}</th>
+                  <th className="py-2 pr-2">{t("tracking")}</th>
                   <th className="py-2 pr-2">{t("pickupDate")}</th>
                   <th className="py-2 pr-2">{t("merchant")}</th>
                   <th className="py-2 pr-2">{t("customer")}</th>
@@ -980,8 +983,15 @@ export function OperationsPage() {
                       </td>
                       <td className="py-1.5 pr-2 tabular-nums text-slate-400">{index + 1}</td>
                       <td className="py-1.5 pr-2">
-                        <p className="font-bold text-slate-900 dark:text-slate-100">{p.trackingNumber}</p>
-                        {p.orderId ? <p className="text-[10px] text-slate-400">{p.orderId}</p> : null}
+                        <p className="font-bold text-[#0787df] dark:text-[#5eb8ff]">{p.orderId?.trim() || "—"}</p>
+                      </td>
+                      <td className="py-1.5 pr-2">
+                        <p className="font-mono text-[11px] text-slate-500 dark:text-slate-400">{p.trackingNumber}</p>
+                        {isDateChangeReason(p.reasonCode) ? (
+                          <p role="alert" className="mt-1 rounded-md bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                            {t("dateChangeAlert")}
+                          </p>
+                        ) : null}
                       </td>
                       <td className="py-1.5 pr-2 whitespace-nowrap text-slate-600 dark:text-slate-300">{formatPickupDate(p)}</td>
                       <td className="py-1.5 pr-2 font-semibold">{p.batch.shop.name}</td>

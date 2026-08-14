@@ -471,6 +471,36 @@ describe("OperationsPage", () => {
     expect(screen.getByLabelText("Status TRK-1")).toBeDisabled();
   });
 
+  it("shows a date-change alert when a parcel failed with a reschedule reason", async () => {
+    mockParcelList([
+      {
+        id: "parcel-reschedule",
+        trackingNumber: "TRK-RESCHED",
+        orderId: "OS-900",
+        customerName: "Customer",
+        address: "Address",
+        status: "FAILED",
+        reasonCode: "RESCHEDULE",
+        codAmount: 25000,
+        deliveryFee: 3000,
+        batch: { label: "Batch", pickupDate: "2026-08-11T00:00:00.000Z", shop: { name: "Shop" } },
+        rider: { id: "rider-1", user: { name: "Rider" } },
+      },
+    ]);
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/master-data") {
+        return Promise.resolve({ data: { shops: [], riders: [{ id: "rider-1", user: { name: "Rider" } }] } });
+      }
+      if (path === "/operations/batches") return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: [] });
+    });
+
+    renderPage();
+    expect(await screen.findByText("Customer requested another delivery day")).toBeInTheDocument();
+    expect(screen.getByText("TRK-RESCHED")).toBeInTheDocument();
+    expect(screen.getByText("OS-900")).toBeInTheDocument();
+  });
+
   it("previews the dispatch manifest for all hub riders when none are selected", async () => {
     mockParcelList([]);
     apiMock.mockImplementation((path: string) => {

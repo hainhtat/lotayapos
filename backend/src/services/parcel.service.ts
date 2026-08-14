@@ -1,6 +1,8 @@
 import { prisma } from "../config/database.js";
+import { isDateChangeReason } from "../domain/exception-reasons.js";
 import { ApiError } from "../utils/api-error.js";
 import { resolveCommissionRateBps } from "../utils/commission.js";
+import { caseInsensitiveTextCondition } from "../utils/string-filters.js";
 import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { assertCashbookOpen } from "./finance.service.js";
@@ -251,13 +253,13 @@ export function buildParcelListWhere(scope: ActorScope, assignedToMe = false, fi
   if (filters.assignmentStatus === "ASSIGNED") conditions.push({ riderId: { not: null } });
   if (filters.assignmentStatus === "UNASSIGNED") conditions.push({ riderId: null });
   if (filters.zone) conditions.push({ zone: filters.zone });
-  if (filters.township) conditions.push({ township: filters.township });
+  if (filters.township) conditions.push(caseInsensitiveTextCondition("township", filters.township));
   if (filters.townshipId) conditions.push({ townshipId: filters.townshipId });
   if (filters.districtId) conditions.push({ townshipRelation: { districtId: filters.districtId } });
   if (filters.regionStateId) conditions.push({ townshipRelation: { district: { regionStateId: filters.regionStateId } } });
-  if (filters.trackingNumber) conditions.push({ trackingNumber: { contains: filters.trackingNumber } });
-  if (filters.orderId) conditions.push({ orderId: { contains: filters.orderId } });
-  if (filters.customerName) conditions.push({ customerName: { contains: filters.customerName } });
+  if (filters.trackingNumber) conditions.push(caseInsensitiveTextCondition("trackingNumber", filters.trackingNumber));
+  if (filters.orderId) conditions.push(caseInsensitiveTextCondition("orderId", filters.orderId));
+  if (filters.customerName) conditions.push(caseInsensitiveTextCondition("customerName", filters.customerName));
   if (filters.shopId) conditions.push({ batch: { shopId: filters.shopId } });
   if (filters.status) conditions.push({ status: filters.status });
   if (filters.reasonCode) conditions.push({ reasonCode: filters.reasonCode });
@@ -613,7 +615,18 @@ export async function updateStatus(id: string, toStatus: string, actor: Actor, r
       }
     }
     await tx.statusHistory.create({ data: { parcelId: id, fromStatus: parcel.status as never, toStatus: toStatus as never, actorId: actor.id, reasonCode, note } });
-    if (["PARTIAL", "FAILED"].includes(toStatus)) await tx.alert.create({ data: { type: toStatus, message: `Parcel ${parcel.trackingNumber} requires operations review`, parcelId: id } });
+    if (["PARTIAL", "FAILED"].includes(toStatus)) {
+      const dateChange = isDateChangeReason(reasonCode);
+      await tx.alert.create({
+        data: {
+          type: dateChange ? "DATE_CHANGE" : toStatus,
+          message: dateChange
+            ? `Parcel ${parcel.trackingNumber} — customer requested delivery on another day${note?.trim() ? `: ${note.trim()}` : ""}`
+            : `Parcel ${parcel.trackingNumber} requires operations review`,
+          parcelId: id,
+        },
+      });
+    }
     if (toStatus === "OUT_FOR_DELIVERY" && parcel.riderId) {
       await tx.deliveryWay.create({ data: { parcelId: id, riderId: parcel.riderId, commissionRate: commissionRateBps } });
     }

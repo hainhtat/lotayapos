@@ -47,7 +47,7 @@ export const previewManifest: RequestHandler = async (req, res) => {
 
 export const downloadManifest: RequestHandler = async (req, res) => {
   const result = await service.buildManifestForRiders(req.body, actor(req));
-  const pdf = generateDispatchManifestPdf({ sections: result.sections, statusesLabel: result.statusesLabel });
+  const pdf = await generateDispatchManifestPdf({ sections: result.sections, statusesLabel: result.statusesLabel });
   res.status(200).type("application/pdf").set({
     "Content-Disposition": `attachment; filename="dispatch-manifest-${result.filenameSuffix}.pdf"`,
     "X-Rider-Count": String(result.riderCount),

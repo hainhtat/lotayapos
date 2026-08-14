@@ -2,6 +2,7 @@ import { prisma } from "../config/database.js";
 import { env } from "../config/env.js";
 import { ApiError } from "../utils/api-error.js";
 import { assertCashbookOpen } from "./finance.service.js";
+import { journalEntryIsUnreversed } from "./parcel.service.js";
 
 export type FundingWallet = "CASH" | "KBZ_PAY" | "WAVE_PAY";
 const walletAccounts: Record<FundingWallet, string> = { CASH: "WALLET_CASH", KBZ_PAY: "WALLET_KBZ_PAY", WAVE_PAY: "WALLET_WAVE_PAY" };
@@ -62,12 +63,22 @@ async function assertOperationsReader(actor: BatchActor) {
 
 export async function listBatches(actor: BatchActor) {
   const user = await assertOperationsReader(actor);
-  return prisma.batch.findMany({
+  const batches = await prisma.batch.findMany({
     where: user.role === "SUPERADMIN" ? {} : { hubId: user.hubId },
     include: { shop: true, parcels: { select: { status: true } } },
     orderBy: { pickupDate: "desc" },
     take: 200,
   });
+  if (!batches.length) return [];
+  const postedEntries = await prisma.journalEntry.findMany({
+    where: { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: { in: batches.map((batch) => batch.id) } },
+    select: { sourceId: true, id: true },
+  });
+  const postedBatchIds = new Set<string>();
+  for (const entry of postedEntries) {
+    if (entry.sourceId && (await journalEntryIsUnreversed(prisma, entry.id))) postedBatchIds.add(entry.sourceId);
+  }
+  return batches.map((batch) => ({ ...batch, advancePosted: postedBatchIds.has(batch.id) }));
 }
 export function formatTrackingNumber(sequence: number) {
   return `LTY-${String(sequence).padStart(3, "0")}`;
@@ -158,8 +169,8 @@ export async function postPickupAdvances(batchId: string, input: { fundingWallet
   if (!batch) throw new ApiError(404, "BATCH_NOT_FOUND", "Batch not found");
   if (!batch.hubId) throw new ApiError(409, "BATCH_HUB_REQUIRED", "Batch must belong to a hub before advances can be posted");
   const batchHubId = batch.hubId;
-  const existing=await prisma.journalEntry.findUnique({where:{sourceType_sourceId:{sourceType:"BATCH_PICKUP_ADVANCE",sourceId:batch.id}}});
-  if(existing) return {batchId:batch.id,postedCount:1,alreadyPosted:true};
+  const existing = await prisma.journalEntry.findUnique({ where: { sourceType_sourceId: { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: batch.id } }, select: { id: true } });
+  if (existing && (await journalEntryIsUnreversed(prisma, existing.id))) return { batchId: batch.id, postedCount: 1, alreadyPosted: true };
   if(batch.advancePaid<=0) throw new ApiError(409,"NO_BATCH_ADVANCE","Batch advance paid must be greater than zero before posting");
   try {
     await prisma.$transaction(async (tx) => {
@@ -356,13 +367,17 @@ export async function buildManifestForRiders(input: ManifestQuery, actor: BatchA
     where: {
       riderId: { in: uniqueRiderIds },
       status: { in: statuses },
-      ...((hubId || dateFrom || dateTo)
+      ...(hubId ? { batch: { hubId } } : {}),
+      ...(dateFrom || dateTo
         ? {
-            batch: {
-              ...(hubId ? { hubId } : {}),
-              ...(dateFrom || dateTo
-                ? { pickupDate: { ...(dateFrom ? { gte: dateFrom } : {}), ...(dateTo ? { lt: dateTo } : {}) } }
-                : {}),
+            statusHistory: {
+              some: {
+                toStatus: { in: statuses },
+                createdAt: {
+                  ...(dateFrom ? { gte: dateFrom } : {}),
+                  ...(dateTo ? { lt: dateTo } : {}),
+                },
+              },
             },
           }
         : {}),

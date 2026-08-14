@@ -40,9 +40,11 @@ function ParcelCard({parcel,dark,onCall}:{parcel:AssignedParcel;dark:boolean;onC
         onPress={openStatus}
         style={s.rowMain}
       >
-        <Text style={[s.rowTitle,dark&&s.white]}>{parcel.trackingNumber}</Text>
+        <Text style={[s.rowTitle,dark&&s.white]}>{parcel.orderId?.trim()||parcel.trackingNumber}</Text>
         <Text style={s.muted}>{parcel.customerName} · {statusLabel(parcel.status)}</Text>
-        <Text style={[s.detail,dark&&s.detailDark]}>{i18n.t("orderNo")}: {parcel.orderId?.trim()||"—"}</Text>
+        {parcel.orderId?.trim()?(
+          <Text style={[s.detail,dark&&s.detailDark]}>{i18n.t("tracking")}: {parcel.trackingNumber}</Text>
+        ):null}
         <Text style={[s.detail,dark&&s.detailDark]}>{i18n.t("cod")}: {money(parcel.codAmount)} MMK</Text>
         <Text style={[s.detail,dark&&s.detailDark]}>{i18n.t("deliveryFee")}: {money(parcel.deliveryFee)} MMK</Text>
         <Text style={[s.total,dark&&s.white]}>{i18n.t("totalAmount")}: {money(total)} MMK</Text>

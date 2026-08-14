@@ -14,10 +14,13 @@ const ledger=[
   {account:"WALLET_CASH",debit:125000,credit:25000,balance:100000},
   {account:"WALLET_KBZ_PAY",debit:50000,credit:10000,balance:40000},
   {account:"WALLET_WAVE_PAY",debit:75000,credit:15000,balance:60000},
+  {account:"OS_ADVANCE_RECEIVABLE",debit:200000,credit:50000,balance:150000},
+  {account:"OS_SETTLEMENT_OFFSET",debit:10000,credit:0,balance:10000},
+  {account:"OS_RETURN_DEDUCTION",debit:0,credit:0,balance:0},
 ];
 const ledgerReport={accounts:ledger,entries:[],totalDebit:250000,totalCredit:50000,difference:200000,balanced:false};
 const emptyPendingReturns={items:[],summary:{count:0,totalRecoverableAmount:0}};
-const batch={id:"batch-1",label:"Shop 11.08.2026",pickupDate:"2026-08-11T00:00:00.000Z",shop:{name:"Shop"},parcels:[{status:"CREATED"},{status:"CREATED"}]};
+const batch={id:"batch-1",label:"Shop 11.08.2026",pickupDate:"2026-08-11T00:00:00.000Z",advancePaid:50000,advancePosted:false,shop:{name:"Shop"},parcels:[{status:"CREATED"},{status:"CREATED"}]};
 function renderPage(initialEntry="/finance"){const queryClient=new QueryClient({defaultOptions:{queries:{retry:false}}});return render(<MemoryRouter initialEntries={[initialEntry]}><QueryClientProvider client={queryClient}><FinancePage/></QueryClientProvider></MemoryRouter>)}
 
 describe("FinancePage",()=>{
@@ -34,31 +37,43 @@ describe("FinancePage",()=>{
   it("renders wallet cards from ledger balances",async()=>{
     renderPage();
     await waitFor(()=>expect(within(screen.getByText("Cash wallet").parentElement!).getByText("100,000 MMK")).toBeInTheDocument());
+    expect(screen.getByText("OS cashbook snapshot")).toBeInTheDocument();
+    expect(screen.getAllByText("150,000 MMK").length).toBeGreaterThan(0);
     expect(screen.getAllByText("40,000 MMK")).toHaveLength(2);
     expect(screen.getAllByText("60,000 MMK")).toHaveLength(2);
+  });
+
+  it("hides posting actions when batch advances are already posted", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/operations/batches") return Promise.resolve({ data: [{ ...batch, advancePosted: true }] });
+      if (path === "/finance/expense-categories" || path.startsWith("/finance/expenses?")) return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: ledgerReport });
+    });
+    renderPage();
+    expect(await screen.findByText("Posted")).toBeInTheDocument();
+    expect(screen.getByText("All batch advances posted")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Review posting" })).not.toBeInTheDocument();
   });
 
   it("requires review and confirmation before posting pickup advances",async()=>{
     apiMock.mockImplementation((path:string,init?:RequestInit)=>{
       if(path==="/operations/batches")return Promise.resolve({data:[batch]});
-      if(path==="/operations/batches/batch-1/pickup-advances"&&init)return Promise.resolve({data:{batchId:"batch-1",postedCount:2,alreadyPosted:false}});
+      if(path==="/operations/batches/batch-1/pickup-advances"&&init)return Promise.resolve({data:{batchId:"batch-1",postedCount:1,alreadyPosted:false}});
       if(path==="/finance/expense-categories")return Promise.resolve({data:[]});
       if(path.startsWith("/finance/expenses?"))return Promise.resolve({data:[]});
       return Promise.resolve({data:ledgerReport});
     });
     const user=userEvent.setup();
     renderPage();
-    await screen.findByRole("option",{name:/Shop 11\.08\.2026/});
-    await user.selectOptions(screen.getByLabelText("Batch"),"batch-1");
-    await user.selectOptions(screen.getByLabelText("Funding wallet"),"KBZ_PAY");
-    await waitFor(()=>expect(screen.getByRole("button",{name:"Review posting"})).toBeEnabled());
+    await screen.findByText("Needs posting");
     await user.click(screen.getByRole("button",{name:"Review posting"}));
     const dialog=screen.getByRole("dialog");
     expect(within(dialog).getByText("Shop 11.08.2026")).toBeInTheDocument();
-    expect(within(dialog).getByText("KBZ PAY")).toBeInTheDocument();
+    expect(within(dialog).getByText(/OS advance receivable/i)).toBeInTheDocument();
+    await user.selectOptions(within(dialog).getByLabelText("Funding wallet"),"KBZ_PAY");
     await user.click(within(dialog).getByRole("button",{name:"Confirm and post"}));
     await waitFor(()=>expect(apiMock).toHaveBeenCalledWith("/operations/batches/batch-1/pickup-advances",{method:"POST",body:JSON.stringify({fundingWallet:"KBZ_PAY"})}));
-    expect(await screen.findByRole("status")).toHaveTextContent("2 parcels");
+    expect(await screen.findByRole("status")).toHaveTextContent("50,000 MMK");
   });
 
   it("applies ledger reconciliation filters",async()=>{
@@ -90,6 +105,35 @@ describe("FinancePage",()=>{
       method:"POST",
       body:expect.stringContaining('"categoryId":"fuel","wallet":"WAVE_PAY","amount":12500,"description":"Rider fuel"'),
     })));
+  });
+
+  it("shows COD, fee, and commission breakdown in rider outstanding rows", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.startsWith("/finance/rider-outstanding?")) return Promise.resolve({ data: [{
+        rider: { id: "rider-1", name: "Aung Rider", username: "aung" },
+        parcelCount: 3,
+        cod: 30000,
+        fees: 6000,
+        commission: 2400,
+        salaryDeduction: 0,
+        expectedAmount: 33600,
+        declaredAmount: null,
+        paidAmount: 0,
+        outstandingAmount: 33600,
+        settlementStatus: null,
+      }] });
+      if (path === "/operations/batches" || path === "/finance/expense-categories" || path.startsWith("/finance/expenses?") || path === "/master-data/shops" || path.startsWith("/finance/os-settlement")) return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: ledgerReport });
+    });
+    renderPage("/finance?tab=settlements#rider-outstanding");
+    const rider = await screen.findByText("Aung Rider");
+    const row = rider.closest("tr")!;
+    expect(within(row).getByText("COD")).toBeInTheDocument();
+    expect(within(row).getByText("30,000 MMK")).toBeInTheDocument();
+    expect(within(row).getByText("Delivery fees")).toBeInTheDocument();
+    expect(within(row).getByText("6,000 MMK")).toBeInTheDocument();
+    expect(within(row).getByText("Commission")).toBeInTheDocument();
+    expect(within(row).getByText("-2,400 MMK")).toBeInTheDocument();
   });
 
   it("shows rider outstanding and records an auditable manual payment", async () => {

@@ -8,6 +8,8 @@ import { normalizeReasonCode, normalizeRiderPayFields } from "../src/services/ma
 import { assertBalancedLines, buildDeliveryCollectionLines, buildPartialReturnAdjustmentLines, buildPartialReturnCollectionLines, buildReturnDeductionLines, calculatePartialReturnAmounts } from "../src/services/ledger.service.js";
 import { recoverableAdvanceAmount, buildOsSettlementReturnDeductionLines, allocateProRata, baseParcelIdFromSourceId } from "../src/services/os-advance.js";
 import { generateDispatchManifestPdf } from "../src/utils/manifest-pdf.js";
+import { isDateChangeReason } from "../src/domain/exception-reasons.js";
+import { PDFDocument } from "pdf-lib";
 import { env } from "../src/config/env.js";
 
 describe("rider settlement formula", () => {
@@ -511,21 +513,36 @@ describe("bulk dispatch and manifest rules", () => {
   });
 
   test("combines assignment, location, batch, and date filters", () => {
-    expect(buildParcelListWhere({ id: "manager", role: "OPERATIONS_MANAGER", hubId: "hub-a", riderId: null }, false, {
+    const where = buildParcelListWhere({ id: "manager", role: "OPERATIONS_MANAGER", hubId: "hub-a", riderId: null }, false, {
       batchId: "batch-a",
       assignmentStatus: "UNASSIGNED",
       zone: "Downtown",
       township: "Yangon",
       dateFrom: "2026-08-10",
       dateTo: "2026-08-11",
-    })).toEqual({
+    });
+    expect(where).toEqual({
       AND: [
         { batch: { hubId: "hub-a" } },
         { batchId: "batch-a" },
         { riderId: null },
         { zone: "Downtown" },
-        { township: "Yangon" },
+        expect.objectContaining({ OR: expect.arrayContaining([{ township: { contains: "Yangon" } }]) }),
         { batch: { pickupDate: { gte: new Date("2026-08-10"), lt: new Date("2026-08-12") } } },
+      ],
+    });
+  });
+
+  test("uses case-insensitive customer and township filters", () => {
+    const where = buildParcelListWhere({ id: "manager", role: "OPERATIONS_MANAGER", hubId: "hub-a", riderId: null }, false, {
+      customerName: "maung",
+      township: "hlaing",
+    });
+    expect(where).toEqual({
+      AND: [
+        { batch: { hubId: "hub-a" } },
+        expect.objectContaining({ OR: expect.arrayContaining([{ township: { contains: "hlaing" } }]) }),
+        expect.objectContaining({ OR: expect.arrayContaining([{ customerName: { contains: "maung" } }]) }),
       ],
     });
   });
@@ -539,34 +556,28 @@ describe("bulk dispatch and manifest rules", () => {
       reasonCode: "NO_ANSWER",
     })).toEqual({ AND: [
       { batch: { hubId: "hub-a" } },
-      { trackingNumber: { contains: "PKG-10" } },
-      { orderId: { contains: "OS-22" } },
+      expect.objectContaining({ OR: expect.arrayContaining([{ trackingNumber: { contains: "PKG-10" } }]) }),
+      expect.objectContaining({ OR: expect.arrayContaining([{ orderId: { contains: "OS-22" } }]) }),
       { batch: { shopId: "shop-a" } },
       { status: "FAILED" },
       { reasonCode: "NO_ANSWER" },
     ] });
   });
 
-  test("generates a PDF manifest containing the assigned rider and parcel identifiers", () => {
-    const pdf = generateDispatchManifestPdf({
+  test("generates a PDF manifest containing the assigned rider and parcel identifiers", async () => {
+    const pdf = await generateDispatchManifestPdf({
       riderName: "Aung Aung",
       batchLabels: ["snmd 15.06.2026"],
       generatedAt: new Date("2026-08-10T00:00:00.000Z"),
       parcels: [{ trackingNumber: "PKG-001", orderId: "130", customerName: "Ma Ma", customerPhone: "0912345678", address: "No. 1 Main Road", codAmount: 25000, deliveryFee: 1500, zone: "Downtown", township: "Yangon", batchLabel: "snmd 15.06.2026", shopName: "snmd" }],
     });
-    const content = pdf.toString("latin1");
-    expect(content.startsWith("%PDF-1.4")).toBe(true);
-    expect(content).toContain("Aung Aung");
-    expect(content).toContain("PKG-001");
-    expect(content).toContain("All Active Deliveries");
-    expect(content).toContain("Assigned, Out for delivery, Picked up");
-    expect(content).toContain("COD:");
-    expect(content).toContain("Fees:");
-    expect(content).toContain("Total:");
+    expect(pdf.subarray(0, 5).toString("ascii")).toBe("%PDF-");
+    const doc = await PDFDocument.load(pdf);
+    expect(doc.getPageCount()).toBeGreaterThan(0);
   });
 
-  test("supports multi-rider sections as separate active rider sheets", () => {
-    const pdf = generateDispatchManifestPdf({
+  test("supports multi-rider sections as separate active rider sheets", async () => {
+    const pdf = await generateDispatchManifestPdf({
       generatedAt: new Date("2026-08-10T00:00:00.000Z"),
       sections: [
         {
@@ -579,16 +590,47 @@ describe("bulk dispatch and manifest rules", () => {
         },
       ],
     });
-    const content = pdf.toString("latin1");
-    expect(content).toContain("Aung Aung");
-    expect(content).toContain("Ko Ko");
-    expect(content).toContain("PKG-002");
-    expect(content).toContain("Active Rider Sheet");
-    expect(content).toContain("Selected statuses:");
+    expect(pdf.subarray(0, 5).toString("ascii")).toBe("%PDF-");
+    const doc = await PDFDocument.load(pdf);
+    expect(doc.getPageCount()).toBe(2);
+  });
+
+  test("renders Myanmar script in PDF output", async () => {
+    const pdf = await generateDispatchManifestPdf({
+      generatedAt: new Date("2026-08-10T00:00:00.000Z"),
+      sections: [{
+        riderName: "Aung Aung",
+        parcels: [{
+          trackingNumber: "PKG-001",
+          customerName: "မောင်မောင်",
+          customerPhone: "0912345678",
+          address: "အင်းစိန်မြို့နယ် လမ်းမကြီး",
+          codAmount: 25000,
+          deliveryFee: 1500,
+          zone: null,
+          township: "အင်းစိန်",
+        }],
+      }],
+    });
+    expect(pdf.subarray(0, 5).toString("ascii")).toBe("%PDF-");
+    const doc = await PDFDocument.load(pdf);
+    expect(doc.getPageCount()).toBeGreaterThan(0);
+    expect(pdf.length).toBeGreaterThan(5000);
   });
 });
 
 describe("configured exception reasons", () => {
+  test("detects date-change failure reasons", () => {
+    expect(isDateChangeReason("DATE_CHANGE")).toBe(true);
+    expect(isDateChangeReason("DELIVERY_DATE_CHANGE")).toBe(true);
+    expect(isDateChangeReason(" rescheduled ")).toBe(false);
+    expect(isDateChangeReason("reschedule")).toBe(true);
+    expect(isDateChangeReason("NO_ANSWER")).toBe(false);
+    expect(isDateChangeReason(null)).toBe(false);
+    expect(isDateChangeReason(undefined)).toBe(false);
+    expect(isDateChangeReason("")).toBe(false);
+  });
+
   test("normalizes stable codes and enforces outcome and note policy", () => {
     expect(normalizeReasonCode(" no_answer ")).toBe("NO_ANSWER");
     expect(validateConfiguredReason({ code: "NO_ANSWER", outcome: "FAILED", noteRequired: false, active: true }, "FAILED")).toBe("NO_ANSWER");

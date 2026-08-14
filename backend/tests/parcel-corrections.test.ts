@@ -10,6 +10,7 @@ describe("parcel corrections and delivery fee edits", () => {
   const hubId = `pc-hub-${suffix}`;
   const shopId = `pc-shop-${suffix}`;
   const dispatcherId = `pc-dispatcher-${suffix}`;
+  const financeUserId = `pc-finance-${suffix}`;
   const rider1Id = `pc-rider1-${suffix}`;
   const rider2Id = `pc-rider2-${suffix}`;
   const rider1UserId = `pc-rider1-user-${suffix}`;
@@ -33,6 +34,13 @@ describe("parcel corrections and delivery fee edits", () => {
       role: "DISPATCHER",
       tokenVersion: 0,
     });
+  const financeToken = () =>
+    signAccessToken({
+      sub: financeUserId,
+      email: `finance-${suffix}@example.com`,
+      role: "FINANCE",
+      tokenVersion: 0,
+    });
 
   beforeAll(async () => {
     await prisma.hub.create({ data: { id: hubId, name: `Parcel corrections hub ${suffix}` } });
@@ -45,6 +53,18 @@ describe("parcel corrections and delivery fee edits", () => {
         username: `dispatcher-${suffix}`,
         passwordHash: "test-only",
         role: "DISPATCHER",
+        hubId,
+        active: true,
+      },
+    });
+    await prisma.user.create({
+      data: {
+        id: financeUserId,
+        name: "Finance",
+        email: `finance-${suffix}@example.com`,
+        username: `finance-${suffix}`,
+        passwordHash: "test-only",
+        role: "FINANCE",
         hubId,
         active: true,
       },
@@ -185,7 +205,7 @@ describe("parcel corrections and delivery fee edits", () => {
     await prisma.parcel.deleteMany({ where: { id: { in: parcelIds } } });
     await prisma.batch.deleteMany({ where: { id: { in: batchIds } } });
     await prisma.rider.deleteMany({ where: { id: { in: [rider1Id, rider2Id] } } });
-    await prisma.user.deleteMany({ where: { id: { in: [dispatcherId, rider1UserId, rider2UserId] } } });
+    await prisma.user.deleteMany({ where: { id: { in: [dispatcherId, financeUserId, rider1UserId, rider2UserId] } } });
     await prisma.onlineShop.deleteMany({ where: { id: shopId } });
     await prisma.hub.deleteMany({ where: { id: hubId } });
   });
@@ -297,6 +317,17 @@ describe("parcel corrections and delivery fee edits", () => {
     expect(history?.toStatus).toBe("DELIVERED");
     expect(history?.note).toContain("Rider One");
     expect(history?.note).toContain("Rider Two");
+  });
+
+  test("flags advancePosted on listBatches from pickup-advance journal entries", async () => {
+    const response = await request(app)
+      .get("/api/v1/operations/batches")
+      .set("Authorization", `Bearer ${financeToken()}`);
+
+    expect(response.status).toBe(200);
+    const batches = response.body.data as Array<{ id: string; advancePosted: boolean }>;
+    expect(batches.find((row) => row.id === advanceBatchId)?.advancePosted).toBe(true);
+    expect(batches.find((row) => row.id === batchId)?.advancePosted).toBe(false);
   });
 
   test("blocks rider correction when finance collection is already posted", async () => {
