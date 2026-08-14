@@ -196,6 +196,8 @@ function DeliveryFeeCell({ row, regions }: { row: ParcelRow; regions: Location[]
   );
 }
 
+const SAVED_PARCELS_PAGE_SIZE = 50;
+
 export function BatchDetailPage() {
   const { id = "" } = useParams();
   const { t } = useTranslation();
@@ -208,6 +210,7 @@ export function BatchDetailPage() {
   const [message, setMessage] = useState("");
   const [preview, setPreview] = useState<ManifestPreview | null>(null);
   const [editing, setEditing] = useState<SavedParcel | null>(null);
+  const [savedPage, setSavedPage] = useState(1);
   const [editForm, setEditForm] = useState({ orderId: "", customerName: "", address: "", customerPhone: "", codAmount: "", townshipId: "", zoneId: "" });
   const batch = useQuery({
     queryKey: ["batch", id],
@@ -243,6 +246,19 @@ export function BatchDetailPage() {
       zoneId: editing.zoneId ?? "",
     });
   }, [editing]);
+  const savedParcels = batch.data?.parcels ?? [];
+  const savedPageCount = Math.max(1, Math.ceil(savedParcels.length / SAVED_PARCELS_PAGE_SIZE));
+  const pagedSavedParcels = savedParcels.slice(
+    (savedPage - 1) * SAVED_PARCELS_PAGE_SIZE,
+    savedPage * SAVED_PARCELS_PAGE_SIZE,
+  );
+  useEffect(() => {
+    setSavedPage(1);
+  }, [savedParcels.length]);
+  useEffect(() => {
+    if (savedPage > savedPageCount) setSavedPage(savedPageCount);
+  }, [savedPage, savedPageCount]);
+  const remainingToOs = batch.data?.remainingToOs ?? 0;
   const updateParcel = useMutation({
     mutationFn: () =>
       api(`/parcels/${editing!.id}`, {
@@ -352,25 +368,42 @@ export function BatchDetailPage() {
 
   return (
     <div className="mx-auto max-w-[1600px]">
-      <div className="flex justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-sm font-bold text-[#0787df]">{batch.data?.shop.name}</p>
           <h1 className="font-display text-3xl font-bold">{batch.data?.label ?? t("batchDetail")}</h1>
-          <p className="mt-2 text-sm text-slate-500">{t("batchEntryDescription")}</p>
+          <p className="mt-2 max-w-2xl text-sm text-slate-500">{t("batchEntryDescription")}</p>
         </div>
-        <div className="text-right text-sm text-slate-500">
-          <p>
-            {batch.data?.parcels.length ?? 0} {t("savedParcels")}
+      </div>
+      <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-2xl border border-black/5 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{t("savedParcels")}</p>
+          <p className="mt-2 font-display text-2xl font-bold">{savedParcels.length.toLocaleString()}</p>
+        </div>
+        <div className="rounded-2xl border border-black/5 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{t("totalCodFromOs")}</p>
+          <p className="mt-2 font-display text-2xl font-bold">{(batch.data?.totalCod ?? 0).toLocaleString()} MMK</p>
+        </div>
+        <div className="rounded-2xl border border-black/5 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{t("totalAdvancePaid")}</p>
+          <p className="mt-2 font-display text-2xl font-bold">{(batch.data?.advancePaid ?? 0).toLocaleString()} MMK</p>
+        </div>
+        <div
+          className={`rounded-2xl border bg-white p-5 shadow-sm dark:bg-[#181a1d] ${
+            remainingToOs < 0
+              ? "border-amber-200 dark:border-amber-900/60"
+              : "border-black/5 dark:border-white/10"
+          }`}
+        >
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{t("remainingToOs")}</p>
+          <p
+            className={`mt-2 font-display text-2xl font-bold ${
+              remainingToOs < 0 ? "text-amber-700 dark:text-amber-300" : ""
+            }`}
+          >
+            {remainingToOs.toLocaleString()} MMK
           </p>
-          <p>
-            {t("totalCodFromOs")}: {(batch.data?.totalCod ?? 0).toLocaleString()} MMK
-          </p>
-          <p>
-            {t("totalAdvancePaid")}: {(batch.data?.advancePaid ?? 0).toLocaleString()} MMK
-          </p>
-          <p className="font-semibold text-slate-700 dark:text-slate-200">
-            {t("remainingToOs")}: {(batch.data?.remainingToOs ?? 0).toLocaleString()} MMK
-          </p>
+          <p className="mt-2 text-xs text-slate-500">{t("remainingToOsHint")}</p>
         </div>
       </div>
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
@@ -554,7 +587,30 @@ export function BatchDetailPage() {
       )}
       {(batch.data?.parcels.length ?? 0) > 0 && (
         <section className="mt-8 rounded-2xl border bg-white p-6 dark:border-white/10 dark:bg-[#181a1d]">
-          <h2 className="font-display text-lg font-bold">{t("savedParcelList")}</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="font-display text-lg font-bold">{t("savedParcelList")}</h2>
+            {savedParcels.length > SAVED_PARCELS_PAGE_SIZE && (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-slate-500">{t("savedParcelsPage", { page: savedPage, total: savedPageCount })}</span>
+                <button
+                  type="button"
+                  disabled={savedPage <= 1}
+                  onClick={() => setSavedPage((page) => Math.max(1, page - 1))}
+                  className="rounded-lg border px-3 py-1 font-bold disabled:opacity-40"
+                >
+                  {t("previous")}
+                </button>
+                <button
+                  type="button"
+                  disabled={savedPage >= savedPageCount}
+                  onClick={() => setSavedPage((page) => Math.min(savedPageCount, page + 1))}
+                  className="rounded-lg border px-3 py-1 font-bold disabled:opacity-40"
+                >
+                  {t("next")}
+                </button>
+              </div>
+            )}
+          </div>
           <div className="mt-4 overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
@@ -570,7 +626,7 @@ export function BatchDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {batch.data?.parcels.map((parcel) => (
+                {pagedSavedParcels.map((parcel) => (
                   <tr key={parcel.id} className="border-b dark:border-white/5">
                     <td className="py-3 font-bold">{parcel.trackingNumber}</td>
                     <td className="py-3">{parcel.orderId || "—"}</td>

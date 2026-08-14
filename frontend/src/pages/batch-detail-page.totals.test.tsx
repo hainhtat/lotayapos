@@ -43,8 +43,9 @@ describe("BatchDetailPage settlement totals", () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(screen.getByText(/Total COD \(OS\): 100,000 MMK/)).toBeInTheDocument());
-    expect(screen.getByText(/Remaining to OS: 60,000 MMK/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("100,000 MMK")).toBeInTheDocument());
+    expect(screen.getByText("60,000 MMK")).toBeInTheDocument();
+    expect(screen.getByText(/Remaining to OS/i)).toBeInTheDocument();
   });
 
   it("shows bordered inputs in the add-parcel modal instead of spreadsheet cells", async () => {
@@ -59,7 +60,7 @@ describe("BatchDetailPage settlement totals", () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(screen.getByText(/Total COD \(OS\): 100,000 MMK/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("100,000 MMK")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Form" }));
     fireEvent.click(screen.getByRole("button", { name: "Add parcel" }));
     const customer = screen.getByLabelText("Customer");

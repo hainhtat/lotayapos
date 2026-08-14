@@ -260,6 +260,8 @@
   "username": "အသုံးပြုသူအမည်",
   "totalCodFromOs": "စုစုပေါင်း COD (OS)",
   "remainingToOs": "OS သို့ ကျန်ငွေ",
+  "remainingToOsHint": "ပါဆယ် COD စုစုပေါင်းမှ batch ကြိုပေးငွေ နုတ်ခြင်း။ ပြန်ပို့/နောက်ဆုံး OS ပေးချေမှုကို Finance → OS & riders တွင် ကြည့်ပါ။",
+  "savedParcelsPage": "စာမျက်နှာ {{page}} / {{total}}",
   "editParcel": "ပါဆယ် ပြင်ဆင်ရန်",
   "savedParcelList": "သိမ်းထားသော ပါဆယ်များ",
   "parcelUpdated": "ပါဆယ် ပြင်ဆင်ပြီးပါပြီ။",

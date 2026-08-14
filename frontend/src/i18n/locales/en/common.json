@@ -260,6 +260,8 @@
   "username": "Username",
   "totalCodFromOs": "Total COD (OS)",
   "remainingToOs": "Remaining to OS",
+  "remainingToOsHint": "Parcel COD total minus batch advance. Returns and final OS payable are on Finance → OS & riders.",
+  "savedParcelsPage": "Page {{page}} of {{total}}",
   "editParcel": "Edit parcel",
   "savedParcelList": "Saved parcels",
   "parcelUpdated": "Parcel updated.",
