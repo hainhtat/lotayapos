@@ -2,7 +2,7 @@ import { prisma } from "../config/database.js";
 import { env } from "../config/env.js";
 import { ApiError } from "../utils/api-error.js";
 import { assertCashbookOpen } from "./finance.service.js";
-import { journalEntryIsUnreversed } from "./parcel.service.js";
+import { journalEntryIsUnreversed, nextVersionedJournalSourceId } from "./parcel.service.js";
 
 export type FundingWallet = "CASH" | "KBZ_PAY" | "WAVE_PAY";
 const walletAccounts: Record<FundingWallet, string> = { CASH: "WALLET_CASH", KBZ_PAY: "WALLET_KBZ_PAY", WAVE_PAY: "WALLET_WAVE_PAY" };
@@ -70,13 +70,18 @@ export async function listBatches(actor: BatchActor) {
     take: 200,
   });
   if (!batches.length) return [];
+  const batchIds = batches.map((batch) => batch.id);
   const postedEntries = await prisma.journalEntry.findMany({
-    where: { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: { in: batches.map((batch) => batch.id) } },
+    where: {
+      sourceType: "BATCH_PICKUP_ADVANCE",
+      OR: [{ sourceId: { in: batchIds } }, ...batchIds.map((id) => ({ sourceId: { startsWith: `${id}:` } }))],
+    },
     select: { sourceId: true, id: true },
   });
   const postedBatchIds = new Set<string>();
   for (const entry of postedEntries) {
-    if (entry.sourceId && (await journalEntryIsUnreversed(prisma, entry.id))) postedBatchIds.add(entry.sourceId);
+    if (!entry.sourceId || !(await journalEntryIsUnreversed(prisma, entry.id))) continue;
+    postedBatchIds.add(entry.sourceId.split(":")[0]!);
   }
   return batches.map((batch) => ({ ...batch, advancePosted: postedBatchIds.has(batch.id) }));
 }
@@ -169,18 +174,34 @@ export async function postPickupAdvances(batchId: string, input: { fundingWallet
   if (!batch) throw new ApiError(404, "BATCH_NOT_FOUND", "Batch not found");
   if (!batch.hubId) throw new ApiError(409, "BATCH_HUB_REQUIRED", "Batch must belong to a hub before advances can be posted");
   const batchHubId = batch.hubId;
-  const existing = await prisma.journalEntry.findUnique({ where: { sourceType_sourceId: { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: batch.id } }, select: { id: true } });
-  if (existing && (await journalEntryIsUnreversed(prisma, existing.id))) return { batchId: batch.id, postedCount: 1, alreadyPosted: true };
-  if(batch.advancePaid<=0) throw new ApiError(409,"NO_BATCH_ADVANCE","Batch advance paid must be greater than zero before posting");
+  if (batch.advancePaid <= 0) throw new ApiError(409, "NO_BATCH_ADVANCE", "Batch advance paid must be greater than zero before posting");
+  const sourceId = await nextVersionedJournalSourceId(prisma, "BATCH_PICKUP_ADVANCE", batch.id);
+  if (!sourceId) return { batchId: batch.id, postedCount: 1, alreadyPosted: true };
   try {
     await prisma.$transaction(async (tx) => {
       await assertCashbookOpen(tx, batch.pickupDate, batchHubId);
-      await tx.journalEntry.create({ data: { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: batch.id, hubId: batchHubId, businessDate: batch.pickupDate, description: `Batch advance for ${batch.label}`, lines: { create: buildPickupAdvanceJournalLines(batch.advancePaid, input.fundingWallet) } } });
+      await tx.journalEntry.create({
+        data: {
+          sourceType: "BATCH_PICKUP_ADVANCE",
+          sourceId,
+          hubId: batchHubId,
+          businessDate: batch.pickupDate,
+          description: `Batch advance for ${batch.label}`,
+          lines: { create: buildPickupAdvanceJournalLines(batch.advancePaid, input.fundingWallet) },
+        },
+      });
     });
     return { batchId: batch.id, postedCount: 1, alreadyPosted: false };
   } catch (error) {
     if ((error as { code?: string }).code === "P2002") {
-      return { batchId: batch.id, postedCount: 1, alreadyPosted: true };
+      // Concurrent post of the same versioned key — only treat as already posted if a live entry exists.
+      const collision = await prisma.journalEntry.findUnique({
+        where: { sourceType_sourceId: { sourceType: "BATCH_PICKUP_ADVANCE", sourceId } },
+        select: { id: true },
+      });
+      if (collision && (await journalEntryIsUnreversed(prisma, collision.id))) {
+        return { batchId: batch.id, postedCount: 1, alreadyPosted: true };
+      }
     }
     throw error;
   }

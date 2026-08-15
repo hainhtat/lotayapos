@@ -213,18 +213,22 @@ async function assertOriginalScope(actor: LedgerActor, entry: { sourceType: stri
   if (user.role === "SUPERADMIN") return;
   if (!entry.sourceId) throw new ApiError(403, "FORBIDDEN", "Entry scope cannot be verified");
   if (entry.sourceType === "BATCH_PICKUP_ADVANCE") {
-    const batch = await prisma.batch.findUnique({ where: { id: entry.sourceId }, select: { hubId: true } });
+    const batchId = entry.sourceId.split(":")[0]!;
+    const batch = await prisma.batch.findUnique({ where: { id: batchId }, select: { hubId: true } });
     if (!batch || batch.hubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Entry is outside your hub scope");
     return;
   }
   if (["PICKUP_ADVANCE", "DELIVERY_COLLECTION", "PARTIAL_RETURN_COLLECTION", "OS_PARTIAL_RETURN_ADJUSTMENT", "OS_SHORTFALL", "OS_RETURN_DEDUCTION", "RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_COD"].includes(entry.sourceType)) {
-    const parcelId = ["OS_RETURN_DEDUCTION", "RIDER_COMMISSION"].includes(entry.sourceType) ? entry.sourceId.split(":")[0]! : entry.sourceId;
+    const parcelId = ["OS_RETURN_DEDUCTION", "RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_COD"].includes(entry.sourceType)
+      ? entry.sourceId.split(":")[0]!
+      : entry.sourceId;
     const parcel = await prisma.parcel.findUnique({ where: { id: parcelId }, include: { batch: { select: { hubId: true } } } });
     if (!parcel || parcel.batch.hubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Entry is outside your hub scope");
     return;
   }
   if (["LINKED_RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_FEE", "LINKED_DELIVERY_COLLECTION", "LINKED_RIDER_COMMISSION", "LINKED_OS_SHORTFALL"].includes(entry.sourceType)) {
-    const group = await prisma.parcelLinkGroup.findUnique({ where: { id: entry.sourceId }, include: { parcels: { include: { batch: { select: { hubId: true } } } } } });
+    const groupId = entry.sourceId.split(":")[0]!;
+    const group = await prisma.parcelLinkGroup.findUnique({ where: { id: groupId }, include: { parcels: { include: { batch: { select: { hubId: true } } } } } });
     if (!group || group.parcels.some((parcel) => parcel.batch.hubId !== user.hubId)) throw new ApiError(403, "FORBIDDEN", "Entry is outside your hub scope");
     return;
   }
@@ -277,16 +281,20 @@ export async function reverseJournalEntry(input: { sourceType: string; sourceId:
 async function entryInScope(entry: { sourceType: string; sourceId: string | null }, hubId: string | null): Promise<boolean> {
   if (!hubId || !entry.sourceId) return false;
   if (entry.sourceType === "BATCH_PICKUP_ADVANCE") {
-    const batch = await prisma.batch.findUnique({ where: { id: entry.sourceId }, select: { hubId: true } });
+    const batchId = entry.sourceId.split(":")[0]!;
+    const batch = await prisma.batch.findUnique({ where: { id: batchId }, select: { hubId: true } });
     return batch?.hubId === hubId;
   }
   if (["PICKUP_ADVANCE", "DELIVERY_COLLECTION", "PARTIAL_RETURN_COLLECTION", "OS_PARTIAL_RETURN_ADJUSTMENT", "OS_SHORTFALL", "OS_RETURN_DEDUCTION", "RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_COD"].includes(entry.sourceType)) {
-    const parcelId = ["OS_RETURN_DEDUCTION", "RIDER_COMMISSION"].includes(entry.sourceType) ? entry.sourceId.split(":")[0]! : entry.sourceId;
+    const parcelId = ["OS_RETURN_DEDUCTION", "RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_COD"].includes(entry.sourceType)
+      ? entry.sourceId.split(":")[0]!
+      : entry.sourceId;
     const parcel = await prisma.parcel.findUnique({ where: { id: parcelId }, include: { batch: { select: { hubId: true } } } });
     return parcel?.batch.hubId === hubId;
   }
   if (["LINKED_RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_FEE", "LINKED_DELIVERY_COLLECTION", "LINKED_RIDER_COMMISSION", "LINKED_OS_SHORTFALL"].includes(entry.sourceType)) {
-    const group = await prisma.parcelLinkGroup.findUnique({ where: { id: entry.sourceId }, include: { parcels: { include: { batch: { select: { hubId: true } } } } } });
+    const groupId = entry.sourceId.split(":")[0]!;
+    const group = await prisma.parcelLinkGroup.findUnique({ where: { id: groupId }, include: { parcels: { include: { batch: { select: { hubId: true } } } } } });
     return Boolean(group && group.parcels.every((parcel) => parcel.batch.hubId === hubId));
   }
   if (entry.sourceType === "RIDER_SETTLEMENT") {

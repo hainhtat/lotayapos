@@ -330,6 +330,140 @@ describe("parcel corrections and delivery fee edits", () => {
     expect(batches.find((row) => row.id === batchId)?.advancePosted).toBe(false);
   });
 
+  test("treats reversed pickup advances as unposted and allows Finance to re-post", async () => {
+    const reverseBatchId = `pc-rev-advance-batch-${suffix}`;
+    const reverseParcelId = `pc-rev-advance-parcel-${suffix}`;
+
+    const cleanup = async () => {
+      const advances = await prisma.journalEntry.findMany({
+        where: {
+          OR: [
+            { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: reverseBatchId },
+            { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: { startsWith: `${reverseBatchId}:` } },
+          ],
+        },
+        select: { id: true },
+      });
+      const entryIds = advances.map((entry) => entry.id);
+      await prisma.journalLine.deleteMany({
+        where: {
+          entry: {
+            OR: [
+              { id: { in: entryIds } },
+              { sourceType: "LEDGER_REVERSAL", sourceId: { in: entryIds } },
+            ],
+          },
+        },
+      });
+      await prisma.journalEntry.deleteMany({
+        where: {
+          OR: [
+            { id: { in: entryIds } },
+            { sourceType: "LEDGER_REVERSAL", sourceId: { in: entryIds } },
+          ],
+        },
+      });
+      await prisma.parcel.deleteMany({ where: { id: reverseParcelId } });
+      await prisma.batch.deleteMany({ where: { id: reverseBatchId } });
+    };
+
+    await cleanup();
+    try {
+      await prisma.batch.create({
+        data: {
+          id: reverseBatchId,
+          shopId,
+          hubId,
+          label: `Reversal advance batch ${suffix}`,
+          pickupDate: new Date("2026-08-18T00:00:00.000Z"),
+          advancePaid: 5000,
+        },
+      });
+      await prisma.parcel.create({
+        data: {
+          id: reverseParcelId,
+          batchId: reverseBatchId,
+          trackingNumber: `PC-REV-ADV-${suffix}`,
+          riderId: rider1Id,
+          customerName: "Customer",
+          address: "123 Main Road",
+          codAmount: 100000,
+          deliveryFee: 3000,
+          advanceAmount: 5000,
+          status: "ASSIGNED",
+        },
+      });
+
+      const posted = await request(app)
+        .post(`/api/v1/operations/batches/${reverseBatchId}/pickup-advances`)
+        .set("Authorization", `Bearer ${financeToken()}`)
+        .send({ fundingWallet: "CASH" });
+      expect(posted.status).toBe(200);
+      expect(posted.body.data).toMatchObject({ alreadyPosted: false, postedCount: 1 });
+
+      const listedPosted = await request(app)
+        .get("/api/v1/operations/batches")
+        .set("Authorization", `Bearer ${financeToken()}`);
+      expect(listedPosted.body.data.find((row: { id: string }) => row.id === reverseBatchId)?.advancePosted).toBe(true);
+
+      const reversal = await request(app)
+        .post("/api/v1/finance/ledger/reversals")
+        .set("Authorization", `Bearer ${financeToken()}`)
+        .send({
+          sourceType: "BATCH_PICKUP_ADVANCE",
+          sourceId: reverseBatchId,
+          businessDate: "2026-08-18",
+          reason: "Advance posted to wrong wallet",
+        });
+      expect(reversal.status).toBe(201);
+
+      const listedAfterReversal = await request(app)
+        .get("/api/v1/operations/batches")
+        .set("Authorization", `Bearer ${financeToken()}`);
+      expect(listedAfterReversal.body.data.find((row: { id: string }) => row.id === reverseBatchId)?.advancePosted).toBe(false);
+
+      // After reversal, Finance must be able to re-post (versioned sourceId; unique key cannot reuse batchId alone).
+      const repost = await request(app)
+        .post(`/api/v1/operations/batches/${reverseBatchId}/pickup-advances`)
+        .set("Authorization", `Bearer ${financeToken()}`)
+        .send({ fundingWallet: "KBZ_PAY" });
+      expect(repost.status).toBe(200);
+      expect(repost.body.data).toMatchObject({ alreadyPosted: false, postedCount: 1 });
+
+      const advances = await prisma.journalEntry.findMany({
+        where: {
+          OR: [
+            { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: reverseBatchId },
+            { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: { startsWith: `${reverseBatchId}:` } },
+          ],
+        },
+        include: { lines: true },
+        orderBy: { createdAt: "asc" },
+      });
+      const liveAdvances = [];
+      for (const entry of advances) {
+        const rev = await prisma.journalEntry.findUnique({
+          where: { sourceType_sourceId: { sourceType: "LEDGER_REVERSAL", sourceId: entry.id } },
+        });
+        if (!rev) liveAdvances.push(entry);
+      }
+      expect(liveAdvances).toHaveLength(1);
+      expect(liveAdvances[0]!.lines).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ account: "OS_ADVANCE_RECEIVABLE", debit: 5000, credit: 0 }),
+          expect.objectContaining({ account: "WALLET_KBZ_PAY", debit: 0, credit: 5000 }),
+        ]),
+      );
+
+      const listedReposted = await request(app)
+        .get("/api/v1/operations/batches")
+        .set("Authorization", `Bearer ${financeToken()}`);
+      expect(listedReposted.body.data.find((row: { id: string }) => row.id === reverseBatchId)?.advancePosted).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
   test("blocks rider correction when finance collection is already posted", async () => {
     await deliverParcel(moneyPostedParcelId);
 

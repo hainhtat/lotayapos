@@ -64,24 +64,47 @@ export async function findUnreversedMoneyPostedEntry(
 
 /** Allocate a free RIDER_COMMISSION sourceId so re-delivery after reversal can post again. */
 export async function nextRiderCommissionSourceId(tx: Prisma.TransactionClient, parcelId: string) {
-  const base = await tx.journalEntry.findUnique({
-    where: { sourceType_sourceId: { sourceType: "RIDER_COMMISSION", sourceId: parcelId } },
-    select: { id: true },
-  });
-  if (!base) return parcelId;
-  if (await journalEntryIsUnreversed(tx, base.id)) return null;
-  return `${parcelId}:${randomUUID()}`;
+  return nextVersionedJournalSourceId(tx, "RIDER_COMMISSION", parcelId);
 }
 
 /** Allocate a free RIDER_RECEIVABLE_RECOGNITION sourceId after reversal. */
 export async function nextRiderReceivableSourceId(tx: Prisma.TransactionClient, parcelId: string) {
+  return nextVersionedJournalSourceId(tx, "RIDER_RECEIVABLE_RECOGNITION", parcelId);
+}
+
+/** Allocate a free journal sourceId: base id if unused; null if live; versioned after reversal. */
+export async function nextVersionedJournalSourceId(
+  tx: Prisma.TransactionClient,
+  sourceType: string,
+  baseId: string,
+) {
   const base = await tx.journalEntry.findUnique({
-    where: { sourceType_sourceId: { sourceType: "RIDER_RECEIVABLE_RECOGNITION", sourceId: parcelId } },
+    where: { sourceType_sourceId: { sourceType, sourceId: baseId } },
     select: { id: true },
   });
-  if (!base) return parcelId;
+  if (!base) {
+    const versioned = await tx.journalEntry.findMany({
+      where: { sourceType, sourceId: { startsWith: `${baseId}:` } },
+      select: { id: true },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    });
+    for (const entry of versioned) {
+      if (await journalEntryIsUnreversed(tx, entry.id)) return null;
+    }
+    return baseId;
+  }
   if (await journalEntryIsUnreversed(tx, base.id)) return null;
-  return `${parcelId}:${randomUUID()}`;
+  const versioned = await tx.journalEntry.findMany({
+    where: { sourceType, sourceId: { startsWith: `${baseId}:` } },
+    select: { id: true },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+  });
+  for (const entry of versioned) {
+    if (await journalEntryIsUnreversed(tx, entry.id)) return null;
+  }
+  return `${baseId}:${randomUUID()}`;
 }
 
 async function findActiveReceivableRecognition(tx: Prisma.TransactionClient, parcelId: string) {
@@ -473,10 +496,20 @@ export async function updateParcel(
   if (changesDeliveryAttributes && !editableStatuses.has(parcel.status)) throw new ApiError(409, "PARCEL_NOT_EDITABLE", "COD, delivery fee, township, and zone may only be edited for Created, Picked up, or Assigned parcels");
   if (changesDeliveryAttributes && parcel.linkGroupId) throw new ApiError(409, "PARCEL_LINKED", "Unlink the parcel before editing delivery attributes");
   if (input.codAmount !== undefined || input.townshipId !== undefined || input.deliveryFee !== undefined) {
-    const advancePosted = await prisma.journalEntry.findUnique({
-      where: { sourceType_sourceId: { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: parcel.batchId } },
+    const advanceEntries = await prisma.journalEntry.findMany({
+      where: {
+        sourceType: "BATCH_PICKUP_ADVANCE",
+        OR: [{ sourceId: parcel.batchId }, { sourceId: { startsWith: `${parcel.batchId}:` } }],
+      },
       select: { id: true },
     });
+    let advancePosted = false;
+    for (const entry of advanceEntries) {
+      if (await journalEntryIsUnreversed(prisma, entry.id)) {
+        advancePosted = true;
+        break;
+      }
+    }
     if (advancePosted) {
       if (input.codAmount !== undefined) throw new ApiError(409, "ADVANCE_POSTED", "COD cannot be edited after the batch pickup advance is posted");
       if (input.townshipId !== undefined) throw new ApiError(409, "ADVANCE_POSTED", "Township cannot be edited after the batch pickup advance is posted");
@@ -632,8 +665,19 @@ export async function updateStatus(id: string, toStatus: string, actor: Actor, r
     }
     if (["DELIVERED", "PARTIAL", "FAILED", "REJECTED"].includes(toStatus) && parcel.riderId) {
       const commissionAmount = toStatus === "DELIVERED" && !parcel.linkGroupId ? calculateCommissionAmount(parcel.deliveryFee ?? 0, commissionRateBps) : 0;
-      let completed = await tx.deliveryWay.updateMany({ where: { parcelId: id, riderId: parcel.riderId, completedAt: null }, data: { commissionAmount, outcome: toStatus, completedAt: new Date() } });
-      if (completed.count !== 1 && overrideTransition) {
+      // Prefer completing an open way. If none exists (legacy/override jump to OUT_FOR_DELIVERY,
+      // rider mismatch, etc.), create a completed way so ERP can record the outcome freely.
+      let completed = await tx.deliveryWay.updateMany({
+        where: { parcelId: id, riderId: parcel.riderId, completedAt: null },
+        data: { commissionAmount, outcome: toStatus, completedAt: new Date() },
+      });
+      if (completed.count === 0) {
+        completed = await tx.deliveryWay.updateMany({
+          where: { parcelId: id, completedAt: null },
+          data: { riderId: parcel.riderId, commissionRate: commissionRateBps, commissionAmount, outcome: toStatus, completedAt: new Date() },
+        });
+      }
+      if (completed.count === 0) {
         await tx.deliveryWay.create({
           data: {
             parcelId: id,
@@ -646,7 +690,7 @@ export async function updateStatus(id: string, toStatus: string, actor: Actor, r
         });
         completed = { count: 1 };
       }
-      if (completed.count !== 1) throw new ApiError(409, "DELIVERY_WAY_NOT_STARTED", "Start delivery before recording an outcome");
+      if (completed.count !== 1) throw new ApiError(409, "DELIVERY_WAY_CONFLICT", "Multiple open delivery ways; refresh and retry");
       if (toStatus === "DELIVERED" && !parcel.linkGroupId && commissionAmount > 0) {
         await assertCashbookOpen(tx, businessDate, parcelHubId);
         const commissionSourceId = await nextRiderCommissionSourceId(tx, parcel.id);
@@ -664,13 +708,39 @@ export async function updateStatus(id: string, toStatus: string, actor: Actor, r
         }
       }
       if (toStatus === "DELIVERED" && !parcel.linkGroupId) {
-        await recognizeRiderReceivable(tx, { sourceType: "RIDER_RECEIVABLE_RECOGNITION", sourceId: parcel.id, riderId: parcel.riderId, hubId: parcelHubId, businessDate, codAmount: parcel.codAmount, deliveryFee: parcel.deliveryFee ?? 0, commissionAmount, description: `Rider receivable for ${parcel.trackingNumber}` });
+        const receivableSourceId = await nextRiderReceivableSourceId(tx, parcel.id);
+        if (receivableSourceId) {
+          await recognizeRiderReceivable(tx, {
+            sourceType: "RIDER_RECEIVABLE_RECOGNITION",
+            sourceId: receivableSourceId,
+            riderId: parcel.riderId,
+            hubId: parcelHubId,
+            businessDate,
+            codAmount: parcel.codAmount,
+            deliveryFee: parcel.deliveryFee ?? 0,
+            commissionAmount,
+            description: `Rider receivable for ${parcel.trackingNumber}`,
+          });
+        }
       }
       if (parcel.linkGroupId) {
         // COD belongs to the member's own delivery day. Group fee and commission
         // are intentionally deferred until the final member completes.
         if (toStatus === "DELIVERED") {
-          await recognizeRiderReceivable(tx, { sourceType: "LINKED_RIDER_RECEIVABLE_COD", sourceId: parcel.id, riderId: parcel.riderId, hubId: parcelHubId, businessDate, codAmount: parcel.codAmount, deliveryFee: 0, commissionAmount: 0, description: `Linked parcel COD receivable for ${parcel.trackingNumber}` });
+          const linkedCodSourceId = await nextVersionedJournalSourceId(tx, "LINKED_RIDER_RECEIVABLE_COD", parcel.id);
+          if (linkedCodSourceId) {
+            await recognizeRiderReceivable(tx, {
+              sourceType: "LINKED_RIDER_RECEIVABLE_COD",
+              sourceId: linkedCodSourceId,
+              riderId: parcel.riderId,
+              hubId: parcelHubId,
+              businessDate,
+              codAmount: parcel.codAmount,
+              deliveryFee: 0,
+              commissionAmount: 0,
+              description: `Linked parcel COD receivable for ${parcel.trackingNumber}`,
+            });
+          }
         }
         const group = await tx.parcelLinkGroup.findUnique({ where: { id: parcel.linkGroupId }, include: { parcels: { select: { id: true, status: true, codAmount: true } } } });
         if (group && group.parcels.every((linkedParcel) => linkedParcel.id === id || linkedParcel.status === "DELIVERED")) {
@@ -679,10 +749,34 @@ export async function updateStatus(id: string, toStatus: string, actor: Actor, r
           const baseAllocation = Math.floor(totalCommission / ways.length);
           for (const [index, way] of ways.entries()) await tx.deliveryWay.update({ where: { id: way.id }, data: { commissionAmount: baseAllocation + (index < totalCommission % ways.length ? 1 : 0) } });
           if (totalCommission > 0) {
-            const priorCommission = await tx.journalEntry.findUnique({ where: { sourceType_sourceId: { sourceType: "LINKED_RIDER_COMMISSION", sourceId: group.id } } });
-            if (!priorCommission) await tx.journalEntry.create({ data: { sourceType: "LINKED_RIDER_COMMISSION", sourceId: group.id, hubId: parcelHubId, businessDate, description: `Linked rider commission for ${group.id}`, lines: { create: buildRiderCommissionLines(totalCommission) } } });
+            const linkedCommissionSourceId = await nextVersionedJournalSourceId(tx, "LINKED_RIDER_COMMISSION", group.id);
+            if (linkedCommissionSourceId) {
+              await tx.journalEntry.create({
+                data: {
+                  sourceType: "LINKED_RIDER_COMMISSION",
+                  sourceId: linkedCommissionSourceId,
+                  hubId: parcelHubId,
+                  businessDate,
+                  description: `Linked rider commission for ${group.id}`,
+                  lines: { create: buildRiderCommissionLines(totalCommission) },
+                },
+              });
+            }
           }
-          await recognizeRiderReceivable(tx, { sourceType: "LINKED_RIDER_RECEIVABLE_FEE", sourceId: group.id, riderId: parcel.riderId, hubId: parcelHubId, businessDate, codAmount: 0, deliveryFee: group.totalDeliveryFee, commissionAmount: totalCommission, description: `Linked group fee receivable for ${group.id}` });
+          const linkedFeeSourceId = await nextVersionedJournalSourceId(tx, "LINKED_RIDER_RECEIVABLE_FEE", group.id);
+          if (linkedFeeSourceId) {
+            await recognizeRiderReceivable(tx, {
+              sourceType: "LINKED_RIDER_RECEIVABLE_FEE",
+              sourceId: linkedFeeSourceId,
+              riderId: parcel.riderId,
+              hubId: parcelHubId,
+              businessDate,
+              codAmount: 0,
+              deliveryFee: group.totalDeliveryFee,
+              commissionAmount: totalCommission,
+              description: `Linked group fee receivable for ${group.id}`,
+            });
+          }
         }
       }
     }
