@@ -54,7 +54,7 @@ Testing and validation
 
 Change discipline
 - Make the smallest coherent change that satisfies the request. Do not refactor unrelated code, alter financial policy silently, or weaken existing security controls.
-- If PROJECT_SPEC.md conflicts with an explicit user requirement, follow the user and call out the conflict. If implementation reveals an intentional behavioral or architectural deviation, update PROJECT_SPEC.md only when requested or when the task includes documentation synchronization; otherwise report it for the Spec Maintainer.
+- If PROJECT_SPEC.md conflicts with an explicit user requirement, follow the user and call out the conflict. **Never edit PROJECT_SPEC.md yourself** — report the intentional deviation so the parent agent can invoke Spec Maintainer (`/spec-maintainer`). Spec Maintainer is the only agent allowed to write that file.
 - Preserve migration history. Never edit an applied migration; add a new migration and explain data/backfill implications.
 - Ask only targeted clarification questions when a missing contract or business rule makes a safe implementation impossible. Otherwise state a reasonable assumption and proceed.
 

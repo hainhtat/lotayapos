@@ -661,23 +661,62 @@ export async function updateStatus(id: string, toStatus: string, actor: Actor, r
       });
     }
     if (toStatus === "OUT_FOR_DELIVERY" && parcel.riderId) {
-      await tx.deliveryWay.create({ data: { parcelId: id, riderId: parcel.riderId, commissionRate: commissionRateBps } });
+      const openWays = await tx.deliveryWay.findMany({
+        where: { parcelId: id, completedAt: null },
+        orderBy: { startedAt: "asc" },
+        select: { id: true, riderId: true },
+      });
+      let keepId = openWays.find((way) => way.riderId === parcel.riderId)?.id ?? openWays[0]?.id;
+      if (!keepId) {
+        const created = await tx.deliveryWay.create({
+          data: { parcelId: id, riderId: parcel.riderId, commissionRate: commissionRateBps },
+          select: { id: true },
+        });
+        keepId = created.id;
+      } else {
+        await tx.deliveryWay.update({
+          where: { id: keepId },
+          data: { riderId: parcel.riderId, commissionRate: commissionRateBps },
+        });
+        const extraIds = openWays.filter((way) => way.id !== keepId).map((way) => way.id);
+        if (extraIds.length) {
+          await tx.deliveryWay.updateMany({
+            where: { id: { in: extraIds }, completedAt: null },
+            data: { completedAt: new Date(), outcome: "SUPERSEDED" },
+          });
+        }
+      }
     }
     if (["DELIVERED", "PARTIAL", "FAILED", "REJECTED"].includes(toStatus) && parcel.riderId) {
       const commissionAmount = toStatus === "DELIVERED" && !parcel.linkGroupId ? calculateCommissionAmount(parcel.deliveryFee ?? 0, commissionRateBps) : 0;
-      // Prefer completing an open way. If none exists (legacy/override jump to OUT_FOR_DELIVERY,
-      // rider mismatch, etc.), create a completed way so ERP can record the outcome freely.
-      let completed = await tx.deliveryWay.updateMany({
-        where: { parcelId: id, riderId: parcel.riderId, completedAt: null },
-        data: { commissionAmount, outcome: toStatus, completedAt: new Date() },
+      // Complete exactly one open way (prefer current rider, else oldest). Supersede extras.
+      // Create a completed way when none exists (legacy / missing start).
+      const openWays = await tx.deliveryWay.findMany({
+        where: { parcelId: id, completedAt: null },
+        orderBy: { startedAt: "asc" },
+        select: { id: true, riderId: true },
       });
-      if (completed.count === 0) {
-        completed = await tx.deliveryWay.updateMany({
-          where: { parcelId: id, completedAt: null },
-          data: { riderId: parcel.riderId, commissionRate: commissionRateBps, commissionAmount, outcome: toStatus, completedAt: new Date() },
+      const primaryWay =
+        openWays.find((way) => way.riderId === parcel.riderId) ?? openWays[0] ?? null;
+      if (primaryWay) {
+        await tx.deliveryWay.update({
+          where: { id: primaryWay.id },
+          data: {
+            riderId: parcel.riderId,
+            commissionRate: commissionRateBps,
+            commissionAmount,
+            outcome: toStatus,
+            completedAt: new Date(),
+          },
         });
-      }
-      if (completed.count === 0) {
+        const extraIds = openWays.filter((way) => way.id !== primaryWay.id).map((way) => way.id);
+        if (extraIds.length) {
+          await tx.deliveryWay.updateMany({
+            where: { id: { in: extraIds }, completedAt: null },
+            data: { completedAt: new Date(), outcome: "SUPERSEDED" },
+          });
+        }
+      } else {
         await tx.deliveryWay.create({
           data: {
             parcelId: id,
@@ -688,9 +727,7 @@ export async function updateStatus(id: string, toStatus: string, actor: Actor, r
             completedAt: new Date(),
           },
         });
-        completed = { count: 1 };
       }
-      if (completed.count !== 1) throw new ApiError(409, "DELIVERY_WAY_CONFLICT", "Multiple open delivery ways; refresh and retry");
       if (toStatus === "DELIVERED" && !parcel.linkGroupId && commissionAmount > 0) {
         await assertCashbookOpen(tx, businessDate, parcelHubId);
         const commissionSourceId = await nextRiderCommissionSourceId(tx, parcel.id);

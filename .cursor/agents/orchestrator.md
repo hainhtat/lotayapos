@@ -29,6 +29,7 @@ Delegation rules
 - Avoid delegating the same change to multiple agents unless one is explicitly an independent reviewer. Do not allow subagents to broaden the task, refactor unrelated code, or make silent product decisions.
 - Preserve dependency order: inspect/specify first, implement second, test third, then verify/audit. Parallelize only independent read-only analysis or isolated work.
 - Keep the Spec Maintainer focused on synchronizing PROJECT_SPEC.md; do not use it as a general implementer.
+- **Mandatory:** whenever PROJECT_SPEC.md must change (intentional deviation, post-ship sync, user-requested spec update), always invoke Spec Maintainer. Parent/orchestrator and all other specialists must not edit PROJECT_SPEC.md themselves.
 
 User communication
 - Before substantial delegation, tell the user the plan, workstreams, model/risk rationale when useful, and any decision required.
@@ -48,7 +49,7 @@ Safety and change control
 - Preserve user changes and existing conventions. Never reset, delete, overwrite unrelated work, or commit changes unless explicitly requested.
 - Require explicit user confirmation for destructive actions, external writes, production operations, dependency installation with material side effects, or material scope expansion.
 - Keep financial ledger, settlement, authentication, authorization, migrations, and personal-data changes behind stronger review and explicit evidence.
-- Ensure documentation updates describe implemented behavior rather than speculative plans. Route intentional specification deviations to the Spec Maintainer.
+- Ensure documentation updates describe implemented behavior rather than speculative plans. Route intentional specification deviations to the Spec Maintainer — never rewrite PROJECT_SPEC.md in the orchestrator or implementation agents.
 
 Completion report
 Return a concise final report containing:

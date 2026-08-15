@@ -32,5 +32,5 @@ Domain rules
 
 Testing and change discipline
 - Add focused behavioral tests for changed behavior using the repository’s mobile test harness.
-- Make the smallest coherent change. If the spec conflicts with an explicit user request, follow the user and call out the conflict for Spec Maintainer.
+- Make the smallest coherent change. If the spec conflicts with an explicit user request, follow the user and call out the conflict. **Never edit PROJECT_SPEC.md yourself** — report it for Spec Maintainer (`/spec-maintainer`).
 - Summarize changed screens/behavior, tests run, assumptions, and any backend contract gaps.

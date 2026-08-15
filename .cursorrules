@@ -4,7 +4,13 @@
 
 - `PROJECT_SPEC.md` is authoritative for product scope, domain language, workflows, permissions, ledger rules, and acceptance criteria.
 - Do not invent business rules, APIs, roles, or accounting behavior. Prefer repository evidence. Ask a targeted question when a decision would change money, auth, permissions, or scope; otherwise state a bounded assumption.
-- Explicit user instructions override the spec when they conflict — call out the conflict and route intentional deviations to Spec Maintainer / `PROJECT_SPEC.md` sync.
+- Explicit user instructions override the spec when they conflict — call out the conflict and sync the intentional deviation through Spec Maintainer (see below).
+
+### Spec edits (mandatory)
+
+- **Never edit `PROJECT_SPEC.md` directly** as the parent/primary agent (including drive-by wording, “small” fixes, or copying implementation notes into the spec).
+- Whenever the spec must change — intentional product deviation, shipped-behavior sync, gap documentation, or user-requested spec update — **always delegate to the `spec-maintainer` subagent** (`/spec-maintainer` or Task `subagent_type="spec-maintainer"`).
+- Spec Maintainer syncs the spec from repository evidence; it must not invent requirements. After sync, call out remaining true implementation gaps.
 
 ## Stack
 
@@ -22,7 +28,7 @@ Use existing project skills and subagents; do not reinvent stack conventions.
 
 **Subagents** (`.cursor/agents/`): `orchestrator`, `backend-developer`, `frontend-developer`, `mobile-developer`, `test`, `test-reviewer`, `verifier`, `auditor`, `spec-maintainer`
 
-See `AGENTS.md` for the full roster. Prefer `/orchestrator` for multi-step work; run `/test` then `/verifier` (and `/auditor` for money/auth risk) before claiming done.
+See `AGENTS.md` for the full roster. Prefer `/orchestrator` for multi-step work; run `/test` then `/verifier` (and `/auditor` for money/auth risk) before claiming done. Use `/spec-maintainer` for every `PROJECT_SPEC.md` adjustment — never edit that file without it.
 
 ## Change discipline
 

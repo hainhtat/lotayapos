@@ -13,6 +13,7 @@ describe("OUT_FOR_DELIVERY to DELIVERED without open delivery way", () => {
   const batchId = `ofd-batch-${suffix}`;
   const parcelMissingWayId = `ofd-parcel-missing-${suffix}`;
   const parcelMismatchWayId = `ofd-parcel-mismatch-${suffix}`;
+  const parcelConflictWayId = `ofd-parcel-conflict-${suffix}`;
   const otherRiderId = `ofd-other-rider-${suffix}`;
   const otherRiderUserId = `ofd-other-rider-user-${suffix}`;
 
@@ -101,15 +102,43 @@ describe("OUT_FOR_DELIVERY to DELIVERED without open delivery way", () => {
     await prisma.deliveryWay.create({
       data: { parcelId: parcelMismatchWayId, riderId: otherRiderId, commissionRate: 4000 },
     });
+    await prisma.parcel.create({
+      data: {
+        id: parcelConflictWayId,
+        batchId,
+        trackingNumber: `OFD-CONFLICT-${suffix}`,
+        customerName: "Customer Three",
+        address: "3 Road",
+        codAmount: 9000,
+        deliveryFee: 2000,
+        advanceAmount: 0,
+        status: "OUT_FOR_DELIVERY",
+        riderId,
+      },
+    });
+    // Duplicate open ways (bug from repeated OFD) must not block delivery.
+    await prisma.deliveryWay.create({
+      data: { parcelId: parcelConflictWayId, riderId, commissionRate: 4000, startedAt: new Date("2026-08-13T08:00:00.000Z") },
+    });
+    await prisma.deliveryWay.create({
+      data: { parcelId: parcelConflictWayId, riderId, commissionRate: 4000, startedAt: new Date("2026-08-13T09:00:00.000Z") },
+    });
   });
 
   afterAll(async () => {
-    const parcelIds = [parcelMissingWayId, parcelMismatchWayId];
+    const parcelIds = [parcelMissingWayId, parcelMismatchWayId, parcelConflictWayId];
     await prisma.alert.deleteMany({ where: { parcelId: { in: parcelIds } } });
     await prisma.statusHistory.deleteMany({ where: { parcelId: { in: parcelIds } } });
     await prisma.deliveryWay.deleteMany({ where: { parcelId: { in: parcelIds } } });
     await prisma.riderReceivableRecognition.deleteMany({
-      where: { OR: [{ sourceId: { in: parcelIds } }, { sourceId: { startsWith: `${parcelMissingWayId}:` } }, { sourceId: { startsWith: `${parcelMismatchWayId}:` } }] },
+      where: {
+        OR: [
+          { sourceId: { in: parcelIds } },
+          { sourceId: { startsWith: `${parcelMissingWayId}:` } },
+          { sourceId: { startsWith: `${parcelMismatchWayId}:` } },
+          { sourceId: { startsWith: `${parcelConflictWayId}:` } },
+        ],
+      },
     });
     const entries = await prisma.journalEntry.findMany({
       where: {
@@ -117,6 +146,7 @@ describe("OUT_FOR_DELIVERY to DELIVERED without open delivery way", () => {
           { sourceId: { in: parcelIds } },
           { sourceId: { startsWith: `${parcelMissingWayId}:` } },
           { sourceId: { startsWith: `${parcelMismatchWayId}:` } },
+          { sourceId: { startsWith: `${parcelConflictWayId}:` } },
           { hubId },
         ],
       },
@@ -205,5 +235,33 @@ describe("OUT_FOR_DELIVERY to DELIVERED without open delivery way", () => {
       where: { sourceType_sourceId: { sourceType: "RIDER_RECEIVABLE_RECOGNITION", sourceId: parcelMismatchWayId } },
     });
     expect(recognition).toMatchObject({ riderId, commissionAmount: 800 });
+  });
+
+  test("allows DELIVERED when multiple open delivery ways exist", async () => {
+    const response = await request(app)
+      .post(`/api/v1/parcels/${parcelConflictWayId}/status`)
+      .set("Authorization", `Bearer ${dispatcherToken()}`)
+      .send({ status: "DELIVERED" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.status).toBe("DELIVERED");
+
+    const ways = await prisma.deliveryWay.findMany({
+      where: { parcelId: parcelConflictWayId },
+      orderBy: { startedAt: "asc" },
+    });
+    expect(ways).toHaveLength(2);
+    expect(ways.filter((way) => way.completedAt === null)).toHaveLength(0);
+    const delivered = ways.filter((way) => way.outcome === "DELIVERED");
+    const superseded = ways.filter((way) => way.outcome === "SUPERSEDED");
+    expect(delivered).toHaveLength(1);
+    expect(superseded).toHaveLength(1);
+    expect(delivered[0]?.riderId).toBe(riderId);
+    expect(delivered[0]?.commissionAmount).toBe(800);
+
+    const commission = await prisma.journalEntry.findUnique({
+      where: { sourceType_sourceId: { sourceType: "RIDER_COMMISSION", sourceId: parcelConflictWayId } },
+    });
+    expect(commission).toBeTruthy();
   });
 });
