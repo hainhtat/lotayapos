@@ -37,6 +37,9 @@ export async function findUnreversedMoneyPostedEntry(
   tx: Prisma.TransactionClient,
   input: { parcelId: string; linkGroupId?: string | null },
 ) {
+  const groupScopedLinkedTypes = LINKED_MONEY_POSTED_SOURCE_TYPES.filter(
+    (sourceType) => sourceType !== "LINKED_RIDER_RECEIVABLE_COD",
+  );
   const candidates = await tx.journalEntry.findMany({
     where: {
       OR: [
@@ -44,11 +47,19 @@ export async function findUnreversedMoneyPostedEntry(
           sourceType: { in: [...MONEY_POSTED_SOURCE_TYPES] },
           OR: [{ sourceId: input.parcelId }, { sourceId: { startsWith: `${input.parcelId}:` } }],
         },
+        {
+          // Linked COD is keyed by parcel id (including versioned `:uuid` suffixes).
+          sourceType: "LINKED_RIDER_RECEIVABLE_COD",
+          OR: [{ sourceId: input.parcelId }, { sourceId: { startsWith: `${input.parcelId}:` } }],
+        },
         ...(input.linkGroupId
           ? [
               {
-                sourceType: { in: [...LINKED_MONEY_POSTED_SOURCE_TYPES] },
-                sourceId: input.linkGroupId,
+                sourceType: { in: [...groupScopedLinkedTypes] },
+                OR: [
+                  { sourceId: input.linkGroupId },
+                  { sourceId: { startsWith: `${input.linkGroupId}:` } },
+                ],
               },
             ]
           : []),
@@ -78,33 +89,18 @@ export async function nextVersionedJournalSourceId(
   sourceType: string,
   baseId: string,
 ) {
-  const base = await tx.journalEntry.findUnique({
-    where: { sourceType_sourceId: { sourceType, sourceId: baseId } },
-    select: { id: true },
-  });
-  if (!base) {
-    const versioned = await tx.journalEntry.findMany({
-      where: { sourceType, sourceId: { startsWith: `${baseId}:` } },
-      select: { id: true },
-      orderBy: { createdAt: "desc" },
-      take: 20,
-    });
-    for (const entry of versioned) {
-      if (await journalEntryIsUnreversed(tx, entry.id)) return null;
-    }
-    return baseId;
-  }
-  if (await journalEntryIsUnreversed(tx, base.id)) return null;
-  const versioned = await tx.journalEntry.findMany({
-    where: { sourceType, sourceId: { startsWith: `${baseId}:` } },
-    select: { id: true },
+  const candidates = await tx.journalEntry.findMany({
+    where: {
+      sourceType,
+      OR: [{ sourceId: baseId }, { sourceId: { startsWith: `${baseId}:` } }],
+    },
+    select: { id: true, sourceId: true },
     orderBy: { createdAt: "desc" },
-    take: 20,
   });
-  for (const entry of versioned) {
+  for (const entry of candidates) {
     if (await journalEntryIsUnreversed(tx, entry.id)) return null;
   }
-  return `${baseId}:${randomUUID()}`;
+  return candidates.some((entry) => entry.sourceId === baseId) ? `${baseId}:${randomUUID()}` : baseId;
 }
 
 async function findActiveReceivableRecognition(tx: Prisma.TransactionClient, parcelId: string) {
@@ -340,9 +336,17 @@ export async function correctDeliveredRider(id: string, input: { riderId: string
   if (newRider.hubId !== hubId) throw new ApiError(409, "HUB_MISMATCH", "Parcel and rider must belong to the same hub");
 
   return serializableTransaction(async (tx) => {
-    const collection = await tx.journalEntry.findUnique({ where: { sourceType_sourceId: { sourceType: "DELIVERY_COLLECTION", sourceId: id } } });
-    if (collection && await journalEntryIsUnreversed(tx, collection.id)) {
-      throw new ApiError(409, "MONEY_POSTED", "Finance collection is already posted; reverse it before correcting the rider");
+    const collections = await tx.journalEntry.findMany({
+      where: {
+        sourceType: "DELIVERY_COLLECTION",
+        OR: [{ sourceId: id }, { sourceId: { startsWith: `${id}:` } }],
+      },
+      select: { id: true },
+    });
+    for (const entry of collections) {
+      if (await journalEntryIsUnreversed(tx, entry.id)) {
+        throw new ApiError(409, "MONEY_POSTED", "Finance collection is already posted; reverse it before correcting the rider");
+      }
     }
 
     const activeReceivable = await findActiveReceivableRecognition(tx, id);
@@ -396,10 +400,17 @@ export async function correctDeliveredRider(id: string, input: { riderId: string
     const commissionRateBps = resolveCommissionRateBps({ payModel: newRider.payModel, commissionRateBps: newRider.commissionRateBps });
     const commissionAmount = calculateCommissionAmount(parcel.deliveryFee ?? 0, commissionRateBps);
 
-    await tx.deliveryWay.updateMany({
+    const deliveredWay = await tx.deliveryWay.findFirst({
       where: { parcelId: id, outcome: "DELIVERED" },
-      data: { riderId: newRider.id, commissionRate: commissionRateBps, commissionAmount },
+      orderBy: [{ completedAt: "desc" }, { startedAt: "desc" }],
+      select: { id: true },
     });
+    if (deliveredWay) {
+      await tx.deliveryWay.update({
+        where: { id: deliveredWay.id },
+        data: { riderId: newRider.id, commissionRate: commissionRateBps, commissionAmount },
+      });
+    }
 
     if (commissionAmount > 0) {
       await assertCashbookOpen(tx, businessDate, hubId);
@@ -616,12 +627,12 @@ export async function updateStatus(id: string, toStatus: string, actor: Actor, r
       const collectionLines = buildPartialReturnCollectionLines(partialReturn.actualCodCollected, collectionWallet!);
       if (collectionLines.length > 0) {
         await assertCashbookOpen(tx, businessDate, parcelHubId);
-        const existingCollection = await tx.journalEntry.findUnique({ where: { sourceType_sourceId: { sourceType: "PARTIAL_RETURN_COLLECTION", sourceId: id } } });
-        if (!existingCollection) {
+        const collectionSourceId = await nextVersionedJournalSourceId(tx, "PARTIAL_RETURN_COLLECTION", id);
+        if (collectionSourceId) {
           await tx.journalEntry.create({
             data: {
               sourceType: "PARTIAL_RETURN_COLLECTION",
-              sourceId: id,
+              sourceId: collectionSourceId,
               hubId: parcelHubId,
               businessDate,
               description: `Partial return collection for ${parcel.trackingNumber}`,
@@ -632,12 +643,12 @@ export async function updateStatus(id: string, toStatus: string, actor: Actor, r
       }
       if (partialReturn.settlementOffset > 0) {
         await assertCashbookOpen(tx, businessDate, parcelHubId);
-        const existingAdjustment = await tx.journalEntry.findUnique({ where: { sourceType_sourceId: { sourceType: "OS_PARTIAL_RETURN_ADJUSTMENT", sourceId: id } } });
-        if (!existingAdjustment) {
+        const adjustmentSourceId = await nextVersionedJournalSourceId(tx, "OS_PARTIAL_RETURN_ADJUSTMENT", id);
+        if (adjustmentSourceId) {
           await tx.journalEntry.create({
             data: {
               sourceType: "OS_PARTIAL_RETURN_ADJUSTMENT",
-              sourceId: id,
+              sourceId: adjustmentSourceId,
               hubId: parcelHubId,
               businessDate,
               description: `Partial return adjustment for ${parcel.trackingNumber}`,
@@ -781,7 +792,19 @@ export async function updateStatus(id: string, toStatus: string, actor: Actor, r
         }
         const group = await tx.parcelLinkGroup.findUnique({ where: { id: parcel.linkGroupId }, include: { parcels: { select: { id: true, status: true, codAmount: true } } } });
         if (group && group.parcels.every((linkedParcel) => linkedParcel.id === id || linkedParcel.status === "DELIVERED")) {
-          const ways = await tx.deliveryWay.findMany({ where: { parcelId: { in: group.parcels.map((linkedParcel) => linkedParcel.id) }, outcome: "DELIVERED" }, orderBy: { parcelId: "asc" } });
+          // One canonical DELIVERED way per parcel (latest completion) so allocation is not inflated.
+          const deliveredWays = await tx.deliveryWay.findMany({
+            where: { parcelId: { in: group.parcels.map((linkedParcel) => linkedParcel.id) }, outcome: "DELIVERED" },
+            orderBy: [{ completedAt: "desc" }, { startedAt: "desc" }],
+            select: { id: true, parcelId: true },
+          });
+          const ways = [...deliveredWays.reduce((byParcel, way) => {
+            if (!byParcel.has(way.parcelId)) byParcel.set(way.parcelId, way);
+            return byParcel;
+          }, new Map<string, { id: string; parcelId: string }>()).values()].sort((a, b) => a.parcelId.localeCompare(b.parcelId));
+          if (ways.length === 0) {
+            throw new ApiError(409, "DELIVERY_WAY_REQUIRED", "Linked group delivery ways are missing; refresh and retry");
+          }
           const totalCommission = calculateCommissionAmount(group.totalDeliveryFee, commissionRateBps);
           const baseAllocation = Math.floor(totalCommission / ways.length);
           for (const [index, way] of ways.entries()) await tx.deliveryWay.update({ where: { id: way.id }, data: { commissionAmount: baseAllocation + (index < totalCommission % ways.length ? 1 : 0) } });

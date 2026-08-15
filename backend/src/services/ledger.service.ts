@@ -1,6 +1,7 @@
 import { prisma } from "../config/database.js";
 import { ApiError } from "../utils/api-error.js";
 import type { Prisma } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 import { assertCashbookOpen } from "./finance.service.js";
 import { resolveCommissionRateBps } from "../utils/commission.js";
 import {
@@ -91,6 +92,34 @@ function sourceKey(sourceType: string, sourceId: string) {
   return { sourceType_sourceId: { sourceType, sourceId } };
 }
 
+async function journalEntryIsUnreversed(tx: Prisma.TransactionClient, entryId: string) {
+  const reversal = await tx.journalEntry.findUnique({
+    where: { sourceType_sourceId: { sourceType: "LEDGER_REVERSAL", sourceId: entryId } },
+    select: { id: true },
+  });
+  return !reversal;
+}
+
+/** Allocate a free journal sourceId: base id if unused; null if live; versioned after reversal. */
+async function nextVersionedJournalSourceId(
+  tx: Prisma.TransactionClient,
+  sourceType: string,
+  baseId: string,
+) {
+  const candidates = await tx.journalEntry.findMany({
+    where: {
+      sourceType,
+      OR: [{ sourceId: baseId }, { sourceId: { startsWith: `${baseId}:` } }],
+    },
+    select: { id: true, sourceId: true },
+    orderBy: { createdAt: "desc" },
+  });
+  for (const entry of candidates) {
+    if (await journalEntryIsUnreversed(tx, entry.id)) return null;
+  }
+  return candidates.some((entry) => entry.sourceId === baseId) ? `${baseId}:${randomUUID()}` : baseId;
+}
+
 async function parcelForActor(parcelId: string, actor: LedgerActor) {
   const parcel = await prisma.parcel.findUnique({
     where: { id: parcelId },
@@ -168,23 +197,59 @@ export async function postDeliveryCollection(input: { parcelId: string; business
   const date = businessDay(input.businessDate);
   const collection = buildDeliveryCollectionLines({ ...input, advanceAmount });
   const sourceType = group ? "LINKED_DELIVERY_COLLECTION" : "DELIVERY_COLLECTION";
-  const sourceId = group?.id ?? parcel.id;
+  const baseSourceId = group?.id ?? parcel.id;
 
   return prisma.$transaction(async (tx) => {
     await assertCashbookOpen(tx, date, parcelHubId);
-    const existing = await tx.journalEntry.findUnique({ where: sourceKey(sourceType, sourceId) });
-    if (existing) throw new ApiError(409, "COLLECTION_EXISTS", "A delivery collection already exists for this parcel");
-    const entry = await tx.journalEntry.create({ data: { sourceType, sourceId, hubId: parcelHubId, businessDate: date, description: group ? `Linked delivery collection for ${group.id}` : `Delivery collection for ${parcel.trackingNumber}` } });
+    const collectionSourceId = await nextVersionedJournalSourceId(tx, sourceType, baseSourceId);
+    if (!collectionSourceId) throw new ApiError(409, "COLLECTION_EXISTS", "A delivery collection already exists for this parcel");
+    const entry = await tx.journalEntry.create({
+      data: {
+        sourceType,
+        sourceId: collectionSourceId,
+        hubId: parcelHubId,
+        businessDate: date,
+        description: group ? `Linked delivery collection for ${group.id}` : `Delivery collection for ${parcel.trackingNumber}`,
+      },
+    });
     await createLines(tx, entry.id, collection.lines);
     let commissionEntry = null;
+    // Linked commission is posted at final DELIVERED in updateStatus; only create here when none is live.
     if (group) {
       const commissionRateBps = resolveCommissionRateBps(parcel.rider);
       const commission = Math.round(group.totalDeliveryFee * commissionRateBps / 10000);
-      if (commission > 0) commissionEntry = await tx.journalEntry.create({ data: { sourceType: "LINKED_RIDER_COMMISSION", sourceId: group.id, hubId: parcelHubId, businessDate: date, description: `Linked rider commission for ${group.id}`, lines: { create: [{ account: "RIDER_COMMISSION_EXPENSE", debit: commission, credit: 0 }, { account: "RIDER_COMMISSION_PAYABLE", debit: 0, credit: commission }] } } });
+      if (commission > 0) {
+        const commissionSourceId = await nextVersionedJournalSourceId(tx, "LINKED_RIDER_COMMISSION", group.id);
+        if (commissionSourceId) {
+          commissionEntry = await tx.journalEntry.create({
+            data: {
+              sourceType: "LINKED_RIDER_COMMISSION",
+              sourceId: commissionSourceId,
+              hubId: parcelHubId,
+              businessDate: date,
+              description: `Linked rider commission for ${group.id}`,
+              lines: { create: [{ account: "RIDER_COMMISSION_EXPENSE", debit: commission, credit: 0 }, { account: "RIDER_COMMISSION_PAYABLE", debit: 0, credit: commission }] },
+            },
+          });
+        }
+      }
     }
     let shortfallEntry = null;
     if (collection.shortfall > 0) {
-      shortfallEntry = await tx.journalEntry.create({ data: { sourceType: group ? "LINKED_OS_SHORTFALL" : "OS_SHORTFALL", sourceId, hubId: parcelHubId, businessDate: date, description: `OS shortfall for ${group ? `linked group ${group.id}` : parcel.trackingNumber}`, lines: { create: [{ account: "OS_SHORTFALL_RECEIVABLE", debit: collection.shortfall, credit: 0 }, { account: "OS_ADVANCE_RECEIVABLE", debit: 0, credit: collection.shortfall }] } } });
+      const shortfallType = group ? "LINKED_OS_SHORTFALL" : "OS_SHORTFALL";
+      const shortfallSourceId = await nextVersionedJournalSourceId(tx, shortfallType, baseSourceId);
+      if (shortfallSourceId) {
+        shortfallEntry = await tx.journalEntry.create({
+          data: {
+            sourceType: shortfallType,
+            sourceId: shortfallSourceId,
+            hubId: parcelHubId,
+            businessDate: date,
+            description: `OS shortfall for ${group ? `linked group ${group.id}` : parcel.trackingNumber}`,
+            lines: { create: [{ account: "OS_SHORTFALL_RECEIVABLE", debit: collection.shortfall, credit: 0 }, { account: "OS_ADVANCE_RECEIVABLE", debit: 0, credit: collection.shortfall }] },
+          },
+        });
+      }
     }
     return { entry, commissionEntry, shortfallEntry, ...collection };
   });
@@ -219,9 +284,7 @@ async function assertOriginalScope(actor: LedgerActor, entry: { sourceType: stri
     return;
   }
   if (["PICKUP_ADVANCE", "DELIVERY_COLLECTION", "PARTIAL_RETURN_COLLECTION", "OS_PARTIAL_RETURN_ADJUSTMENT", "OS_SHORTFALL", "OS_RETURN_DEDUCTION", "RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_COD"].includes(entry.sourceType)) {
-    const parcelId = ["OS_RETURN_DEDUCTION", "RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_COD"].includes(entry.sourceType)
-      ? entry.sourceId.split(":")[0]!
-      : entry.sourceId;
+    const parcelId = entry.sourceId.split(":")[0]!;
     const parcel = await prisma.parcel.findUnique({ where: { id: parcelId }, include: { batch: { select: { hubId: true } } } });
     if (!parcel || parcel.batch.hubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Entry is outside your hub scope");
     return;
@@ -286,9 +349,7 @@ async function entryInScope(entry: { sourceType: string; sourceId: string | null
     return batch?.hubId === hubId;
   }
   if (["PICKUP_ADVANCE", "DELIVERY_COLLECTION", "PARTIAL_RETURN_COLLECTION", "OS_PARTIAL_RETURN_ADJUSTMENT", "OS_SHORTFALL", "OS_RETURN_DEDUCTION", "RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_COD"].includes(entry.sourceType)) {
-    const parcelId = ["OS_RETURN_DEDUCTION", "RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_COD"].includes(entry.sourceType)
-      ? entry.sourceId.split(":")[0]!
-      : entry.sourceId;
+    const parcelId = entry.sourceId.split(":")[0]!;
     const parcel = await prisma.parcel.findUnique({ where: { id: parcelId }, include: { batch: { select: { hubId: true } } } });
     return parcel?.batch.hubId === hubId;
   }

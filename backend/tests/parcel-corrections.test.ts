@@ -22,9 +22,11 @@ describe("parcel corrections and delivery fee edits", () => {
   const deliveredEditParcelId = `pc-delivered-edit-parcel-${suffix}`;
   const advanceParcelId = `pc-advance-parcel-${suffix}`;
   const moneyPostedParcelId = `pc-money-parcel-${suffix}`;
+  const repostParcelId = `pc-repost-parcel-${suffix}`;
   const editableBatchId = `pc-editable-batch-${suffix}`;
   const deliveredEditBatchId = `pc-delivered-edit-batch-${suffix}`;
   const moneyPostedBatchId = `pc-money-batch-${suffix}`;
+  const repostBatchId = `pc-repost-batch-${suffix}`;
   const businessDate = new Date("2026-08-13T00:00:00.000Z");
 
   const dispatcherToken = () =>
@@ -103,6 +105,7 @@ describe("parcel corrections and delivery fee edits", () => {
       [deliveredEditBatchId, `Delivered edit batch ${suffix}`, new Date("2026-08-15T00:00:00.000Z")],
       [advanceBatchId, `Advance batch ${suffix}`, new Date("2026-08-16T00:00:00.000Z")],
       [moneyPostedBatchId, `Money posted batch ${suffix}`, new Date("2026-08-17T00:00:00.000Z")],
+      [repostBatchId, `Repost batch ${suffix}`, new Date("2026-08-19T00:00:00.000Z")],
     ] as const;
     for (const [id, label, pickupDate] of batchRows) {
       await prisma.batch.create({ data: { id, label, pickupDate, ...batchDefaults } });
@@ -149,6 +152,15 @@ describe("parcel corrections and delivery fee edits", () => {
         ...parcelDefaults,
       },
     });
+    await prisma.parcel.create({
+      data: {
+        id: repostParcelId,
+        batchId: repostBatchId,
+        trackingNumber: `PC-REPOST-${suffix}`,
+        riderId: rider1Id,
+        ...parcelDefaults,
+      },
+    });
 
     await prisma.journalEntry.create({
       data: {
@@ -163,8 +175,8 @@ describe("parcel corrections and delivery fee edits", () => {
   });
 
   afterAll(async () => {
-    const parcelIds = [parcelId, editableParcelId, deliveredEditParcelId, advanceParcelId, moneyPostedParcelId];
-    const batchIds = [batchId, editableBatchId, deliveredEditBatchId, advanceBatchId, moneyPostedBatchId];
+    const parcelIds = [parcelId, editableParcelId, deliveredEditParcelId, advanceParcelId, moneyPostedParcelId, repostParcelId];
+    const batchIds = [batchId, editableBatchId, deliveredEditBatchId, advanceBatchId, moneyPostedBatchId, repostBatchId];
     await prisma.statusHistory.deleteMany({ where: { parcelId: { in: parcelIds } } });
     await prisma.settlementLine.deleteMany({ where: { settlement: { riderId: { in: [rider1Id, rider2Id] } } } });
     await prisma.settlement.deleteMany({ where: { riderId: { in: [rider1Id, rider2Id] } } });
@@ -172,8 +184,7 @@ describe("parcel corrections and delivery fee edits", () => {
       where: {
         OR: [
           { sourceId: { in: parcelIds } },
-          { sourceId: { startsWith: `${parcelId}:` } },
-          { sourceId: { startsWith: `${moneyPostedParcelId}:` } },
+          ...parcelIds.map((id) => ({ sourceId: { startsWith: `${id}:` } })),
           { riderId: { in: [rider1Id, rider2Id] } },
         ],
       },
@@ -185,8 +196,7 @@ describe("parcel corrections and delivery fee edits", () => {
         entry: {
           OR: [
             { sourceId: { in: [...parcelIds, ...batchIds] } },
-            { sourceId: { startsWith: `${parcelId}:` } },
-            { sourceId: { startsWith: `${moneyPostedParcelId}:` } },
+            ...parcelIds.map((id) => ({ sourceId: { startsWith: `${id}:` } })),
             { hubId },
           ],
         },
@@ -196,8 +206,7 @@ describe("parcel corrections and delivery fee edits", () => {
       where: {
         OR: [
           { sourceId: { in: [...parcelIds, ...batchIds] } },
-          { sourceId: { startsWith: `${parcelId}:` } },
-          { sourceId: { startsWith: `${moneyPostedParcelId}:` } },
+          ...parcelIds.map((id) => ({ sourceId: { startsWith: `${id}:` } })),
           { hubId },
         ],
       },
@@ -491,6 +500,103 @@ describe("parcel corrections and delivery fee edits", () => {
 
     expect(response.status).toBe(409);
     expect(response.body.error.code).toBe("MONEY_POSTED");
+  });
+
+  test("re-posts versioned commission and receivable after finance reverses delivery journals", async () => {
+    await deliverParcel(repostParcelId);
+
+    const blocked = await request(app)
+      .post(`/api/v1/parcels/${repostParcelId}/status`)
+      .set("Authorization", `Bearer ${dispatcherToken()}`)
+      .send({ status: "OUT_FOR_DELIVERY", note: "Attempt correction before reversal" });
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error.code).toBe("MONEY_POSTED");
+
+    for (const sourceType of ["RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION"] as const) {
+      const reversal = await request(app)
+        .post("/api/v1/finance/ledger/reversals")
+        .set("Authorization", `Bearer ${financeToken()}`)
+        .send({
+          sourceType,
+          sourceId: repostParcelId,
+          businessDate: "2026-08-19",
+          reason: "Correct delivery money before re-delivery",
+        });
+      expect(reversal.status).toBe(201);
+    }
+
+    const reset = await request(app)
+      .post(`/api/v1/parcels/${repostParcelId}/status`)
+      .set("Authorization", `Bearer ${dispatcherToken()}`)
+      .send({ status: "OUT_FOR_DELIVERY", note: "Re-open after finance reversal" });
+    expect(reset.status).toBe(200);
+    expect(reset.body.data.status).toBe("OUT_FOR_DELIVERY");
+
+    const redeiver = await request(app)
+      .post(`/api/v1/parcels/${repostParcelId}/status`)
+      .set("Authorization", `Bearer ${dispatcherToken()}`)
+      .send({ status: "DELIVERED" });
+    expect(redeiver.status).toBe(200);
+    expect(redeiver.body.data.status).toBe("DELIVERED");
+
+    const commissions = await prisma.journalEntry.findMany({
+      where: {
+        sourceType: "RIDER_COMMISSION",
+        OR: [{ sourceId: repostParcelId }, { sourceId: { startsWith: `${repostParcelId}:` } }],
+      },
+      include: { lines: true },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(commissions).toHaveLength(2);
+    expect(commissions[0]?.sourceId).toBe(repostParcelId);
+    expect(commissions[1]?.sourceId).toMatch(new RegExp(`^${repostParcelId}:`));
+    expect(commissions[1]!.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ account: "RIDER_COMMISSION_EXPENSE", debit: 1200, credit: 0 }),
+        expect.objectContaining({ account: "RIDER_COMMISSION_PAYABLE", debit: 0, credit: 1200 }),
+      ]),
+    );
+    const liveCommissionReversal = await prisma.journalEntry.findUnique({
+      where: { sourceType_sourceId: { sourceType: "LEDGER_REVERSAL", sourceId: commissions[1]!.id } },
+    });
+    expect(liveCommissionReversal).toBeNull();
+
+    const receivables = await prisma.journalEntry.findMany({
+      where: {
+        sourceType: "RIDER_RECEIVABLE_RECOGNITION",
+        OR: [{ sourceId: repostParcelId }, { sourceId: { startsWith: `${repostParcelId}:` } }],
+      },
+      include: { lines: true },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(receivables).toHaveLength(2);
+    expect(receivables[0]?.sourceId).toBe(repostParcelId);
+    expect(receivables[1]?.sourceId).toMatch(new RegExp(`^${repostParcelId}:`));
+    const debit = receivables[1]!.lines.reduce((sum, line) => sum + line.debit, 0);
+    const credit = receivables[1]!.lines.reduce((sum, line) => sum + line.credit, 0);
+    expect(debit).toBe(credit);
+    expect(receivables[1]!.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ account: "RIDER_RECEIVABLE", debit: 101800, credit: 0 }),
+        expect.objectContaining({ account: "CUSTOMER_COD_RECEIVABLE", debit: 0, credit: 100000 }),
+        expect.objectContaining({ account: "DELIVERY_FEE_REVENUE", debit: 0, credit: 3000 }),
+      ]),
+    );
+
+    const recognition = await prisma.riderReceivableRecognition.findUnique({
+      where: {
+        sourceType_sourceId: {
+          sourceType: "RIDER_RECEIVABLE_RECOGNITION",
+          sourceId: receivables[1]!.sourceId!,
+        },
+      },
+    });
+    expect(recognition).toMatchObject({
+      riderId: rider1Id,
+      codAmount: 100000,
+      deliveryFee: 3000,
+      commissionAmount: 1200,
+    });
   });
 
 });

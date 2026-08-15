@@ -246,7 +246,7 @@ async function settlementWork(
         },
       },
       include: {
-        ways: true,
+        ways: { orderBy: [{ completedAt: "desc" }, { startedAt: "desc" }] },
         linkGroup: {
           include: { parcels: { select: { id: true, status: true } } },
         },

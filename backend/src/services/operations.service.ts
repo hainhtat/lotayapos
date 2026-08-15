@@ -175,36 +175,36 @@ export async function postPickupAdvances(batchId: string, input: { fundingWallet
   if (!batch.hubId) throw new ApiError(409, "BATCH_HUB_REQUIRED", "Batch must belong to a hub before advances can be posted");
   const batchHubId = batch.hubId;
   if (batch.advancePaid <= 0) throw new ApiError(409, "NO_BATCH_ADVANCE", "Batch advance paid must be greater than zero before posting");
-  const sourceId = await nextVersionedJournalSourceId(prisma, "BATCH_PICKUP_ADVANCE", batch.id);
-  if (!sourceId) return { batchId: batch.id, postedCount: 1, alreadyPosted: true };
-  try {
-    await prisma.$transaction(async (tx) => {
-      await assertCashbookOpen(tx, batch.pickupDate, batchHubId);
-      await tx.journalEntry.create({
-        data: {
-          sourceType: "BATCH_PICKUP_ADVANCE",
-          sourceId,
-          hubId: batchHubId,
-          businessDate: batch.pickupDate,
-          description: `Batch advance for ${batch.label}`,
-          lines: { create: buildPickupAdvanceJournalLines(batch.advancePaid, input.fundingWallet) },
-        },
+
+  const attemptPost = async (retriesLeft = 1): Promise<{ batchId: string; postedCount: number; alreadyPosted: boolean }> => {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        await assertCashbookOpen(tx, batch.pickupDate, batchHubId);
+        const sourceId = await nextVersionedJournalSourceId(tx, "BATCH_PICKUP_ADVANCE", batch.id);
+        if (!sourceId) return { batchId: batch.id, postedCount: 1, alreadyPosted: true };
+        await tx.journalEntry.create({
+          data: {
+            sourceType: "BATCH_PICKUP_ADVANCE",
+            sourceId,
+            hubId: batchHubId,
+            businessDate: batch.pickupDate,
+            description: `Batch advance for ${batch.label}`,
+            lines: { create: buildPickupAdvanceJournalLines(batch.advancePaid, input.fundingWallet) },
+          },
+        });
+        return { batchId: batch.id, postedCount: 1, alreadyPosted: false };
       });
-    });
-    return { batchId: batch.id, postedCount: 1, alreadyPosted: false };
-  } catch (error) {
-    if ((error as { code?: string }).code === "P2002") {
-      // Concurrent post of the same versioned key — only treat as already posted if a live entry exists.
-      const collision = await prisma.journalEntry.findUnique({
-        where: { sourceType_sourceId: { sourceType: "BATCH_PICKUP_ADVANCE", sourceId } },
-        select: { id: true },
-      });
-      if (collision && (await journalEntryIsUnreversed(prisma, collision.id))) {
-        return { batchId: batch.id, postedCount: 1, alreadyPosted: true };
+    } catch (error) {
+      if ((error as { code?: string }).code === "P2002") {
+        const live = await nextVersionedJournalSourceId(prisma, "BATCH_PICKUP_ADVANCE", batch.id);
+        if (!live) return { batchId: batch.id, postedCount: 1, alreadyPosted: true };
+        if (retriesLeft > 0) return attemptPost(retriesLeft - 1);
       }
+      throw error;
     }
-    throw error;
-  }
+  };
+
+  return attemptPost();
 }
 
 export async function listAlerts(actor: BatchActor) {

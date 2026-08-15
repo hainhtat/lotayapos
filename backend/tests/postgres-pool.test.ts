@@ -34,4 +34,16 @@ describe("postgresPoolOptions", () => {
     expect(options.connectionString).toContain("pgbouncer=true");
     expect(options.connectionString).toContain("aws-0-ap-southeast-1.pooler.supabase.com:6543");
   });
+
+  test("enables certificate verification when DATABASE_SSL_REJECT_UNAUTHORIZED=true", () => {
+    const previous = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED;
+    process.env.DATABASE_SSL_REJECT_UNAUTHORIZED = "true";
+    try {
+      const options = postgresPoolOptions("postgresql://user:pass@db.example.com:5432/postgres");
+      expect(options.ssl).toEqual({ rejectUnauthorized: true });
+    } finally {
+      if (previous === undefined) delete process.env.DATABASE_SSL_REJECT_UNAUTHORIZED;
+      else process.env.DATABASE_SSL_REJECT_UNAUTHORIZED = previous;
+    }
+  });
 });
