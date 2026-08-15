@@ -6,4 +6,5 @@ export const corsMiddleware = cors({
     else callback(new Error("Not allowed by CORS"));
   },
   credentials: true,
+  exposedHeaders: ["Content-Disposition", "X-Rider-Count", "X-Parcel-Count", "x-request-id"],
 });

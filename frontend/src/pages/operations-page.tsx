@@ -6,6 +6,7 @@ import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@/app/auth";
 import { DeliveryStatusPanel, type ManifestPreviewData } from "@/components/delivery-status-panel";
 import { ApiError, api, apiRaw } from "@/lib/api";
+import { resolveManifestPdfFilename } from "@/lib/content-disposition";
 import { isDateChangeReason } from "@/lib/exception-reasons";
 import {
   buildManifestBody,
@@ -355,7 +356,7 @@ export function OperationsPage() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `dispatch-manifest-${manifestRiderIds.length === 1 ? manifestRiderIds[0] : `${manifestRiderIds.length || "hub"}-riders`}.pdf`;
+      link.download = resolveManifestPdfFilename(response.headers.get("Content-Disposition"));
       link.click();
       URL.revokeObjectURL(url);
       setManifestOpen(false);

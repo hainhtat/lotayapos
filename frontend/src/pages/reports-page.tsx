@@ -4,6 +4,7 @@ import { Download, FileBarChart, PackageCheck, RotateCcw, Wallet } from "lucide-
 import { useTranslation } from "react-i18next";
 import { DeliveryStatusPanel, type ManifestPreviewData } from "@/components/delivery-status-panel";
 import { api, apiRaw } from "@/lib/api";
+import { resolveManifestPdfFilename } from "@/lib/content-disposition";
 import { ledgerAccounts, type LedgerReport } from "@/lib/ledger";
 import {
   buildManifestBody,
@@ -63,7 +64,7 @@ export function ReportsPage() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `delivery-status-${manifestBody.dateFrom ?? "all"}-${riderIds.length || "hub"}.pdf`;
+      link.download = resolveManifestPdfFilename(response.headers.get("Content-Disposition"));
       link.click();
       URL.revokeObjectURL(url);
     },

@@ -1,7 +1,7 @@
 import { addWalletAmounts, assertCashbookOpen, buildCashbookAdjustmentLines, buildExpenseLines, buildOpeningBalanceLines, buildWalletTransferLines, calculateDailySalaryDeduction, calculateOsSettlementNet, calculateRecognitionTotals, calculateRiderSettlementAmounts, calculateRiderSettlementTotals, calculateWalletBalances, calculateWalletReconciliationVariance, combineRiderOutstandingAggregates, cumulativeReceiptPosition, isOsSettlementCodCovered, returnedAdvanceContribution, settlementWalletMismatch } from "../src/services/finance.service.js";
 import { buildRiderReceivableRecognitionLines } from "../src/services/parcel.service.js";
 import { ApiError } from "../src/utils/api-error.js";
-import { buildPickupAdvanceJournalLines, bulkAssignParcels, calculateReturnExtension, isAssignmentEligible, manifestStatusesLabel, pickupAdvancePostingDisposition, summarizeManifestParcels } from "../src/services/operations.service.js";
+import { buildManifestFilenameSuffix, buildPickupAdvanceJournalLines, bulkAssignParcels, calculateReturnExtension, isAssignmentEligible, manifestStatusesLabel, pickupAdvancePostingDisposition, sanitizeManifestFilenamePart, summarizeManifestParcels, yangonBusinessDate } from "../src/services/operations.service.js";
 import { businessDateFor } from "../src/services/master-data.service.js";
 import { assertParcelAccess, buildParcelListWhere, buildParcelScope, buildRiderCommissionLines, calculateCommissionAmount, canOverrideStatus, isAllowedTransition, LINKED_MONEY_POSTED_SOURCE_TYPES, MONEY_POSTED_SOURCE_TYPES, overrideLeavesMoneyBearingStatus, requiresOverrideNote, resolveCommissionRateBps, validateConfiguredReason } from "../src/services/parcel.service.js";
 import { normalizeReasonCode, normalizeRiderPayFields } from "../src/services/master-data.service.js";
@@ -569,7 +569,7 @@ describe("bulk dispatch and manifest rules", () => {
       riderName: "Aung Aung",
       batchLabels: ["snmd 15.06.2026"],
       generatedAt: new Date("2026-08-10T00:00:00.000Z"),
-      parcels: [{ trackingNumber: "PKG-001", orderId: "130", customerName: "Ma Ma", customerPhone: "0912345678", address: "No. 1 Main Road", codAmount: 25000, deliveryFee: 1500, zone: "Downtown", township: "Yangon", batchLabel: "snmd 15.06.2026", shopName: "snmd" }],
+      parcels: [{ trackingNumber: "PKG-001", orderId: "130", customerName: "Ma Ma", customerPhone: "0912345678", address: "No. 1 Main Road", codAmount: 25000, deliveryFee: 1500, zone: "Downtown", township: "Yangon", batchLabel: "snmd 15.06.2026", shopName: "snmd", status: "ASSIGNED", note: null }],
     });
     expect(pdf.subarray(0, 5).toString("ascii")).toBe("%PDF-");
     const doc = await PDFDocument.load(pdf);
@@ -582,11 +582,11 @@ describe("bulk dispatch and manifest rules", () => {
       sections: [
         {
           riderName: "Aung Aung",
-          parcels: [{ trackingNumber: "PKG-001", customerName: "Ma Ma", customerPhone: "0912345678", address: "No. 1 Main Road", codAmount: 25000, deliveryFee: 1500, zone: "Downtown", township: "Yangon" }],
+          parcels: [{ trackingNumber: "PKG-001", customerName: "Ma Ma", customerPhone: "0912345678", address: "No. 1 Main Road", codAmount: 25000, deliveryFee: 1500, zone: "Downtown", township: "Yangon", status: "OUT_FOR_DELIVERY", note: null }],
         },
         {
           riderName: "Ko Ko",
-          parcels: [{ trackingNumber: "PKG-002", customerName: "Su Su", customerPhone: null, address: "No. 2 Side Road", codAmount: 10000, deliveryFee: 2000, zone: null, township: "Hlaing" }],
+          parcels: [{ trackingNumber: "PKG-002", customerName: "Su Su", customerPhone: null, address: "No. 2 Side Road", codAmount: 10000, deliveryFee: 2000, zone: null, township: "Hlaing", status: "FAILED", note: "No answer" }],
         },
       ],
     });
@@ -595,8 +595,27 @@ describe("bulk dispatch and manifest rules", () => {
     expect(doc.getPageCount()).toBe(2);
   });
 
-  test("renders Myanmar script in PDF output", async () => {
-    const pdf = await generateDispatchManifestPdf({
+  test("renders shaped Myanmar script in PDF without throwing", async () => {
+    const latinOnly = await generateDispatchManifestPdf({
+      generatedAt: new Date("2026-08-10T00:00:00.000Z"),
+      sections: [{
+        riderName: "Aung Aung",
+        parcels: [{
+          trackingNumber: "PKG-000",
+          customerName: "Maung Maung",
+          customerPhone: "0912345678",
+          address: "Insein Main Road",
+          codAmount: 25000,
+          deliveryFee: 1500,
+          zone: null,
+          township: "Insein",
+          status: "ASSIGNED",
+          note: null,
+        }],
+      }],
+    });
+
+    const myanmar = await generateDispatchManifestPdf({
       generatedAt: new Date("2026-08-10T00:00:00.000Z"),
       sections: [{
         riderName: "Aung Aung",
@@ -609,13 +628,37 @@ describe("bulk dispatch and manifest rules", () => {
           deliveryFee: 1500,
           zone: null,
           township: "အင်းစိန်",
+          status: "ASSIGNED",
+          note: null,
         }],
       }],
     });
-    expect(pdf.subarray(0, 5).toString("ascii")).toBe("%PDF-");
-    const doc = await PDFDocument.load(pdf);
+    expect(myanmar.subarray(0, 5).toString("ascii")).toBe("%PDF-");
+    const doc = await PDFDocument.load(myanmar);
     expect(doc.getPageCount()).toBeGreaterThan(0);
-    expect(pdf.length).toBeGreaterThan(5000);
+    expect(myanmar.length).toBeGreaterThan(latinOnly.length);
+    expect(myanmar.length).toBeGreaterThan(5000);
+  });
+
+  test("builds human-readable manifest filename suffixes", () => {
+    expect(sanitizeManifestFilenamePart("Khin Su Su San")).toBe("khin-su-su-san");
+    expect(sanitizeManifestFilenamePart("  Foo!!!Bar  ")).toBe("foo-bar");
+    expect(sanitizeManifestFilenamePart("!!!")).toBe("rider");
+    expect(sanitizeManifestFilenamePart("မောင်မောင်")).toBe("rider");
+    expect(sanitizeManifestFilenamePart("a".repeat(80))).toHaveLength(60);
+    expect(sanitizeManifestFilenamePart("alpha--beta--gamma-", 12)).toBe("alpha-beta-g");
+    expect(buildManifestFilenameSuffix({ riderCount: 0, at: new Date("2026-08-15T06:00:00.000Z") })).toBe(
+      `lotaya-manifest-empty-${yangonBusinessDate(new Date("2026-08-15T06:00:00.000Z"))}`,
+    );
+    expect(buildManifestFilenameSuffix({ riderCount: 1, riderName: "Khin Su Su San", at: new Date("2026-08-15T06:00:00.000Z") })).toBe(
+      `lotaya-manifest-khin-su-su-san-${yangonBusinessDate(new Date("2026-08-15T06:00:00.000Z"))}`,
+    );
+    expect(buildManifestFilenameSuffix({ riderCount: 1, riderName: null, at: new Date("2026-08-15T06:00:00.000Z") })).toBe(
+      `lotaya-manifest-rider-${yangonBusinessDate(new Date("2026-08-15T06:00:00.000Z"))}`,
+    );
+    expect(buildManifestFilenameSuffix({ riderCount: 3, at: new Date("2026-08-15T06:00:00.000Z") })).toBe(
+      `lotaya-manifest-3-riders-${yangonBusinessDate(new Date("2026-08-15T06:00:00.000Z"))}`,
+    );
   });
 });
 

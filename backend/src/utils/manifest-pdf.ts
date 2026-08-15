@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import fontkit from "@pdf-lib/fontkit";
+import type { Font as FontkitFont } from "@pdf-lib/fontkit";
 import { PDFDocument, PDFFont, RGB, StandardFonts, rgb } from "pdf-lib";
 
 export type ManifestParcel = {
@@ -15,6 +16,9 @@ export type ManifestParcel = {
   township: string | null;
   batchLabel?: string;
   shopName?: string;
+  /** Parcel status enum (e.g. ASSIGNED) — rendered as a short Status label */
+  status?: string;
+  /** Return/exception note only — never a status code */
   note?: string | null;
 };
 
@@ -41,6 +45,7 @@ const PAGE_WIDTH = 595.28;
 const PAGE_HEIGHT = 841.89;
 const MARGIN_X = 18;
 const MARGIN_BOTTOM = 28;
+const TABLE_RIGHT = PAGE_WIDTH - MARGIN_X;
 
 const BRAND = {
   blue: rgb(0.082, 0.596, 0.937),
@@ -56,22 +61,37 @@ const BRAND = {
   green: rgb(0.071, 0.651, 0.416),
 };
 
+/** Columns must end at or before TABLE_RIGHT (577.28). Status + Note for return notes. */
 const COLS = [
-  { key: "#", x: 18, w: 18 },
-  { key: "Order", x: 36, w: 42 },
-  { key: "Batch", x: 78, w: 58 },
-  { key: "Merchant", x: 136, w: 52 },
-  { key: "Customer", x: 188, w: 58 },
-  { key: "Phone", x: 246, w: 58 },
-  { key: "Township", x: 304, w: 52 },
-  { key: "Address", x: 356, w: 98 },
-  { key: "COD", x: 454, w: 40 },
-  { key: "Fee", x: 494, w: 32 },
-  { key: "Total", x: 526, w: 40 },
-  { key: "Note", x: 566, w: 12 },
+  { key: "#", x: 18, w: 16 },
+  { key: "Order", x: 34, w: 40 },
+  { key: "Batch", x: 74, w: 52 },
+  { key: "Merchant", x: 126, w: 48 },
+  { key: "Customer", x: 174, w: 52 },
+  { key: "Phone", x: 226, w: 54 },
+  { key: "Township", x: 280, w: 48 },
+  { key: "Address", x: 328, w: 68 },
+  { key: "COD", x: 396, w: 36 },
+  { key: "Fee", x: 432, w: 28 },
+  { key: "Total", x: 460, w: 36 },
+  { key: "Status", x: 496, w: 28 },
+  { key: "Note", x: 524, w: 53 },
 ] as const;
 
 const MYANMAR_RE = /[\u1000-\u109F]/;
+
+const STATUS_SHORT: Record<string, string> = {
+  CREATED: "CRT",
+  PICKED_UP: "PKU",
+  ASSIGNED: "ASN",
+  OUT_FOR_DELIVERY: "OFD",
+  DELIVERED: "DLV",
+  PARTIAL: "PRT",
+  FAILED: "FLD",
+  REJECTED: "REJ",
+  PENDING_RETURN: "PRN",
+  RETURNED: "RTN",
+};
 
 function fit(value: string, maxLength: number) {
   const normalized = value.replace(/\s+/g, " ").trim();
@@ -81,6 +101,11 @@ function fit(value: string, maxLength: number) {
 
 function money(value: number) {
   return `${Math.round(value).toLocaleString("en-US")} ks`;
+}
+
+function statusLabel(status?: string) {
+  if (!status) return "-";
+  return STATUS_SHORT[status] ?? status.slice(0, 3).toUpperCase();
 }
 
 function totalsFor(parcels: ManifestParcel[]) {
@@ -116,10 +141,65 @@ function loadMyanmarFontBytes() {
 }
 loadMyanmarFontBytes.cache = null as Buffer | null;
 
-type FontPair = { regular: PDFFont; bold: PDFFont; myanmar: PDFFont };
+type FontPair = { regular: PDFFont; bold: PDFFont; myanmarKit: FontkitFont };
 
-function pickFont(text: string, fonts: FontPair, bold = false) {
-  return MYANMAR_RE.test(text) ? fonts.myanmar : bold ? fonts.bold : fonts.regular;
+/**
+ * pdf-lib drawSvgPath applies scale(s, -s) assuming SVG y-down.
+ * Fontkit paths are font y-up — negate Y so glyphs sit upright on the baseline.
+ */
+function flipFontkitSvgPathY(path: string): string {
+  return path.replace(/([MLQC])([^MLQCZ]+)/gi, (_full, cmd: string, args: string) => {
+    const nums = args
+      .trim()
+      .split(/[\s,]+/)
+      .filter(Boolean)
+      .map(Number);
+    const step = cmd.toUpperCase() === "C" ? 6 : cmd.toUpperCase() === "Q" ? 4 : 2;
+    const out: number[] = [];
+    for (let i = 0; i < nums.length; i += step) {
+      for (let j = 0; j < step; j += 1) {
+        const n = nums[i + j] ?? 0;
+        out.push(j % 2 === 1 ? -n : n);
+      }
+    }
+    return `${cmd}${out.join(" ")}`;
+  });
+}
+
+function drawShapedMyanmar(
+  page: ReturnType<PDFDocument["addPage"]>,
+  font: FontkitFont,
+  text: string,
+  x: number,
+  y: number,
+  size: number,
+  color: RGB,
+  glyphPathCache: Map<number, string>,
+) {
+  const run = font.layout(text);
+  const scale = size / font.unitsPerEm;
+  let cursorX = x;
+  let cursorY = y;
+  for (let i = 0; i < run.glyphs.length; i += 1) {
+    const glyph = run.glyphs[i]!;
+    const pos = run.positions[i]!;
+    let flipped = glyphPathCache.get(glyph.id);
+    if (flipped === undefined) {
+      const raw = glyph.path?.toSVG?.() ?? "";
+      flipped = raw ? flipFontkitSvgPathY(raw) : "";
+      glyphPathCache.set(glyph.id, flipped);
+    }
+    if (flipped) {
+      page.drawSvgPath(flipped, {
+        x: cursorX + pos.xOffset * scale,
+        y: cursorY + pos.yOffset * scale,
+        scale,
+        color,
+      });
+    }
+    cursorX += pos.xAdvance * scale;
+    cursorY += pos.yAdvance * scale;
+  }
 }
 
 type PageContext = {
@@ -129,6 +209,7 @@ type PageContext = {
   y: number;
   pageIndex: number;
   continued: boolean;
+  glyphPathCache: Map<number, string>;
 };
 
 function drawRect(ctx: PageContext, x: number, y: number, w: number, h: number, fill: RGB, stroke?: RGB) {
@@ -144,11 +225,16 @@ function drawText(
   bold = false,
   color = BRAND.navy,
 ) {
+  if (!text) return;
+  if (MYANMAR_RE.test(text)) {
+    drawShapedMyanmar(ctx.page, ctx.fonts.myanmarKit, text, x, y, size, color, ctx.glyphPathCache);
+    return;
+  }
   ctx.page.drawText(text, {
     x,
     y,
     size,
-    font: pickFont(text, ctx.fonts, bold),
+    font: bold ? ctx.fonts.bold : ctx.fonts.regular,
     color,
   });
 }
@@ -209,7 +295,7 @@ function drawRiderSheetHeader(
 
 function drawTableHeader(ctx: PageContext) {
   const h = 18;
-  drawRect(ctx, MARGIN_X, ctx.y - h, PAGE_WIDTH - MARGIN_X * 2, h, BRAND.softGray, BRAND.line);
+  drawRect(ctx, MARGIN_X, ctx.y - h, TABLE_RIGHT - MARGIN_X, h, BRAND.softGray, BRAND.line);
   COLS.forEach((col) => drawText(ctx, col.key, col.x + 2, ctx.y - 12, 6, true, BRAND.slate));
   ctx.y -= h + 2;
 }
@@ -231,12 +317,12 @@ function drawParcelRow(ctx: PageContext, parcel: ManifestParcel, index: number) 
   if (ctx.y - rowH < MARGIN_BOTTOM) return false;
 
   if (index % 2 === 1) {
-    drawRect(ctx, MARGIN_X, ctx.y - rowH, PAGE_WIDTH - MARGIN_X * 2, rowH, BRAND.zebra);
+    drawRect(ctx, MARGIN_X, ctx.y - rowH, TABLE_RIGHT - MARGIN_X, rowH, BRAND.zebra);
   }
   ctx.page.drawRectangle({
     x: MARGIN_X,
     y: ctx.y - rowH,
-    width: PAGE_WIDTH - MARGIN_X * 2,
+    width: TABLE_RIGHT - MARGIN_X,
     height: rowH,
     borderColor: BRAND.line,
     borderWidth: 0.4,
@@ -248,32 +334,41 @@ function drawParcelRow(ctx: PageContext, parcel: ManifestParcel, index: number) 
   const address = parcel.address.replace(/\s+/g, " ").trim();
   const y1 = ctx.y - 9;
   const y2 = ctx.y - 19;
+  const statusCol = COLS[11];
+  const noteCol = COLS[12];
+  const noteText = parcel.note?.trim() || "";
 
   drawText(ctx, String(index + 1), COLS[0].x + 2, y1, 7, true, BRAND.slate);
   drawText(ctx, fit(orderLabel, 8), COLS[1].x + 2, y1, 7, true, BRAND.navy);
   if (parcel.orderId?.trim()) {
     drawText(ctx, fit(parcel.trackingNumber, 8), COLS[1].x + 2, y2, 5.5, false, BRAND.muted);
   }
-  drawText(ctx, fit(parcel.batchLabel ?? "-", 12), COLS[2].x + 2, y1, 6.5);
-  drawText(ctx, fit(parcel.shopName ?? "-", 11), COLS[3].x + 2, y1, 6.5);
-  drawText(ctx, fit(parcel.customerName, 12), COLS[4].x + 2, y1, 6.5, true);
-  drawText(ctx, fit(parcel.customerPhone ?? "-", 12), COLS[5].x + 2, y1, 6, false, BRAND.slate);
-  drawText(ctx, fit(parcel.township ?? parcel.zone ?? "-", 11), COLS[6].x + 2, y1, 6, false, BRAND.slate);
-  drawText(ctx, fit(address, 24), COLS[7].x + 2, y1, 6);
-  if (address.length > 24) {
-    drawText(ctx, fit(address.slice(24), 24), COLS[7].x + 2, y2, 5.5, false, BRAND.muted);
+  drawText(ctx, fit(parcel.batchLabel ?? "-", 11), COLS[2].x + 2, y1, 6.5);
+  drawText(ctx, fit(parcel.shopName ?? "-", 10), COLS[3].x + 2, y1, 6.5);
+  drawText(ctx, fit(parcel.customerName, 11), COLS[4].x + 2, y1, 6.5, true);
+  drawText(ctx, fit(parcel.customerPhone ?? "-", 11), COLS[5].x + 2, y1, 6, false, BRAND.slate);
+  drawText(ctx, fit(parcel.township ?? parcel.zone ?? "-", 10), COLS[6].x + 2, y1, 6, false, BRAND.slate);
+  drawText(ctx, fit(address, 16), COLS[7].x + 2, y1, 6);
+  if (address.length > 16) {
+    drawText(ctx, fit(address.slice(16), 16), COLS[7].x + 2, y2, 5.5, false, BRAND.muted);
   }
-  drawText(ctx, fit(money(parcel.codAmount), 9), COLS[8].x + 1, y1, 6, true);
-  drawText(ctx, fit(money(fee), 8), COLS[9].x + 1, y1, 6, false, BRAND.slate);
-  drawText(ctx, fit(money(total), 9), COLS[10].x + 1, y1, 6.5, true, BRAND.accent);
-  drawText(ctx, fit(parcel.note ?? "", 4), COLS[11].x, y1, 6, false, BRAND.muted);
+  drawText(ctx, fit(money(parcel.codAmount), 8), COLS[8].x + 1, y1, 6, true);
+  drawText(ctx, fit(money(fee), 7), COLS[9].x + 1, y1, 6, false, BRAND.slate);
+  drawText(ctx, fit(money(total), 8), COLS[10].x + 1, y1, 6.5, true, BRAND.accent);
+  drawText(ctx, fit(statusLabel(parcel.status), 5), statusCol.x + 1, y1, 6, true, BRAND.slate);
+  if (noteText) {
+    drawText(ctx, fit(noteText, 14), noteCol.x + 1, y1, 5.5, false, BRAND.muted);
+    if (noteText.length > 14) {
+      drawText(ctx, fit(noteText.slice(14), 14), noteCol.x + 1, y2, 5, false, BRAND.muted);
+    }
+  }
 
   ctx.y -= rowH;
   return true;
 }
 
 function drawSectionTotals(ctx: PageContext, totals: ReturnType<typeof totalsFor>) {
-  drawRect(ctx, MARGIN_X, ctx.y - 24, PAGE_WIDTH - MARGIN_X * 2, 22, BRAND.blue);
+  drawRect(ctx, MARGIN_X, ctx.y - 24, TABLE_RIGHT - MARGIN_X, 22, BRAND.blue);
   drawText(
     ctx,
     `Orders: ${totals.count}   COD: ${money(totals.totalCod)}   Fees: ${money(totals.totalFees)}   Total: ${money(totals.totalAmount)}`,
@@ -296,12 +391,14 @@ async function buildPdfDocument(input: ManifestInput) {
   doc.registerFontkit(fontkit);
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
-  const myanmar = await doc.embedFont(loadMyanmarFontBytes());
-  const fonts: FontPair = { regular, bold, myanmar };
+  const myanmarBytes = loadMyanmarFontBytes();
+  const myanmarKit = fontkit.create(myanmarBytes);
+  const fonts: FontPair = { regular, bold, myanmarKit };
+  const glyphPathCache = new Map<number, string>();
 
   if (!sections.length) {
     const page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-    const ctx: PageContext = { doc, page, fonts, y: PAGE_HEIGHT - 40, pageIndex: 0, continued: false };
+    const ctx: PageContext = { doc, page, fonts, y: PAGE_HEIGHT - 40, pageIndex: 0, continued: false, glyphPathCache };
     drawBrandBar(ctx);
     drawText(ctx, "All Active Deliveries", MARGIN_X, PAGE_HEIGHT - 40, 12, true);
     drawText(ctx, "No riders selected.", MARGIN_X, PAGE_HEIGHT - 58, 9, false, BRAND.muted);
@@ -313,7 +410,7 @@ async function buildPdfDocument(input: ManifestInput) {
   for (const section of sections) {
     const totals = totalsFor(section.parcels);
     let page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-    let ctx: PageContext = { doc, page, fonts, y: PAGE_HEIGHT - 40, pageIndex, continued: false };
+    let ctx: PageContext = { doc, page, fonts, y: PAGE_HEIGHT - 40, pageIndex, continued: false, glyphPathCache };
     startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel);
 
     if (!section.parcels.length) {
@@ -327,7 +424,7 @@ async function buildPdfDocument(input: ManifestInput) {
         drawFooter(ctx);
         pageIndex += 1;
         page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-        ctx = { doc, page, fonts, y: PAGE_HEIGHT - 40, pageIndex, continued: true };
+        ctx = { doc, page, fonts, y: PAGE_HEIGHT - 40, pageIndex, continued: true, glyphPathCache };
         startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel);
         drawParcelRow(ctx, parcel, index);
       }
@@ -337,7 +434,7 @@ async function buildPdfDocument(input: ManifestInput) {
       drawFooter(ctx);
       pageIndex += 1;
       page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-      ctx = { doc, page, fonts, y: PAGE_HEIGHT - 40, pageIndex, continued: true };
+      ctx = { doc, page, fonts, y: PAGE_HEIGHT - 40, pageIndex, continued: true, glyphPathCache };
       startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel);
     }
     drawSectionTotals(ctx, totals);

@@ -48,8 +48,10 @@ export const previewManifest: RequestHandler = async (req, res) => {
 export const downloadManifest: RequestHandler = async (req, res) => {
   const result = await service.buildManifestForRiders(req.body, actor(req));
   const pdf = await generateDispatchManifestPdf({ sections: result.sections, statusesLabel: result.statusesLabel });
+  const filename = `${result.filenameSuffix}.pdf`;
+  const asciiFilename = filename.replace(/[^\x20-\x7E]/g, "_");
   res.status(200).type("application/pdf").set({
-    "Content-Disposition": `attachment; filename="dispatch-manifest-${result.filenameSuffix}.pdf"`,
+    "Content-Disposition": `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
     "X-Rider-Count": String(result.riderCount),
     "X-Parcel-Count": String(result.parcelCount),
   }).send(pdf);

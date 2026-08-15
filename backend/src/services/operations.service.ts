@@ -12,18 +12,61 @@ const assignmentRoles = ["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"];
 const manifestReadRoles = ["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER", "FINANCE", "AUDITOR"];
 export const DISPATCH_MANIFEST_STATUSES = ["ASSIGNED", "OUT_FOR_DELIVERY", "PICKED_UP"] as const;
 const MANIFEST_STATUSES = ["CREATED", "PICKED_UP", "ASSIGNED", "OUT_FOR_DELIVERY", "DELIVERED", "PARTIAL", "FAILED", "REJECTED", "PENDING_RETURN", "RETURNED"] as const;
-const PDF_STATUS_NOTE: Record<string, string> = {
-  CREATED: "CRT",
-  PICKED_UP: "PKU",
-  ASSIGNED: "ASN",
-  OUT_FOR_DELIVERY: "OFD",
-  DELIVERED: "DLV",
-  PARTIAL: "PRT",
-  FAILED: "FLD",
-  REJECTED: "REJ",
-  PENDING_RETURN: "PRN",
-  RETURNED: "RTN",
-};
+const EXCEPTION_NOTE_STATUSES = ["FAILED", "PARTIAL", "REJECTED", "PENDING_RETURN", "RETURNED"] as const;
+/** Statuses whose history rows may carry rider/ops exception notes (excludes RETURNED itself). */
+const EXCEPTION_HISTORY_STATUSES = ["FAILED", "PARTIAL", "REJECTED", "PENDING_RETURN"] as const;
+
+export function sanitizeManifestFilenamePart(value: string, maxLength = 60) {
+  const sanitized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, maxLength)
+    .replace(/-$/g, "");
+  return sanitized || "rider";
+}
+
+export function yangonBusinessDate(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Yangon",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+export function buildManifestFilenameSuffix(input: {
+  riderCount: number;
+  riderName?: string | null;
+  riderId?: string | null;
+  at?: Date;
+}) {
+  const date = yangonBusinessDate(input.at ?? new Date());
+  if (input.riderCount <= 0) return `lotaya-manifest-empty-${date}`;
+  if (input.riderCount === 1) {
+    const name = sanitizeManifestFilenamePart(input.riderName ?? "rider");
+    if (name === "rider" && input.riderId) {
+      const idPart = sanitizeManifestFilenamePart(input.riderId.slice(-8), 12);
+      return `lotaya-manifest-rider-${idPart}-${date}`;
+    }
+    return `lotaya-manifest-${name}-${date}`;
+  }
+  return `lotaya-manifest-${input.riderCount}-riders-${date}`;
+}
+
+function exceptionNoteFromHistory(
+  history: Array<{ note: string | null; reasonCode: string | null }> | undefined,
+  reasonCode: string | null,
+) {
+  const latest = history?.[0];
+  const fromHistory = latest?.note?.trim() || latest?.reasonCode?.trim() || "";
+  const raw = fromHistory || reasonCode?.trim() || null;
+  if (!raw) return null;
+  return raw.length > 80 ? `${raw.slice(0, 79)}…` : raw;
+}
 
 export function manifestStatusesLabel(statuses?: string[]) {
   const list = statuses?.length ? statuses : [...DISPATCH_MANIFEST_STATUSES];
@@ -364,7 +407,7 @@ export async function buildManifestForRiders(input: ManifestQuery, actor: BatchA
       summary: summarizeManifestParcels([]),
       riderCount: 0,
       parcelCount: 0,
-      filenameSuffix: "none",
+      filenameSuffix: buildManifestFilenameSuffix({ riderCount: 0 }),
       statusesLabel: manifestStatusesLabel(input.statuses),
     };
   }
@@ -407,6 +450,7 @@ export async function buildManifestForRiders(input: ManifestQuery, actor: BatchA
       id: true,
       riderId: true,
       status: true,
+      reasonCode: true,
       trackingNumber: true,
       orderId: true,
       customerName: true,
@@ -417,6 +461,12 @@ export async function buildManifestForRiders(input: ManifestQuery, actor: BatchA
       zone: true,
       township: true,
       batch: { select: { label: true, pickupDate: true, shop: { select: { name: true } } } },
+      statusHistory: {
+        where: { toStatus: { in: [...EXCEPTION_HISTORY_STATUSES] } },
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: { note: true, reasonCode: true },
+      },
     },
     orderBy: [{ riderId: "asc" }, { trackingNumber: "asc" }],
     take: 501,
@@ -433,22 +483,25 @@ export async function buildManifestForRiders(input: ManifestQuery, actor: BatchA
       riderId,
       riderName: rider.user.name,
       hubName: rider.hub?.name ?? undefined,
-      parcels: riderParcels.map((parcel) => ({
-        trackingNumber: parcel.trackingNumber,
-        orderId: parcel.orderId,
-        status: parcel.status,
-        customerName: parcel.customerName,
-        customerPhone: parcel.customerPhone,
-        address: parcel.address,
-        codAmount: parcel.codAmount,
-        deliveryFee: parcel.deliveryFee,
-        zone: parcel.zone,
-        township: parcel.township,
-        batchLabel: parcel.batch.label,
-        pickupDate: parcel.batch.pickupDate,
-        shopName: parcel.batch.shop.name,
-        note: PDF_STATUS_NOTE[parcel.status] ?? parcel.status.slice(0, 4),
-      })),
+      parcels: riderParcels.map((parcel) => {
+        const exceptionStatus = (EXCEPTION_NOTE_STATUSES as readonly string[]).includes(parcel.status);
+        return {
+          trackingNumber: parcel.trackingNumber,
+          orderId: parcel.orderId,
+          status: parcel.status,
+          customerName: parcel.customerName,
+          customerPhone: parcel.customerPhone,
+          address: parcel.address,
+          codAmount: parcel.codAmount,
+          deliveryFee: parcel.deliveryFee,
+          zone: parcel.zone,
+          township: parcel.township,
+          batchLabel: parcel.batch.label,
+          pickupDate: parcel.batch.pickupDate,
+          shopName: parcel.batch.shop.name,
+          note: exceptionStatus ? exceptionNoteFromHistory(parcel.statusHistory, parcel.reasonCode) : null,
+        };
+      }),
     };
   });
 
@@ -457,7 +510,11 @@ export async function buildManifestForRiders(input: ManifestQuery, actor: BatchA
     summary: summarizeManifestParcels(parcels),
     riderCount: uniqueRiderIds.length,
     parcelCount: parcels.length,
-    filenameSuffix: uniqueRiderIds.length === 1 ? uniqueRiderIds[0]! : `${uniqueRiderIds.length}-riders`,
+    filenameSuffix: buildManifestFilenameSuffix({
+      riderCount: uniqueRiderIds.length,
+      riderName: uniqueRiderIds.length === 1 ? ridersById.get(uniqueRiderIds[0]!)?.user.name : undefined,
+      riderId: uniqueRiderIds.length === 1 ? uniqueRiderIds[0] : undefined,
+    }),
     statusesLabel: manifestStatusesLabel(input.statuses),
   };
 }
