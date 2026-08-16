@@ -8,7 +8,13 @@ import { api, apiRaw } from "@/lib/api";
 type Location = { id: string; code?: string; nameEn: string; nameMy?: string };
 type Township = Location & {
   deliveryFee: number;
-  district?: { id: string; nameEn: string; regionStateId?: string; regionState?: { id?: string; nameEn: string } };
+  district?: {
+    id: string;
+    nameEn: string;
+    nameMy?: string;
+    regionStateId?: string;
+    regionState?: { id?: string; nameEn: string; nameMy?: string };
+  };
 };
 type Zone = { id: string; code?: string; name: string };
 type SavedParcel = {
@@ -109,91 +115,223 @@ export function parseParcelGrid(text: string): ParcelRow[] {
 const match = (items: Location[], token: string) =>
   items.find((item) => [item.id, item.code, item.nameEn, item.nameMy].some((value) => value?.toLocaleLowerCase() === token.toLocaleLowerCase()))?.id ?? token;
 
+const locationTokens = (item: Location) => [item.id, item.code, item.nameEn, item.nameMy];
+
+function matchesLocationToken(item: Location, token: string) {
+  const normalized = token.toLocaleLowerCase();
+  return locationTokens(item).some((value) => value?.toLocaleLowerCase() === normalized);
+}
+
+export function applyTownshipToParcelRow(
+  row: ParcelRow,
+  townshipId: string,
+  townships: Township[],
+  options?: { syncRegion?: boolean },
+): ParcelRow {
+  if (!townshipId) {
+    return {
+      ...row,
+      townshipId: "",
+      districtId: "",
+      zoneId: "",
+      ...(options?.syncRegion ? { regionStateId: "" } : {}),
+    };
+  }
+  const township = townships.find((item) => item.id === townshipId);
+  return {
+    ...row,
+    townshipId,
+    zoneId: "",
+    districtId: township?.district?.id ?? "",
+    ...(options?.syncRegion
+      ? { regionStateId: township?.district?.regionState?.id ?? township?.district?.regionStateId ?? "" }
+      : {}),
+  };
+}
+
+export function townshipsForRegion(townships: Township[], regionStateId: string) {
+  if (!regionStateId) return [];
+  return townships.filter(
+    (township) => (township.district?.regionState?.id ?? township.district?.regionStateId) === regionStateId,
+  );
+}
+
+export function isResolvedTownshipId(townshipId: string, townships: Township[]) {
+  return Boolean(townshipId && townships.some((item) => item.id === townshipId));
+}
+
+export function isParcelRowLocationConsistent(row: ParcelRow, townships: Township[]) {
+  if (!row.townshipId) return true;
+  if (!isResolvedTownshipId(row.townshipId, townships)) return false;
+  if (!row.regionStateId) return true;
+  return townshipsForRegion(townships, row.regionStateId).some((item) => item.id === row.townshipId);
+}
+
+export function hydrateParcelRowLocations(row: ParcelRow, townships: Township[], regions: Location[] = []): ParcelRow {
+  const matchedRegion = row.regionStateId.trim() ? match(regions, row.regionStateId) : "";
+  const regionStateId = matchedRegion && regions.some((item) => item.id === matchedRegion) ? matchedRegion : "";
+
+  if (!row.townshipId.trim()) {
+    return { ...row, regionStateId };
+  }
+
+  if (!townships.length) {
+    return { ...row, ...(regionStateId ? { regionStateId } : {}) };
+  }
+
+  const hits = townships.filter((item) => matchesLocationToken(item, row.townshipId));
+  const scopedHits = regionStateId
+    ? hits.filter((item) => (item.district?.regionState?.id ?? item.district?.regionStateId) === regionStateId)
+    : hits;
+  const candidates = scopedHits.length === 1 ? scopedHits : hits.length === 1 ? hits : [];
+
+  if (candidates.length !== 1) {
+    return {
+      ...row,
+      regionStateId,
+      townshipId: row.townshipId,
+      districtId: "",
+      zoneId: row.zoneId,
+    };
+  }
+
+  const township = candidates[0]!;
+  const townshipRegion = township.district?.regionState?.id ?? township.district?.regionStateId ?? "";
+  const applied = applyTownshipToParcelRow({ ...row, regionStateId: townshipRegion }, township.id, townships);
+  return { ...applied, regionStateId: townshipRegion, zoneId: row.zoneId };
+}
+
 const cell =
   "min-w-[130px] border-0 bg-transparent px-2 py-2 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-inset focus:ring-[#1598ef] dark:text-slate-100";
 const field =
   "mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-[#1598ef] focus:ring-2 focus:ring-[#1598ef]/20 dark:border-white/10 dark:bg-[#121416] dark:text-slate-100";
 
-function useRowLocationData(row: ParcelRow, regions: Location[]) {
-  const resolvedRegion = match(regions, row.regionStateId);
-  const districts = useQuery({
-    queryKey: ["locations", "districts", resolvedRegion],
-    enabled: Boolean(resolvedRegion),
-    queryFn: () =>
-      api<Location[]>(`/master-data/locations/districts?regionStateId=${encodeURIComponent(resolvedRegion!)}`).then((response) => response.data),
-  });
-  const resolvedDistrict = match(districts.data ?? [], row.districtId);
-  const townships = useQuery({
-    queryKey: ["locations", "townships", resolvedDistrict],
-    enabled: Boolean(resolvedDistrict),
-    queryFn: () =>
-      api<Township[]>(`/master-data/locations/townships?districtId=${encodeURIComponent(resolvedDistrict!)}`).then((response) => response.data),
-  });
-  const resolvedTownship = match(townships.data ?? [], row.townshipId);
+function locationLabel(value: { nameEn: string; nameMy?: string } | null | undefined, preferMyanmar: boolean) {
+  if (!value) return "";
+  return preferMyanmar && value.nameMy ? value.nameMy : value.nameEn;
+}
+
+function townshipOptionLabel(township: Township, preferMyanmar: boolean, includeRegion = false) {
+  const parts = [
+    includeRegion ? locationLabel(township.district?.regionState, preferMyanmar) : "",
+    locationLabel(township.district, preferMyanmar),
+    locationLabel(township, preferMyanmar) || township.nameEn,
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
+function useRowLocationData(row: ParcelRow, townships: Township[]) {
+  const resolvedTownship = match(townships, row.townshipId);
+  const township = townships.find((item) => item.id === resolvedTownship);
   const zones = useQuery({
     queryKey: ["locations", "zones", resolvedTownship],
-    enabled: Boolean(resolvedTownship),
+    enabled: Boolean(resolvedTownship && townships.some((item) => item.id === resolvedTownship)),
     queryFn: () =>
       api<Zone[]>(`/master-data/locations/zones?townshipId=${encodeURIComponent(resolvedTownship!)}`).then((response) => response.data),
   });
-  const deliveryFee = townships.data?.find((township) => township.id === resolvedTownship)?.deliveryFee;
-  return { districts, townships, zones, deliveryFee, resolvedRegion, resolvedDistrict, resolvedTownship };
+  return { zones, deliveryFee: township?.deliveryFee, resolvedTownship, township };
 }
 
 function LocationCells({
   row,
   index,
   regions,
-  onChange,
+  townships,
+  onChangeRegion,
+  onApplyTownship,
+  onChangeZone,
   onMove,
 }: {
   row: ParcelRow;
   index: number;
   regions: Location[];
-  onChange: (key: keyof ParcelRow, value: string) => void;
+  townships: Township[];
+  onChangeRegion: (regionStateId: string) => void;
+  onApplyTownship: (townshipId: string) => void;
+  onChangeZone: (zoneId: string) => void;
   onMove: (event: React.KeyboardEvent<HTMLElement>, column: number) => void;
 }) {
   const { t, i18n } = useTranslation();
-  const { districts, townships, zones, resolvedRegion, resolvedDistrict, resolvedTownship } = useRowLocationData(row, regions);
-  const label = (value: Location) => (i18n.resolvedLanguage === "my" && value.nameMy ? value.nameMy : value.nameEn);
-  const select = (key: keyof ParcelRow, column: number, items: Location[], name: string) => (
-    <select
-      data-cell={`${index}-${column}`}
-      aria-label={`${name} ${index + 1}`}
-      value={match(items, row[key])}
-      onChange={(event) => onChange(key, event.target.value)}
-      onKeyDown={(event) => onMove(event, column)}
-      className={cell}
-      disabled={
-        (key === "districtId" && !resolvedRegion) ||
-        (key === "townshipId" && !resolvedDistrict) ||
-        (key === "zoneId" && !resolvedTownship)
-      }
-    >
-      <option value="">—</option>
-      {items.map((item) => (
-        <option key={item.id} value={item.id}>
-          {label(item)}
-        </option>
-      ))}
-    </select>
+  const preferMyanmar = i18n.resolvedLanguage === "my";
+  const resolvedRegion = match(regions, row.regionStateId);
+  const regionTownships = useMemo(
+    () => townshipsForRegion(townships, resolvedRegion && regions.some((item) => item.id === resolvedRegion) ? resolvedRegion : ""),
+    [townships, resolvedRegion, regions],
   );
+  const { zones, resolvedTownship, township } = useRowLocationData(row, regionTownships);
+  const districtLabel = locationLabel(township?.district, preferMyanmar);
 
   return (
     <>
-      <td>{select("regionStateId", 4, regions, t("region"))}</td>
-      <td>{select("districtId", 5, districts.data ?? [], t("district"))}</td>
-      <td>{select("townshipId", 6, townships.data ?? [], t("township"))}</td>
-      <td>{select("zoneId", 7, (zones.data ?? []).map((zone) => ({ ...zone, nameEn: zone.name })), t("zone"))}</td>
+      <td>
+        <select
+          data-cell={`${index}-4`}
+          aria-label={`${t("region")} ${index + 1}`}
+          value={resolvedRegion && regions.some((item) => item.id === resolvedRegion) ? resolvedRegion : ""}
+          onChange={(event) => onChangeRegion(event.target.value)}
+          onKeyDown={(event) => onMove(event, 4)}
+          className={cell}
+        >
+          <option value="">—</option>
+          {regions.map((item) => (
+            <option key={item.id} value={item.id}>
+              {locationLabel(item, preferMyanmar)}
+            </option>
+          ))}
+        </select>
+      </td>
+      <td className="px-2 text-sm text-slate-500" aria-label={`${t("district")} ${index + 1}`}>
+        {districtLabel || "—"}
+      </td>
+      <td>
+        <select
+          data-cell={`${index}-6`}
+          aria-label={`${t("township")} ${index + 1}`}
+          value={resolvedTownship && regionTownships.some((item) => item.id === resolvedTownship) ? resolvedTownship : ""}
+          onChange={(event) => onApplyTownship(event.target.value)}
+          onKeyDown={(event) => onMove(event, 6)}
+          className={cell}
+          disabled={!resolvedRegion || !regions.some((item) => item.id === resolvedRegion)}
+        >
+          <option value="">—</option>
+          {regionTownships.map((item) => (
+            <option key={item.id} value={item.id}>
+              {townshipOptionLabel(item, preferMyanmar)}
+            </option>
+          ))}
+        </select>
+      </td>
+      <td>
+        <select
+          data-cell={`${index}-7`}
+          aria-label={`${t("zone")} ${index + 1}`}
+          value={match(
+            (zones.data ?? []).map((zone) => ({ id: zone.id, nameEn: zone.name })),
+            row.zoneId,
+          )}
+          onChange={(event) => onChangeZone(event.target.value)}
+          onKeyDown={(event) => onMove(event, 7)}
+          className={cell}
+          disabled={!resolvedTownship || !regionTownships.some((item) => item.id === resolvedTownship)}
+        >
+          <option value="">—</option>
+          {(zones.data ?? []).map((zone) => (
+            <option key={zone.id} value={zone.id}>
+              {zone.name}
+            </option>
+          ))}
+        </select>
+      </td>
     </>
   );
 }
 
-function DeliveryFeeCell({ row, regions }: { row: ParcelRow; regions: Location[] }) {
-  const { deliveryFee } = useRowLocationData(row, regions);
+function DeliveryFeeCell({ row, townships }: { row: ParcelRow; townships: Township[] }) {
+  const scoped = row.regionStateId ? townshipsForRegion(townships, row.regionStateId) : townships;
+  const { deliveryFee } = useRowLocationData(row, scoped);
   return (
     <td className="px-2 text-sm font-bold">
-      {deliveryFee != null ? `${deliveryFee.toLocaleString()} MMK` : "—"}
+      {deliveryFee != null && isParcelRowLocationConsistent(row, townships) ? `${deliveryFee.toLocaleString()} MMK` : "—"}
     </td>
   );
 }
@@ -203,7 +341,8 @@ const fieldEditableStatuses = new Set(["CREATED", "PICKED_UP", "ASSIGNED"]);
 
 export function BatchDetailPage() {
   const { id = "" } = useParams();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const preferMyanmar = i18n.resolvedLanguage === "my";
   const queryClient = useQueryClient();
   const gridRef = useRef<HTMLDivElement>(null);
   const [rows, setRows] = useState(() => Array.from({ length: 10 }, blank));
@@ -225,7 +364,7 @@ export function BatchDetailPage() {
   });
   const allTownships = useQuery({
     queryKey: ["locations", "townships", "all"],
-    queryFn: () => api<Array<Township & { district?: { id: string; nameEn: string; regionState?: { nameEn: string } } }>>("/master-data/locations/townships").then((response) => response.data),
+    queryFn: () => api<Township[]>("/master-data/locations/townships").then((response) => response.data),
   });
   const editZones = useQuery({
     queryKey: ["locations", "zones", editForm.townshipId],
@@ -316,16 +455,34 @@ export function BatchDetailPage() {
         .filter(({ row }) => !isParcelRowBlank(row)),
     [rows],
   );
-  const invalid = populated.some(({ row }) => !isParcelRowComplete(row));
+  const invalid = populated.some(
+    ({ row }) => !isParcelRowComplete(row) || !isParcelRowLocationConsistent(row, allTownships.data ?? []),
+  );
+  useEffect(() => {
+    const catalogTownships = allTownships.data;
+    const catalogRegions = regions.data;
+    if (!catalogTownships?.length || !catalogRegions?.length) return;
+    setRows((current) => {
+      let changed = false;
+      const next = current.map((row) => {
+        if (isParcelRowBlank(row)) return row;
+        const hydrated = hydrateParcelRowLocations(row, catalogTownships, catalogRegions);
+        if (
+          hydrated.regionStateId !== row.regionStateId ||
+          hydrated.districtId !== row.districtId ||
+          hydrated.townshipId !== row.townshipId ||
+          hydrated.zoneId !== row.zoneId
+        ) {
+          changed = true;
+          return hydrated;
+        }
+        return row;
+      });
+      return changed ? next : current;
+    });
+  }, [allTownships.data, regions.data]);
   const applyFormTownship = (townshipId: string) => {
-    const township = allTownships.data?.find((item) => item.id === townshipId);
-    setFormDraft((current) => ({
-      ...current,
-      townshipId,
-      zoneId: "",
-      districtId: township?.district?.id ?? "",
-      regionStateId: township?.district?.regionState?.id ?? township?.district?.regionStateId ?? "",
-    }));
+    setFormDraft((current) => applyTownshipToParcelRow(current, townshipId, allTownships.data ?? [], { syncRegion: true }));
   };
   const commitFormDraft = (close: boolean) => {
     if (!isParcelRowComplete(formDraft)) return;
@@ -335,16 +492,20 @@ export function BatchDetailPage() {
   };
   const update = (index: number, key: keyof ParcelRow, value: string) =>
     setRows((current) =>
+      current.map((row, rowIndex) => (rowIndex === index ? { ...row, [key]: value } : row)),
+    );
+  const applyRowRegion = (index: number, regionStateId: string) =>
+    setRows((current) =>
       current.map((row, rowIndex) =>
         rowIndex === index
-          ? {
-              ...row,
-              [key]: value,
-              ...(key === "regionStateId" ? { districtId: "", townshipId: "", zoneId: "" } : {}),
-              ...(key === "districtId" ? { townshipId: "", zoneId: "" } : {}),
-              ...(key === "townshipId" ? { zoneId: "" } : {}),
-            }
+          ? { ...row, regionStateId, districtId: "", townshipId: "", zoneId: "" }
           : row,
+      ),
+    );
+  const applyRowTownship = (index: number, townshipId: string) =>
+    setRows((current) =>
+      current.map((row, rowIndex) =>
+        rowIndex === index ? applyTownshipToParcelRow(row, townshipId, allTownships.data ?? []) : row,
       ),
     );
   const move = (event: React.KeyboardEvent<HTMLElement>, row: number, column: number) => {
@@ -540,7 +701,9 @@ export function BatchDetailPage() {
       <div
         ref={gridRef}
         onPaste={(event) => {
-          const parsed = parseParcelGrid(event.clipboardData.getData("text"));
+          const parsed = parseParcelGrid(event.clipboardData.getData("text")).map((row) =>
+            hydrateParcelRowLocations(row, allTownships.data ?? [], regions.data ?? []),
+          );
           if (parsed.length) {
             event.preventDefault();
             setRows((current) => [...parsed, ...current].slice(0, 500));
@@ -580,10 +743,19 @@ export function BatchDetailPage() {
                   <td>{input("orderId", 1)}</td>
                   <td>{input("customerName", 2)}</td>
                   <td>{input("address", 3)}</td>
-                  <LocationCells row={row} index={index} regions={regions.data ?? []} onChange={(key, value) => update(index, key, value)} onMove={(event, column) => move(event, index, column)} />
+                  <LocationCells
+                    row={row}
+                    index={index}
+                    regions={regions.data ?? []}
+                    townships={allTownships.data ?? []}
+                    onChangeRegion={(regionStateId) => applyRowRegion(index, regionStateId)}
+                    onApplyTownship={(townshipId) => applyRowTownship(index, townshipId)}
+                    onChangeZone={(zoneId) => update(index, "zoneId", zoneId)}
+                    onMove={(event, column) => move(event, index, column)}
+                  />
                   <td>{input("customerPhone", 8)}</td>
                   <td>{input("codAmount", 9, "number")}</td>
-                  <DeliveryFeeCell row={row} regions={regions.data ?? []} />
+                  <DeliveryFeeCell row={row} townships={allTownships.data ?? []} />
                   <td>
                     <button aria-label={`${t("removeParcel")} ${index + 1}`} onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} className="p-2 text-rose-500">
                       <Trash2 size={16} />
@@ -680,7 +852,7 @@ export function BatchDetailPage() {
               <label className="text-xs font-bold text-slate-500">{t("customer")}<input required value={formDraft.customerName} onChange={(e) => setFormDraft((v) => ({ ...v, customerName: e.target.value }))} className={field} /></label>
               <label className="text-xs font-bold text-slate-500">{t("address")}<input required value={formDraft.address} onChange={(e) => setFormDraft((v) => ({ ...v, address: e.target.value }))} className={field} /></label>
               <label className="text-xs font-bold text-slate-500">{t("customerPhone")}<input value={formDraft.customerPhone} onChange={(e) => setFormDraft((v) => ({ ...v, customerPhone: e.target.value }))} className={field} /></label>
-              <label className="text-xs font-bold text-slate-500">{t("township")}<select required value={formDraft.townshipId} onChange={(e) => applyFormTownship(e.target.value)} className={field}><option value="">{t("township")}</option>{allTownships.data?.map((township) => <option key={township.id} value={township.id}>{township.district?.regionState?.nameEn ? `${township.district.regionState.nameEn} · ` : ""}{township.district?.nameEn ? `${township.district.nameEn} · ` : ""}{township.nameEn}</option>)}</select></label>
+              <label className="text-xs font-bold text-slate-500">{t("township")}<select required value={formDraft.townshipId} onChange={(e) => applyFormTownship(e.target.value)} className={field}><option value="">{t("township")}</option>{allTownships.data?.map((township) => <option key={township.id} value={township.id}>{townshipOptionLabel(township, preferMyanmar, true)}</option>)}</select></label>
               <label className="text-xs font-bold text-slate-500">{t("zone")}<select value={formDraft.zoneId} onChange={(e) => setFormDraft((v) => ({ ...v, zoneId: e.target.value }))} className={field}><option value="">—</option>{formZones.data?.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}</select></label>
               <label className="text-xs font-bold text-slate-500">{t("cod")}<input required type="number" min={0} value={formDraft.codAmount} onChange={(e) => setFormDraft((v) => ({ ...v, codAmount: e.target.value }))} className={field} /></label>
             </div>
