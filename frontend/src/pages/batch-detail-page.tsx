@@ -211,10 +211,14 @@ function locationLabel(value: { nameEn: string; nameMy?: string } | null | undef
   return preferMyanmar && value.nameMy ? value.nameMy : value.nameEn;
 }
 
-function townshipOptionLabel(township: Township, preferMyanmar: boolean, includeRegion = false) {
+function townshipOptionLabel(
+  township: Township,
+  preferMyanmar: boolean,
+  options?: { includeRegion?: boolean; includeDistrict?: boolean },
+) {
   const parts = [
-    includeRegion ? locationLabel(township.district?.regionState, preferMyanmar) : "",
-    locationLabel(township.district, preferMyanmar),
+    options?.includeRegion ? locationLabel(township.district?.regionState, preferMyanmar) : "",
+    options?.includeDistrict ? locationLabel(township.district, preferMyanmar) : "",
     locationLabel(township, preferMyanmar) || township.nameEn,
   ].filter(Boolean);
   return parts.join(" · ");
@@ -852,7 +856,7 @@ export function BatchDetailPage() {
               <label className="text-xs font-bold text-slate-500">{t("customer")}<input required value={formDraft.customerName} onChange={(e) => setFormDraft((v) => ({ ...v, customerName: e.target.value }))} className={field} /></label>
               <label className="text-xs font-bold text-slate-500">{t("address")}<input required value={formDraft.address} onChange={(e) => setFormDraft((v) => ({ ...v, address: e.target.value }))} className={field} /></label>
               <label className="text-xs font-bold text-slate-500">{t("customerPhone")}<input value={formDraft.customerPhone} onChange={(e) => setFormDraft((v) => ({ ...v, customerPhone: e.target.value }))} className={field} /></label>
-              <label className="text-xs font-bold text-slate-500">{t("township")}<select required value={formDraft.townshipId} onChange={(e) => applyFormTownship(e.target.value)} className={field}><option value="">{t("township")}</option>{allTownships.data?.map((township) => <option key={township.id} value={township.id}>{townshipOptionLabel(township, preferMyanmar, true)}</option>)}</select></label>
+              <label className="text-xs font-bold text-slate-500">{t("township")}<select required value={formDraft.townshipId} onChange={(e) => applyFormTownship(e.target.value)} className={field}><option value="">{t("township")}</option>{allTownships.data?.map((township) => <option key={township.id} value={township.id}>{townshipOptionLabel(township, preferMyanmar, { includeRegion: true, includeDistrict: true })}</option>)}</select></label>
               <label className="text-xs font-bold text-slate-500">{t("zone")}<select value={formDraft.zoneId} onChange={(e) => setFormDraft((v) => ({ ...v, zoneId: e.target.value }))} className={field}><option value="">—</option>{formZones.data?.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}</select></label>
               <label className="text-xs font-bold text-slate-500">{t("cod")}<input required type="number" min={0} value={formDraft.codAmount} onChange={(e) => setFormDraft((v) => ({ ...v, codAmount: e.target.value }))} className={field} /></label>
             </div>

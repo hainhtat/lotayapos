@@ -114,6 +114,8 @@ describe("BatchDetailPage settlement totals", () => {
     expect(township.querySelector('option[value="t-hlaing"]')).not.toBeNull();
     expect(township.querySelector('option[value="t-thingangyun"]')).not.toBeNull();
     expect(township.querySelector('option[value="t-chanayethazan"]')).toBeNull();
+    expect(township.querySelector('option[value="t-hlaing"]')).toHaveTextContent("Hlaing");
+    expect(township.querySelector('option[value="t-hlaing"]')?.textContent).not.toContain("West Yangon");
     fireEvent.change(township, { target: { value: "t-thingangyun" } });
     expect(screen.getByLabelText("Region / State 1")).toHaveValue("r-yangon");
     expect(screen.getByLabelText("District 1")).toHaveTextContent("East Yangon");
