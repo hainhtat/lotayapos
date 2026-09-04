@@ -1,4 +1,5 @@
-import {SafeAreaView,StyleSheet,Text,View} from "react-native";
+import {StyleSheet,Text,View} from "react-native";
+import {SafeAreaView} from "react-native-safe-area-context";
 import {i18n} from "@/i18n";
 import {useAuth} from "@/providers/auth";
 import {useTheme} from "@/providers/theme";

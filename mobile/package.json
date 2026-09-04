@@ -1,6 +1,6 @@
 {
   "name": "lotaya-rider",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
@@ -9,33 +9,37 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
+    "typecheck": "tsc --noEmit",
+    "doctor": "npx expo-doctor",
     "test": "jest --runInBand",
-    "build:apk": "expo prebuild --platform android --non-interactive && cd android && ./gradlew app:assembleRelease"
+    "build:apk": "CI=1 expo prebuild --platform android && cd android && ./gradlew app:assembleRelease",
+    "build:aab": "CI=1 expo prebuild --platform android && cd android && ./gradlew app:bundleRelease"
   },
   "dependencies": {
-    "@tanstack/react-query": "latest",
-    "expo": "latest",
+    "@tanstack/react-query": "5.101.4",
+    "expo": "57.0.11",
     "expo-clipboard": "~57.0.1",
-    "expo-localization": "latest",
-    "expo-router": "latest",
-    "expo-secure-store": "latest",
-    "expo-status-bar": "latest",
-    "i18n-js": "latest",
-    "react": "latest",
-    "react-dom": "^19.2.8",
-    "react-hook-form": "latest",
-    "react-native": "latest",
-    "react-native-web": "^0.21.2"
+    "expo-localization": "57.0.1",
+    "expo-router": "57.0.11",
+    "expo-secure-store": "57.0.1",
+    "expo-status-bar": "57.0.1",
+    "i18n-js": "4.5.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-hook-form": "7.85.0",
+    "react-native": "0.86.2",
+    "react-native-safe-area-context": "5.8.1",
+    "react-native-web": "0.21.2"
   },
   "devDependencies": {
-    "@testing-library/react-native": "latest",
-    "@types/jest": "latest",
-    "@types/react": "latest",
+    "@testing-library/react-native": "14.0.1",
+    "@types/jest": "30.0.0",
+    "@types/react": "19.2.18",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~57.0.1",
-    "jest": "latest",
-    "jest-expo": "latest",
-    "typescript": "latest"
+    "jest": "29.7.0",
+    "jest-expo": "57.0.3",
+    "typescript": "6.0.3"
   },
   "jest": {
     "preset": "jest-expo",

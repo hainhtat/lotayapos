@@ -6,7 +6,36 @@ import { previewManifestPdf } from "../services/manifest-import.service.js";
 
 const actor = (req: Parameters<RequestHandler>[0]) => ({ id: req.auth!.sub, role: req.auth!.role });
 
-export const batches: RequestHandler = async (req, res) => res.json({ success: true, data: await service.listBatches(actor(req)) });
+export const batches: RequestHandler = async (req, res) => {
+  const result = await service.listBatches(actor(req), {
+    page: req.query.page === undefined ? undefined : Number(req.query.page),
+    pageSize: req.query.pageSize === undefined ? undefined : Number(req.query.pageSize),
+    shopId: typeof req.query.shopId === "string" ? req.query.shopId : undefined,
+    hubId: typeof req.query.hubId === "string" ? req.query.hubId : undefined,
+    dateFrom: typeof req.query.dateFrom === "string" ? req.query.dateFrom : undefined,
+    dateTo: typeof req.query.dateTo === "string" ? req.query.dateTo : undefined,
+    search: typeof req.query.search === "string" ? req.query.search : undefined,
+  });
+  res.json({
+    success: true,
+    data: result.items,
+    pagination: { page: result.page, pageSize: result.pageSize, total: result.total, totalPages: Math.ceil(result.total / result.pageSize) },
+  });
+};
+export const overdueUnsent: RequestHandler = async (req, res) => {
+  const result = await service.listOverdueUnsentParcels(actor(req), {
+    page: req.query.page === undefined ? undefined : Number(req.query.page),
+    pageSize: req.query.pageSize === undefined ? undefined : Number(req.query.pageSize),
+    days: req.query.days === undefined ? undefined : Number(req.query.days),
+    hubId: typeof req.query.hubId === "string" ? req.query.hubId : undefined,
+  });
+  res.json({
+    success: true,
+    data: result.items,
+    meta: { days: result.days, cutoffDate: result.cutoffDate },
+    pagination: { page: result.page, pageSize: result.pageSize, total: result.total, totalPages: Math.ceil(result.total / result.pageSize) },
+  });
+};
 export const batchDetail: RequestHandler = async (req,res)=>res.json({success:true,data:await service.getBatchDetail(String(req.params.id),actor(req))});
 export const bulkCreateParcels: RequestHandler = async(req,res)=>res.status(201).json({success:true,data:await service.bulkCreateParcels(String(req.params.id),req.body,actor(req))});
 export const previewManifestImport: RequestHandler = async(req,res)=>res.json({success:true,data:await previewManifestPdf(String(req.params.id),Buffer.isBuffer(req.body)?req.body:Buffer.alloc(0),actor(req))});

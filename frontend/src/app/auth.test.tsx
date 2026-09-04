@@ -76,7 +76,7 @@ describe("AuthProvider", () => {
   });
 
   it("keeps a non-remembered login token in memory, sends it, and clears it on logout", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.includes("/auth/refresh")) return jsonUnauthorized();
       if (url.includes("/auth/login")) return jsonOk({ user, accessToken: "new-token" });

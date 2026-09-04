@@ -2,6 +2,7 @@ import {Stack} from "expo-router";
 import {AppProviders} from "@/providers/app";
 import {useAuth} from "@/providers/auth";
 import {getAuthNavigationState} from "@/lib/auth-navigation";
+import {SafeAreaProvider} from "react-native-safe-area-context";
 
 function Routes(){
   const {user,loading}=useAuth();
@@ -13,4 +14,4 @@ function Routes(){
   </Stack>;
 }
 
-export default function RootLayout(){return <AppProviders><Routes/></AppProviders>}
+export default function RootLayout(){return <SafeAreaProvider><AppProviders><Routes/></AppProviders></SafeAreaProvider>}

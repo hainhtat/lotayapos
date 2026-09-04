@@ -27,6 +27,7 @@ describe("hub-scoped finance migration", () => {
       execFileSync("sqlite3", [database, `.read ${join(migrationsRoot, "20260811080000_batch_locations_username_expenses", "migration.sql")}`]);
       execFileSync("sqlite3", [database, `.read ${join(migrationsRoot, "20260811090000_release_remediation", "migration.sql")}`]);
       execFileSync("sqlite3", [database, `.read ${join(migrationsRoot, "20260813180000_user_administration", "migration.sql")}`]);
+      execFileSync("sqlite3", [database, `.read ${join(migrationsRoot, "20260904100000_user_phone_login", "migration.sql")}`]);
 
       const client = new PrismaClient({ adapter: new PrismaBetterSqlite3({ url: `file:${database}` }) });
       const migratedDay = await client.cashbookDay.findFirstOrThrow({ where: { hubId: "hub-a" } });

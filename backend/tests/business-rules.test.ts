@@ -1,4 +1,4 @@
-import { addWalletAmounts, assertCashbookOpen, buildCashbookAdjustmentLines, buildExpenseLines, buildOpeningBalanceLines, buildWalletTransferLines, calculateDailySalaryDeduction, calculateOsSettlementNet, calculateRecognitionTotals, calculateRiderSettlementAmounts, calculateRiderSettlementTotals, calculateWalletBalances, calculateWalletReconciliationVariance, combineRiderOutstandingAggregates, cumulativeReceiptPosition, isOsSettlementCodCovered, returnedAdvanceContribution, settlementWalletMismatch } from "../src/services/finance.service.js";
+import { addWalletAmounts, assertCashbookOpen, buildCashbookAdjustmentLines, buildExpenseLines, buildOpeningBalanceLines, buildRiderSettlementReceivableLines, buildWalletTransferLines, calculateDailySalaryDeduction, calculateOsSettlementNet, calculateRecognitionTotals, calculateRiderSettlementAmounts, calculateRiderSettlementTotals, calculateWalletBalances, calculateWalletReconciliationVariance, combineRiderOutstandingAggregates, cumulativeReceiptPosition, isOsSettlementCodCovered, returnedAdvanceContribution, settlementWalletMismatch } from "../src/services/finance.service.js";
 import { buildRiderReceivableRecognitionLines } from "../src/services/parcel.service.js";
 import { ApiError } from "../src/utils/api-error.js";
 import { buildManifestFilenameSuffix, buildPickupAdvanceJournalLines, bulkAssignParcels, calculateReturnExtension, isAssignmentEligible, manifestStatusesLabel, pickupAdvancePostingDisposition, sanitizeManifestFilenamePart, summarizeManifestParcels, yangonBusinessDate } from "../src/services/operations.service.js";
@@ -7,10 +7,37 @@ import { assertParcelAccess, buildParcelListWhere, buildParcelScope, buildRiderC
 import { normalizeReasonCode, normalizeRiderPayFields } from "../src/services/master-data.service.js";
 import { assertBalancedLines, buildDeliveryCollectionLines, buildPartialReturnAdjustmentLines, buildPartialReturnCollectionLines, buildReturnDeductionLines, calculatePartialReturnAmounts } from "../src/services/ledger.service.js";
 import { recoverableAdvanceAmount, buildOsSettlementReturnDeductionLines, allocateProRata, baseParcelIdFromSourceId } from "../src/services/os-advance.js";
-import { generateDispatchManifestPdf } from "../src/utils/manifest-pdf.js";
+import { fitManifestText, generateDispatchManifestPdf } from "../src/utils/manifest-pdf.js";
 import { isDateChangeReason } from "../src/domain/exception-reasons.js";
 import { PDFDocument } from "pdf-lib";
 import { env } from "../src/config/env.js";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+function extractPdfStrings(pdf: Buffer) {
+  const directory = mkdtempSync(join(tmpdir(), "lotaya-pdf-test-"));
+  const pdfPath = join(directory, "manifest.pdf");
+  writeFileSync(pdfPath, pdf);
+  try {
+    const script = `
+      import { readFileSync } from "node:fs";
+      import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+      const doc = await getDocument({ data: new Uint8Array(readFileSync(process.argv[1])), disableWorker: true, isEvalSupported: false, verbosity: 0 }).promise;
+      const strings = [];
+      for (let page = 1; page <= doc.numPages; page += 1) {
+        const content = await (await doc.getPage(page)).getTextContent();
+        for (const item of content.items) if ("str" in item && item.str) strings.push(item.str);
+      }
+      console.log(JSON.stringify(strings));
+      await doc.cleanup();
+    `;
+    return JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", script, pdfPath], { encoding: "utf8" })) as string[];
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
 
 describe("rider settlement formula", () => {
   test("recognizes rider debt at delivery without treating it as a wallet receipt", () => {
@@ -58,6 +85,19 @@ describe("rider settlement formula", () => {
         wavePay: 0,
       }),
     ).toEqual({ expectedAmount: 95000, actualAmount: 95000, variance: 0, salaryDeduction: 10000 });
+  });
+
+  test("posts salary as visible rider-receivable lines inside the settlement journal", () => {
+    expect(buildRiderSettlementReceivableLines(95_000, 10_000)).toEqual([
+      { account: "RIDER_RECEIVABLE", debit: 0, credit: 105_000 },
+      { account: "RIDER_RECEIVABLE", debit: 10_000, credit: 0 },
+    ]);
+    const lines = [
+      { account: "WALLET_CASH", debit: 95_000, credit: 0 },
+      ...buildRiderSettlementReceivableLines(95_000, 10_000),
+    ];
+    expect(lines.reduce((sum, line) => sum + line.debit, 0)).toBe(lines.reduce((sum, line) => sum + line.credit, 0));
+    expect(lines.some((line) => line.account === "RIDER_COMMISSION_PAYABLE")).toBe(false);
   });
 
   test("pro-rates monthly salary by days in the settlement month", () => {
@@ -638,6 +678,73 @@ describe("bulk dispatch and manifest rules", () => {
     expect(doc.getPageCount()).toBeGreaterThan(0);
     expect(myanmar.length).toBeGreaterThan(latinOnly.length);
     expect(myanmar.length).toBeGreaterThan(5000);
+  });
+
+  test("keeps mixed Latin/Myanmar headers searchable and round-trips exact Myanmar words", async () => {
+    const pdf = await generateDispatchManifestPdf({
+      generatedAt: new Date("2026-08-10T00:00:00.000Z"),
+      sections: [{
+        riderName: "Rider ကိုအောင်",
+        parcels: [{
+          trackingNumber: "PKG-MM-001",
+          customerName: "မောင်မောင်",
+          customerPhone: "0912345678",
+          address: "အင်းစိန် လမ်းမကြီး",
+          codAmount: 25000,
+          deliveryFee: 1500,
+          zone: null,
+          township: "အင်းစိန်",
+          status: "FAILED",
+          note: "ဖုန်းမကိုင်",
+        }],
+      }],
+    });
+
+    const strings = extractPdfStrings(pdf);
+    const text = strings.join(" ");
+    expect(text).toContain("All Active Deliveries - Rider: Rider");
+    expect(text).toContain("ကိုအောင်");
+    expect(text).toContain("မောင်မောင်");
+    expect(text).toContain("အင်းစိန်");
+    expect(text).toContain("ဖုန်းမကိုင်");
+    expect(strings).not.toEqual(expect.arrayContaining(["ီ", "း"]));
+  });
+
+  test("does not truncate text in the middle of a Myanmar combining sequence", async () => {
+    const customerName = "Xကိကိကိကိကိကိ";
+    const pdf = await generateDispatchManifestPdf({
+      sections: [{
+        riderName: "Ko Ko",
+        parcels: [{
+          trackingNumber: "PKG-MM-002",
+          customerName,
+          customerPhone: null,
+          address: "Yangon",
+          codAmount: 1000,
+          zone: null,
+          township: null,
+        }],
+      }],
+    });
+    expect(extractPdfStrings(pdf).join(" ")).toContain("ကိကိကိကိကိကိ");
+  });
+
+  test("keeps Myanmar join controls in the Myanmar font run", async () => {
+    const withZwj = "က\u200Dိ";
+    const withZwnj = "က\u200Cိ";
+    const pdf = await generateDispatchManifestPdf({
+      sections: [{
+        riderName: `${withZwj} ${withZwnj}`,
+        parcels: [{ trackingNumber: "PKG-JOIN", customerName: withZwj, customerPhone: null, address: withZwnj, codAmount: 1000, zone: null, township: null }],
+      }],
+    });
+    expect(pdf.subarray(0, 5).toString("ascii")).toBe("%PDF-");
+    expect(extractPdfStrings(pdf).join(" ")).toContain("က");
+  });
+
+  test("truncates emoji ZWJ families and regional-indicator flags only at grapheme boundaries", () => {
+    expect(fitManifestText("123456789👨‍👩‍👧‍👦XYZUV", 14)).toBe("123456789👨‍👩‍👧‍👦X...");
+    expect(fitManifestText("123456789🇲🇲XYZUV", 14)).toBe("123456789🇲🇲X...");
   });
 
   test("builds human-readable manifest filename suffixes", () => {

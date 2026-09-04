@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { CreateBatchDialog } from "./create-batch-dialog";
+import { OperationsReturnQueue } from "./operations-return-queue";
 
 type BatchSummary = {
   id: string;
@@ -32,11 +33,21 @@ export function BatchesPage() {
   const location = useLocation();
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
+  const [page, setPage] = useState(1);
+  const [filters, setFilters] = useState({ search: "", dateFrom: "", dateTo: "", shopId: "", hubId: "" });
   const masters = useQuery({ queryKey: ["master-data"], queryFn: () => api<{shops:Array<{id:string;name:string}>;hubs:Array<{id:string;name:string}>}>("/master-data").then((r) => r.data) });
 
   const batches = useQuery({
-    queryKey: ["operations-batches"],
-    queryFn: () => api<BatchSummary[]>("/operations/batches").then((r) => r.data),
+    queryKey: ["operations-batches", page, filters],
+    queryFn: () => {
+      const params = new URLSearchParams({ page: String(page), pageSize: "25" });
+      Object.entries(filters).forEach(([key, value]) => { if (value.trim()) params.set(key, value.trim()); });
+      return api<BatchSummary[]>(`/operations/batches?${params}`).then((response) => ({
+        items: response.data,
+        pagination: response.pagination ?? { page, pageSize: 25, total: response.data.length, totalPages: 1 },
+      }));
+    },
+    placeholderData: (previous) => previous,
   });
   const alerts = useQuery({
     queryKey: ["alerts"],
@@ -75,8 +86,15 @@ export function BatchesPage() {
             <p className="text-xs text-slate-500">{t("allBatchesDescription")}</p>
           </div>
           <span className="rounded-full bg-[#eaf6ff] px-2.5 py-0.5 text-[11px] font-bold text-[#0787df] dark:bg-[#1598ef]/15">
-            {(batches.data ?? []).length} {t("batches")}
+            {(batches.data?.pagination.total ?? 0)} {t("batches")}
           </span>
+        </div>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          <label className="text-xs font-bold text-slate-500">{t("searchBatches")}<input aria-label={t("searchBatches")} type="search" value={filters.search} onChange={(event) => { setFilters((value) => ({ ...value, search: event.target.value })); setPage(1); }} className={`${control} mt-1 w-full`} /></label>
+          <label className="text-xs font-bold text-slate-500">{t("dateFrom")}<input aria-label={`${t("allBatches")} ${t("dateFrom")}`} type="date" value={filters.dateFrom} onChange={(event) => { setFilters((value) => ({ ...value, dateFrom: event.target.value })); setPage(1); }} className={`${control} mt-1 w-full`} /></label>
+          <label className="text-xs font-bold text-slate-500">{t("dateTo")}<input aria-label={`${t("allBatches")} ${t("dateTo")}`} type="date" value={filters.dateTo} onChange={(event) => { setFilters((value) => ({ ...value, dateTo: event.target.value })); setPage(1); }} className={`${control} mt-1 w-full`} /></label>
+          <label className="text-xs font-bold text-slate-500">{t("onlineShop")}<select aria-label={`${t("allBatches")} ${t("onlineShop")}`} value={filters.shopId} onChange={(event) => { setFilters((value) => ({ ...value, shopId: event.target.value })); setPage(1); }} className={`${control} mt-1 w-full`}><option value="">{t("all")}</option>{(masters.data?.shops ?? []).map((shop) => <option key={shop.id} value={shop.id}>{shop.name}</option>)}</select></label>
+          <label className="text-xs font-bold text-slate-500">{t("hub")}<select aria-label={`${t("allBatches")} ${t("hub")}`} value={filters.hubId} onChange={(event) => { setFilters((value) => ({ ...value, hubId: event.target.value })); setPage(1); }} className={`${control} mt-1 w-full`}><option value="">{t("all")}</option>{(masters.data?.hubs ?? []).map((hub) => <option key={hub.id} value={hub.id}>{hub.name}</option>)}</select></label>
         </div>
         {batches.isLoading ? (
           <p className="py-6 text-center text-sm text-slate-400">{t("loading")}</p>
@@ -87,7 +105,7 @@ export function BatchesPage() {
               {t("retry")}
             </button>
           </div>
-        ) : !(batches.data ?? []).length ? (
+        ) : !batches.data?.items.length ? (
           <p className="py-6 text-center text-sm text-slate-400">{t("empty")}</p>
         ) : (
           <div className="mt-3 overflow-x-auto">
@@ -105,7 +123,7 @@ export function BatchesPage() {
                 </tr>
               </thead>
               <tbody>
-                {(batches.data ?? []).map((batch) => {
+                {(batches.data?.items ?? []).map((batch) => {
                   const stats = batchStats(batch.parcels);
                   const active = activeBatchId === batch.id;
                   return (
@@ -147,7 +165,16 @@ export function BatchesPage() {
             </table>
           </div>
         )}
+        {batches.data && batches.data.pagination.totalPages > 1 && (
+          <nav aria-label={t("batchPagination")} className="mt-4 flex items-center justify-between text-sm">
+            <button type="button" disabled={page <= 1} onClick={() => setPage((value) => value - 1)} className="font-bold text-[#0787df] disabled:opacity-40">{t("previous")}</button>
+            <span>{t("pageOf", { page: batches.data.pagination.page, total: batches.data.pagination.totalPages })}</span>
+            <button type="button" disabled={page >= batches.data.pagination.totalPages} onClick={() => setPage((value) => value + 1)} className="font-bold text-[#0787df] disabled:opacity-40">{t("next")}</button>
+          </nav>
+        )}
       </section>
+
+      <OperationsReturnQueue />
 
       <section
         id="alerts"

@@ -78,7 +78,7 @@ const COLS = [
   { key: "Note", x: 524, w: 53 },
 ] as const;
 
-const MYANMAR_RE = /[\u1000-\u109F]/;
+const MYANMAR_RE = /[\u1000-\u109F\uA9E0-\uA9FF\uAA60-\uAA7F]/;
 
 const STATUS_SHORT: Record<string, string> = {
   CREATED: "CRT",
@@ -93,10 +93,34 @@ const STATUS_SHORT: Record<string, string> = {
   RETURNED: "RTN",
 };
 
-function fit(value: string, maxLength: number) {
+function fallbackGraphemes(value: string) {
+  const parts: string[] = [];
+  for (const char of value) {
+    const prior = parts.at(-1);
+    if ((/\p{Mark}/u.test(char) || prior?.endsWith("\u200D")) && parts.length) parts[parts.length - 1] += char;
+    else if (/[\u200C\u200D]/.test(char) && parts.length) parts[parts.length - 1] += char;
+    else if (/\p{Regional_Indicator}/u.test(char) && prior && /^\p{Regional_Indicator}$/u.test(prior)) parts[parts.length - 1] += char;
+    else parts.push(char);
+  }
+  return parts;
+}
+
+function graphemes(value: string) {
+  if (typeof Intl.Segmenter === "function") {
+    return [...new Intl.Segmenter("my", { granularity: "grapheme" }).segment(value)].map((part) => part.segment);
+  }
+  return fallbackGraphemes(value);
+}
+
+export function fitManifestText(value: string, maxLength: number) {
   const normalized = value.replace(/\s+/g, " ").trim();
   if (!normalized) return "-";
-  return normalized.length > maxLength ? `${normalized.slice(0, Math.max(1, maxLength - 1))}...` : normalized;
+  const parts = graphemes(normalized);
+  return parts.length > maxLength ? `${parts.slice(0, Math.max(1, maxLength - 3)).join("")}...` : normalized;
+}
+
+function afterGraphemes(value: string, count: number) {
+  return graphemes(value).slice(count).join("");
 }
 
 function money(value: number) {
@@ -141,7 +165,7 @@ function loadMyanmarFontBytes() {
 }
 loadMyanmarFontBytes.cache = null as Buffer | null;
 
-type FontPair = { regular: PDFFont; bold: PDFFont; myanmarKit: FontkitFont };
+type FontPair = { regular: PDFFont; bold: PDFFont; myanmar: PDFFont; myanmarKit: FontkitFont };
 
 /**
  * pdf-lib drawSvgPath applies scale(s, -s) assuming SVG y-down.
@@ -200,6 +224,25 @@ function drawShapedMyanmar(
     cursorX += pos.xAdvance * scale;
     cursorY += pos.yAdvance * scale;
   }
+  return cursorX - x;
+}
+
+function isMyanmarCharacter(char: string) {
+  return /[\u1000-\u109F\uA9E0-\uA9FF\uAA60-\uAA7F]/.test(char);
+}
+
+function scriptRuns(text: string) {
+  const runs: Array<{ text: string; myanmar: boolean }> = [];
+  const chars = [...text];
+  for (let index = 0; index < chars.length; index += 1) {
+    const char = chars[index]!;
+    const myanmar = isMyanmarCharacter(char)
+      || (/^[\u200C\u200D]$/.test(char) && (runs.at(-1)?.myanmar === true || isMyanmarCharacter(chars[index + 1] ?? "")));
+    const prior = runs.at(-1);
+    if (prior?.myanmar === myanmar) prior.text += char;
+    else runs.push({ text: char, myanmar });
+  }
+  return runs;
 }
 
 type PageContext = {
@@ -227,7 +270,18 @@ function drawText(
 ) {
   if (!text) return;
   if (MYANMAR_RE.test(text)) {
-    drawShapedMyanmar(ctx.page, ctx.fonts.myanmarKit, text, x, y, size, color, ctx.glyphPathCache);
+    let cursorX = x;
+    for (const run of scriptRuns(text)) {
+      if (run.myanmar) {
+        const width = drawShapedMyanmar(ctx.page, ctx.fonts.myanmarKit, run.text, cursorX, y, size, color, ctx.glyphPathCache);
+        ctx.page.drawText(run.text, { x: cursorX, y, size, font: ctx.fonts.myanmar, opacity: 0 });
+        cursorX += width;
+      } else {
+        const font = bold ? ctx.fonts.bold : ctx.fonts.regular;
+        ctx.page.drawText(run.text, { x: cursorX, y, size, font, color });
+        cursorX += font.widthOfTextAtSize(run.text, size);
+      }
+    }
     return;
   }
   ctx.page.drawText(text, {
@@ -261,18 +315,18 @@ function drawRiderSheetHeader(
   drawBrandBar(ctx);
   ctx.y = PAGE_HEIGHT - 40;
   const title = ctx.continued
-    ? `All Active Deliveries - Rider: ${fit(section.riderName, 42)} (continued)`
-    : `All Active Deliveries - Rider: ${fit(section.riderName, 48)}`;
+    ? `All Active Deliveries - Rider: ${fitManifestText(section.riderName, 42)} (continued)`
+    : `All Active Deliveries - Rider: ${fitManifestText(section.riderName, 48)}`;
   drawText(ctx, title, MARGIN_X, ctx.y, 12, true, BRAND.navy);
   ctx.y -= 14;
   drawText(ctx, `Generated: ${formatYangonStamp(generatedAt)}  |  All remaining assigned orders combined`, MARGIN_X, ctx.y, 7, false, BRAND.muted);
   ctx.y -= 11;
   drawText(ctx, `Selected statuses: ${statusesLabel}`, MARGIN_X, ctx.y, 7, false, BRAND.slate);
   ctx.y -= 11;
-  drawText(ctx, `Selected riders: ${fit(selectedRidersLabel, 90)}`, MARGIN_X, ctx.y, 7, false, BRAND.slate);
+  drawText(ctx, `Selected riders: ${fitManifestText(selectedRidersLabel, 90)}`, MARGIN_X, ctx.y, 7, false, BRAND.slate);
   if (section.hubName) {
     ctx.y -= 11;
-    drawText(ctx, `Hub: ${fit(section.hubName, 40)}`, MARGIN_X, ctx.y, 7, false, BRAND.muted);
+    drawText(ctx, `Hub: ${fitManifestText(section.hubName, 40)}`, MARGIN_X, ctx.y, 7, false, BRAND.muted);
   }
   ctx.y -= 16;
 
@@ -288,7 +342,7 @@ function drawRiderSheetHeader(
     drawRect(ctx, x, ctx.y - 34, cardW, 38, BRAND.soft, BRAND.line);
     drawRect(ctx, x, ctx.y - 34, 3, 38, card.color);
     drawText(ctx, card.label, x + 10, ctx.y - 10, 7, false, BRAND.muted);
-    drawText(ctx, fit(card.value, 16), x + 10, ctx.y - 26, 9, true, BRAND.navy);
+    drawText(ctx, fitManifestText(card.value, 16), x + 10, ctx.y - 26, 9, true, BRAND.navy);
   });
   ctx.y -= 48;
 }
@@ -339,27 +393,27 @@ function drawParcelRow(ctx: PageContext, parcel: ManifestParcel, index: number) 
   const noteText = parcel.note?.trim() || "";
 
   drawText(ctx, String(index + 1), COLS[0].x + 2, y1, 7, true, BRAND.slate);
-  drawText(ctx, fit(orderLabel, 8), COLS[1].x + 2, y1, 7, true, BRAND.navy);
+  drawText(ctx, fitManifestText(orderLabel, 8), COLS[1].x + 2, y1, 7, true, BRAND.navy);
   if (parcel.orderId?.trim()) {
-    drawText(ctx, fit(parcel.trackingNumber, 8), COLS[1].x + 2, y2, 5.5, false, BRAND.muted);
+    drawText(ctx, fitManifestText(parcel.trackingNumber, 8), COLS[1].x + 2, y2, 5.5, false, BRAND.muted);
   }
-  drawText(ctx, fit(parcel.batchLabel ?? "-", 11), COLS[2].x + 2, y1, 6.5);
-  drawText(ctx, fit(parcel.shopName ?? "-", 10), COLS[3].x + 2, y1, 6.5);
-  drawText(ctx, fit(parcel.customerName, 11), COLS[4].x + 2, y1, 6.5, true);
-  drawText(ctx, fit(parcel.customerPhone ?? "-", 11), COLS[5].x + 2, y1, 6, false, BRAND.slate);
-  drawText(ctx, fit(parcel.township ?? parcel.zone ?? "-", 10), COLS[6].x + 2, y1, 6, false, BRAND.slate);
-  drawText(ctx, fit(address, 16), COLS[7].x + 2, y1, 6);
-  if (address.length > 16) {
-    drawText(ctx, fit(address.slice(16), 16), COLS[7].x + 2, y2, 5.5, false, BRAND.muted);
+  drawText(ctx, fitManifestText(parcel.batchLabel ?? "-", 11), COLS[2].x + 2, y1, 6.5);
+  drawText(ctx, fitManifestText(parcel.shopName ?? "-", 10), COLS[3].x + 2, y1, 6.5);
+  drawText(ctx, fitManifestText(parcel.customerName, 11), COLS[4].x + 2, y1, 6.5, true);
+  drawText(ctx, fitManifestText(parcel.customerPhone ?? "-", 11), COLS[5].x + 2, y1, 6, false, BRAND.slate);
+  drawText(ctx, fitManifestText(parcel.township ?? parcel.zone ?? "-", 10), COLS[6].x + 2, y1, 6, false, BRAND.slate);
+  drawText(ctx, fitManifestText(address, 16), COLS[7].x + 2, y1, 6);
+  if (graphemes(address).length > 16) {
+    drawText(ctx, fitManifestText(afterGraphemes(address, 16), 16), COLS[7].x + 2, y2, 5.5, false, BRAND.muted);
   }
-  drawText(ctx, fit(money(parcel.codAmount), 8), COLS[8].x + 1, y1, 6, true);
-  drawText(ctx, fit(money(fee), 7), COLS[9].x + 1, y1, 6, false, BRAND.slate);
-  drawText(ctx, fit(money(total), 8), COLS[10].x + 1, y1, 6.5, true, BRAND.accent);
-  drawText(ctx, fit(statusLabel(parcel.status), 5), statusCol.x + 1, y1, 6, true, BRAND.slate);
+  drawText(ctx, fitManifestText(money(parcel.codAmount), 8), COLS[8].x + 1, y1, 6, true);
+  drawText(ctx, fitManifestText(money(fee), 7), COLS[9].x + 1, y1, 6, false, BRAND.slate);
+  drawText(ctx, fitManifestText(money(total), 8), COLS[10].x + 1, y1, 6.5, true, BRAND.accent);
+  drawText(ctx, fitManifestText(statusLabel(parcel.status), 5), statusCol.x + 1, y1, 6, true, BRAND.slate);
   if (noteText) {
-    drawText(ctx, fit(noteText, 14), noteCol.x + 1, y1, 5.5, false, BRAND.muted);
-    if (noteText.length > 14) {
-      drawText(ctx, fit(noteText.slice(14), 14), noteCol.x + 1, y2, 5, false, BRAND.muted);
+    drawText(ctx, fitManifestText(noteText, 14), noteCol.x + 1, y1, 5.5, false, BRAND.muted);
+    if (graphemes(noteText).length > 14) {
+      drawText(ctx, fitManifestText(afterGraphemes(noteText, 14), 14), noteCol.x + 1, y2, 5, false, BRAND.muted);
     }
   }
 
@@ -393,7 +447,8 @@ async function buildPdfDocument(input: ManifestInput) {
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   const myanmarBytes = loadMyanmarFontBytes();
   const myanmarKit = fontkit.create(myanmarBytes);
-  const fonts: FontPair = { regular, bold, myanmarKit };
+  const myanmar = await doc.embedFont(myanmarBytes, { subset: true });
+  const fonts: FontPair = { regular, bold, myanmar, myanmarKit };
   const glyphPathCache = new Map<number, string>();
 
   if (!sections.length) {

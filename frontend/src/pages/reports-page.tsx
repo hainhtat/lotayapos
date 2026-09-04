@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Download, FileBarChart, PackageCheck, RotateCcw, Wallet } from "lucide-react";
+import { Download, FileBarChart, PackageCheck, RotateCcw, TrendingUp, Wallet } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useAuth } from "@/app/auth";
 import { DeliveryStatusPanel, type ManifestPreviewData } from "@/components/delivery-status-panel";
+import { DetailedReportsPanel } from "@/components/detailed-reports-panel";
 import { api, apiRaw } from "@/lib/api";
 import { resolveManifestPdfFilename } from "@/lib/content-disposition";
 import { ledgerAccounts, type LedgerReport } from "@/lib/ledger";
@@ -16,7 +18,44 @@ import {
 } from "@/lib/manifest-filters";
 
 type Overview = { totalParcels: number; delivered: number; pendingReturn: number; cashCollected: number; grossProfit: number };
-type MasterData = { riders: Array<{ id: string; user: { name: string }; hub?: { name: string } | null }> };
+type MasterData = {
+  hubs?: Array<{ id: string; name: string }>;
+  riders: Array<{ id: string; user: { name: string }; hub?: { name: string } | null }>;
+};
+type ProfitEffect = {
+  deliveryFeeRevenue: number;
+  riderCommissionCost: number;
+  riderSalaryCost: number;
+  returnAdvanceRecovery: number;
+  expenseCost: number;
+  adjustmentContribution: number;
+};
+type ProfitReport = {
+  period: { from: string; to: string; timezone: string };
+  currency: string;
+  components: {
+    deliveryFeeRevenue: number;
+    riderCommissionCost: number;
+    riderSalaryCost: number;
+    riderCompensationCost: number;
+    returns: { advanceRecovery: number; includedInProfit: boolean; explanation: string };
+    adjustments: { contribution: number };
+    expenses: { cost: number };
+  };
+  grossProfit: number;
+  netProfit: number;
+  journalEntries: Array<{
+    id: string;
+    businessDate: string;
+    description: string;
+    effectiveSourceType: string;
+    effects: ProfitEffect;
+    lines: Array<{ id: string; account: string; debit: number; credit: number }>;
+  }>;
+};
+
+const today = () => new Date().toISOString().slice(0, 10);
+const money = (value: number) => `${value.toLocaleString()} MMK`;
 
 const control = "rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#1598ef] dark:border-white/10 dark:bg-[#121416]";
 const chip = (active: boolean) =>
@@ -24,6 +63,7 @@ const chip = (active: boolean) =>
 
 export function ReportsPage() {
   const { t } = useTranslation();
+  const { user } = useAuth();
   const [draft, setDraft] = useState({ from: "", to: "", account: "" });
   const [filters, setFilters] = useState(draft);
   const [riderIds, setRiderIds] = useState<string[]>([]);
@@ -31,6 +71,8 @@ export function ReportsPage() {
   const [datePreset, setDatePreset] = useState<ManifestDatePreset>("today");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [profitDraft, setProfitDraft] = useState({ from: today(), to: today(), hubId: "" });
+  const [profitFilters, setProfitFilters] = useState(profitDraft);
   const qs = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString();
   const overview = useQuery({ queryKey: ["report-overview"], queryFn: () => api<Overview>("/master-data/dashboard").then((r) => r.data) });
   const ledger = useQuery({
@@ -40,6 +82,14 @@ export function ReportsPage() {
   const masters = useQuery({
     queryKey: ["master-data"],
     queryFn: () => api<MasterData>("/master-data").then((r) => r.data),
+  });
+  const canViewProfit = ["SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER", "AUDITOR"].includes(user?.role ?? "");
+  const profitParams = new URLSearchParams({ from: profitFilters.from, to: profitFilters.to });
+  if (profitFilters.hubId) profitParams.set("hubId", profitFilters.hubId);
+  const profit = useQuery({
+    queryKey: ["profit-report", profitParams.toString()],
+    queryFn: () => api<ProfitReport>(`/reports/profit?${profitParams}`).then((response) => response.data),
+    enabled: canViewProfit && Boolean(profitFilters.from && profitFilters.to) && (user?.role !== "SUPERADMIN" || Boolean(profitFilters.hubId)),
   });
   const manifestBody = useMemo(
     () => buildManifestBody({ riderIds, status, datePreset, dateFrom, dateTo }),
@@ -99,6 +149,96 @@ export function ReportsPage() {
           ))}
         </div>
       )}
+
+      {canViewProfit && (
+        <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d]">
+          <div className="flex items-center gap-3">
+            <TrendingUp className="text-[#1598ef]" />
+            <div>
+              <h2 className="font-display text-lg font-bold">{t("profitBreakdown")}</h2>
+              <p className="text-sm text-slate-500">{t("profitBreakdownDescription")}</p>
+            </div>
+          </div>
+          <form
+            className="mt-5 grid gap-3 sm:grid-cols-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setProfitFilters(profitDraft);
+            }}
+          >
+            <label className="text-xs font-bold text-slate-500">
+              {t("dateFrom")}
+              <input aria-label={`${t("profitBreakdown")} ${t("dateFrom")}`} required type="date" value={profitDraft.from} onChange={(event) => setProfitDraft((value) => ({ ...value, from: event.target.value }))} className={`${control} mt-1 w-full`} />
+            </label>
+            <label className="text-xs font-bold text-slate-500">
+              {t("dateTo")}
+              <input aria-label={`${t("profitBreakdown")} ${t("dateTo")}`} required type="date" value={profitDraft.to} onChange={(event) => setProfitDraft((value) => ({ ...value, to: event.target.value }))} className={`${control} mt-1 w-full`} />
+            </label>
+            {user?.role === "SUPERADMIN" && (
+              <label className="text-xs font-bold text-slate-500">
+                {t("hub")}
+                <select aria-label={`${t("profitBreakdown")} ${t("hub")}`} required value={profitDraft.hubId} onChange={(event) => setProfitDraft((value) => ({ ...value, hubId: event.target.value }))} className={`${control} mt-1 w-full`}>
+                  <option value="">{t("selectHub")}</option>
+                  {(masters.data?.hubs ?? []).map((hub) => <option key={hub.id} value={hub.id}>{hub.name}</option>)}
+                </select>
+              </label>
+            )}
+            <button className="self-end rounded-xl bg-[#1598ef] px-4 py-2.5 text-sm font-bold text-white">{t("runProfitReport")}</button>
+          </form>
+          {user?.role === "SUPERADMIN" && !profitFilters.hubId ? (
+            <p className="mt-6 rounded-xl bg-sky-50 p-4 text-sm text-sky-800 dark:bg-sky-950/30 dark:text-sky-200">{t("selectHubForProfit")}</p>
+          ) : profit.isLoading ? (
+            <p className="mt-6 py-8 text-center">{t("loading")}</p>
+          ) : profit.isError ? (
+            <div role="alert" className="mt-6 rounded-xl bg-rose-50 p-4 text-sm text-rose-700 dark:bg-rose-950/30 dark:text-rose-200">
+              <p>{t("profitLoadError")}</p>
+              <button type="button" onClick={() => void profit.refetch()} className="mt-2 font-bold underline">{t("retry")}</button>
+            </div>
+          ) : profit.data ? (
+            <div className="mt-6">
+              <p className="text-xs text-slate-500">{t("profitPeriod", { from: profit.data.period.from, to: profit.data.period.to, timezone: profit.data.period.timezone })}</p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {[
+                  ["deliveryFeeRevenue", profit.data.components.deliveryFeeRevenue],
+                  ["riderCompensationCost", -profit.data.components.riderCompensationCost],
+                  ["grossProfit", profit.data.grossProfit],
+                  ["netProfit", profit.data.netProfit],
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="rounded-xl border border-slate-100 p-4 dark:border-white/10">
+                    <p className="text-xs text-slate-500">{t(String(label))}</p>
+                    <p className="mt-1 text-xl font-bold">{money(Number(value))}</p>
+                  </div>
+                ))}
+              </div>
+              <dl className="mt-4 grid gap-2 rounded-xl bg-slate-50 p-4 text-sm sm:grid-cols-2 dark:bg-white/5">
+                <div className="flex justify-between gap-3"><dt>{t("riderCommissionCost")}</dt><dd>{money(profit.data.components.riderCommissionCost)}</dd></div>
+                <div className="flex justify-between gap-3"><dt>{t("riderSalaryCost")}</dt><dd>{money(profit.data.components.riderSalaryCost)}</dd></div>
+                <div className="flex justify-between gap-3"><dt>{t("expenseCost")}</dt><dd>{money(profit.data.components.expenses.cost)}</dd></div>
+                <div className="flex justify-between gap-3"><dt>{t("adjustmentContribution")}</dt><dd>{money(profit.data.components.adjustments.contribution)}</dd></div>
+                <div className="flex justify-between gap-3 sm:col-span-2"><dt>{t("returnAdvanceRecovery")}</dt><dd>{money(profit.data.components.returns.advanceRecovery)}</dd></div>
+              </dl>
+              <p className="mt-2 text-xs text-slate-500">{t("returnsExcludedFromProfit")}</p>
+              <h3 className="mt-6 font-display font-bold">{t("profitJournalDrilldown")}</h3>
+              {!profit.data.journalEntries.length ? (
+                <p className="py-8 text-center text-slate-400">{t("profitEmpty")}</p>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  {profit.data.journalEntries.map((entry) => (
+                    <details key={entry.id} className="rounded-xl border border-slate-100 p-4 dark:border-white/10">
+                      <summary className="cursor-pointer font-semibold"><span>{entry.businessDate} · {entry.description}</span><span className="ml-2 text-xs text-slate-400">{entry.effectiveSourceType}</span></summary>
+                      <div className="mt-3 overflow-x-auto">
+                        <table className="w-full text-left text-xs"><thead><tr className="border-b text-slate-400"><th className="pb-2">{t("account")}</th><th className="pb-2 text-right">{t("debit")}</th><th className="pb-2 text-right">{t("credit")}</th></tr></thead><tbody>{entry.lines.map((line) => <tr key={line.id} className="border-b border-slate-100 dark:border-white/10"><td className="py-2">{line.account}</td><td className="py-2 text-right">{line.debit.toLocaleString()}</td><td className="py-2 text-right">{line.credit.toLocaleString()}</td></tr>)}</tbody></table>
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : null}
+        </section>
+      )}
+
+      {canViewProfit && <DetailedReportsPanel />}
 
       <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d]">
         <div className="flex flex-wrap items-start justify-between gap-3">

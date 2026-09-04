@@ -178,6 +178,7 @@ describe("parcel corrections and delivery fee edits", () => {
     const parcelIds = [parcelId, editableParcelId, deliveredEditParcelId, advanceParcelId, moneyPostedParcelId, repostParcelId];
     const batchIds = [batchId, editableBatchId, deliveredEditBatchId, advanceBatchId, moneyPostedBatchId, repostBatchId];
     await prisma.statusHistory.deleteMany({ where: { parcelId: { in: parcelIds } } });
+    await prisma.parcelFieldAudit.deleteMany({ where: { parcelId: { in: parcelIds } } });
     await prisma.settlementLine.deleteMany({ where: { settlement: { riderId: { in: [rider1Id, rider2Id] } } } });
     await prisma.settlement.deleteMany({ where: { riderId: { in: [rider1Id, rider2Id] } } });
     await prisma.riderReceivableRecognition.deleteMany({
@@ -239,6 +240,31 @@ describe("parcel corrections and delivery fee edits", () => {
 
     const stored = await prisma.parcel.findUniqueOrThrow({ where: { id: editableParcelId }, select: { deliveryFee: true } });
     expect(stored.deliveryFee).toBe(3500);
+  });
+
+  test("records attributable before/after field history and does not audit a no-op", async () => {
+    const history = await request(app)
+      .get(`/api/v1/parcels/${editableParcelId}/field-history`)
+      .set("Authorization", `Bearer ${dispatcherToken()}`);
+
+    expect(history.status).toBe(200);
+    expect(history.body.data).toHaveLength(1);
+    expect(history.body.data[0]).toMatchObject({
+      parcelId: editableParcelId,
+      actorId: dispatcherId,
+      before: { deliveryFee: 3000 },
+      after: { deliveryFee: 3500 },
+      actor: { id: dispatcherId, name: "Dispatcher", role: "DISPATCHER" },
+    });
+    expect(history.body.data[0]).not.toHaveProperty("beforeJson");
+    expect(history.body.data[0]).not.toHaveProperty("afterJson");
+
+    const noOp = await request(app)
+      .patch(`/api/v1/parcels/${editableParcelId}`)
+      .set("Authorization", `Bearer ${dispatcherToken()}`)
+      .send({ deliveryFee: 3500 });
+    expect(noOp.status).toBe(200);
+    expect(await prisma.parcelFieldAudit.count({ where: { parcelId: editableParcelId } })).toBe(1);
   });
 
   test("blocks delivery fee edits after batch pickup advance is posted", async () => {
@@ -334,9 +360,29 @@ describe("parcel corrections and delivery fee edits", () => {
       .set("Authorization", `Bearer ${financeToken()}`);
 
     expect(response.status).toBe(200);
+    expect(response.body.pagination).toMatchObject({ page: 1, pageSize: 200 });
+    expect(response.body.pagination.total).toBeGreaterThanOrEqual(6);
     const batches = response.body.data as Array<{ id: string; advancePosted: boolean }>;
     expect(batches.find((row) => row.id === advanceBatchId)?.advancePosted).toBe(true);
     expect(batches.find((row) => row.id === batchId)?.advancePosted).toBe(false);
+  });
+
+  test("paginates and filters batches without changing the array data envelope", async () => {
+    const page = await request(app)
+      .get(`/api/v1/operations/batches?page=1&pageSize=2&shopId=${shopId}&search=Parcel%20corrections`)
+      .set("Authorization", `Bearer ${financeToken()}`);
+    expect(page.status).toBe(200);
+    expect(Array.isArray(page.body.data)).toBe(true);
+    expect(page.body.data).toHaveLength(2);
+    expect(page.body.pagination).toMatchObject({ page: 1, pageSize: 2 });
+    expect(page.body.pagination.total).toBeGreaterThanOrEqual(6);
+
+    const date = await request(app)
+      .get(`/api/v1/operations/batches?dateFrom=2026-08-16&dateTo=2026-08-16`)
+      .set("Authorization", `Bearer ${financeToken()}`);
+    expect(date.status).toBe(200);
+    expect(date.body.data.map((batch: { id: string }) => batch.id)).toEqual([advanceBatchId]);
+    expect(date.body.pagination.total).toBe(1);
   });
 
   test("treats reversed pickup advances as unposted and allows Finance to re-post", async () => {

@@ -74,6 +74,12 @@ describe("protected API contracts", () => {
     expect(response.body.error.code).toBe("AUTH_REQUIRED");
   });
 
+  test("protects parcel field-edit history", async () => {
+    const response = await request(app).get("/api/v1/parcels/parcel-1/field-history");
+    expect(response.status).toBe(401);
+    expect(response.body.error.code).toBe("AUTH_REQUIRED");
+  });
+
   test("protects rider-authorized parcel detail", async () => {
     const response = await request(app).get("/api/v1/parcels/parcel-1");
 
@@ -358,6 +364,14 @@ describe("protected API contracts", () => {
 
     expect(response.status).toBe(403);
     expect(response.body.error.code).toBe("FORBIDDEN");
+  });
+
+  test("validates batch pagination and date filters", async () => {
+    const response = await request(app)
+      .get("/api/v1/operations/batches?page=0&pageSize=201&dateFrom=08-10-2026")
+      .set("Authorization", `Bearer ${token("FINANCE")}`);
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
   });
 
   test("rejects finance access to operations alerts", async () => {

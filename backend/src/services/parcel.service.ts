@@ -308,6 +308,24 @@ export async function getParcelHistory(id: string, actor: Actor) {
   return prisma.statusHistory.findMany({ where: { parcelId: parcel.id }, orderBy: { createdAt: "asc" } });
 }
 
+export async function getParcelFieldHistory(id: string, actor: Actor) {
+  const scope = await actorScope(actor);
+  if (!parcelReadRoles.includes(scope.role)) throw new ApiError(403, "FORBIDDEN", "You may not view parcel history");
+  const accessScope = buildParcelScope(scope);
+  const parcel = await prisma.parcel.findFirst({ where: { id, ...(accessScope ?? {}) }, select: { id: true } });
+  if (!parcel) throw new ApiError(404, "PARCEL_NOT_FOUND", "Parcel not found");
+  const rows = await prisma.parcelFieldAudit.findMany({
+    where: { parcelId: parcel.id },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    include: { actor: { select: { id: true, name: true, role: true } } },
+  });
+  return rows.map(({ beforeJson, afterJson, ...row }) => ({
+    ...row,
+    before: JSON.parse(beforeJson) as Record<string, unknown>,
+    after: JSON.parse(afterJson) as Record<string, unknown>,
+  }));
+}
+
 const correctDeliveredRiderRoles = ["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"];
 
 export async function correctDeliveredRider(id: string, input: { riderId: string; reason: string }, actor: Actor) {
@@ -562,16 +580,58 @@ export async function updateParcel(
     ...(input.deliveryFee !== undefined || input.townshipId !== undefined ? { deliveryFee } : {}),
     ...(input.zoneId !== undefined ? { zoneId, zone: zoneName } : {}),
   };
-  const result = await prisma.parcel.updateMany({ where: { id, ...(changesDeliveryAttributes ? {status: { in: [...editableStatuses] }} : {}) }, data });
-  if (result.count !== 1) throw new ApiError(409, "PARCEL_NOT_EDITABLE", "COD, delivery fee, township, and zone may only be edited for Created, Picked up, or Assigned parcels");
-  return prisma.parcel.findUniqueOrThrow({
-    where: { id },
-    include: { townshipRelation: { include: { district: { include: { regionState: true } } } }, zoneRelation: true },
+  const beforeValues: Record<string, string | number | null> = {
+    orderId: parcel.orderId,
+    customerName: parcel.customerName,
+    customerPhone: parcel.customerPhone,
+    address: parcel.address,
+    codAmount: parcel.codAmount,
+    deliveryFee: parcel.deliveryFee,
+    townshipId: parcel.townshipId,
+    township: parcel.township,
+    zoneId: parcel.zoneId,
+    zone: parcel.zone,
+  };
+  const afterValues: Record<string, string | number | null> = { ...beforeValues, ...data };
+  const changedFields = Object.keys(afterValues).filter((key) => beforeValues[key] !== afterValues[key]);
+
+  return serializableTransaction(async (tx) => {
+    if (changedFields.length > 0) {
+      const result = await tx.parcel.updateMany({ where: { id, updatedAt: parcel.updatedAt, ...(changesDeliveryAttributes ? {status: { in: [...editableStatuses] }} : {}) }, data });
+      if (result.count !== 1) throw new ApiError(409, "PARCEL_EDIT_CONFLICT", "Parcel changed; refresh and retry");
+      await tx.parcelFieldAudit.create({
+        data: {
+          parcelId: id,
+          actorId: actor.id,
+          beforeJson: JSON.stringify(Object.fromEntries(changedFields.map((key) => [key, beforeValues[key]]))),
+          afterJson: JSON.stringify(Object.fromEntries(changedFields.map((key) => [key, afterValues[key]]))),
+        },
+      });
+    }
+    return tx.parcel.findUniqueOrThrow({
+      where: { id },
+      include: { townshipRelation: { include: { district: { include: { regionState: true } } } }, zoneRelation: true },
+    });
   });
 }
-export async function updateStatus(id: string, toStatus: string, actor: Actor, reasonCode?: string, note?: string, actualCodCollected?: number, collectionWallet?: "CASH" | "KBZ_PAY" | "WAVE_PAY") {
-  const scope = await actorScope(actor);
-  const parcel = await prisma.parcel.findUnique({
+type StatusUpdateInput = {
+  parcelId: string;
+  status: string;
+  reasonCode?: string;
+  note?: string;
+  actualCodCollected?: number;
+  collectionWallet?: "CASH" | "KBZ_PAY" | "WAVE_PAY";
+};
+
+async function updateStatusInTransaction(
+  tx: Prisma.TransactionClient,
+  input: StatusUpdateInput,
+  actor: Actor,
+  scope: ActorScope,
+) {
+  const { parcelId: id, status: toStatus, note, actualCodCollected, collectionWallet } = input;
+  let { reasonCode } = input;
+  const parcel = await tx.parcel.findUnique({
     where: { id },
     include: {
       rider: { select: { userId: true, payModel: true, commissionRateBps: true } },
@@ -595,7 +655,7 @@ export async function updateStatus(id: string, toStatus: string, actor: Actor, r
   }
   if (["PARTIAL", "FAILED", "REJECTED"].includes(toStatus) && !reasonCode) throw new ApiError(400, "REASON_REQUIRED", "A reason code is required for this outcome");
   if (["PARTIAL", "FAILED", "REJECTED"].includes(toStatus)) {
-    const configuredReason = await prisma.reasonCode.findUnique({ where: { code: reasonCode!.trim().toUpperCase() }, select: { code: true, outcome: true, noteRequired: true, active: true } });
+    const configuredReason = await tx.reasonCode.findUnique({ where: { code: reasonCode!.trim().toUpperCase() }, select: { code: true, outcome: true, noteRequired: true, active: true } });
     reasonCode = validateConfiguredReason(configuredReason, toStatus, note);
   }
   const partialReturn = toStatus === "PARTIAL"
@@ -610,7 +670,6 @@ export async function updateStatus(id: string, toStatus: string, actor: Actor, r
   const commissionRateBps = resolveCommissionRateBps(
     parcel.rider ? { payModel: parcel.rider.payModel, commissionRateBps: parcel.rider.commissionRateBps } : null,
   );
-  return serializableTransaction(async (tx) => {
     if (overrideLeavesMoneyBearingStatus(parcel.status, toStatus, overrideTransition)) {
       const postedMoney = await findUnreversedMoneyPostedEntry(tx, {
         parcelId: id,
@@ -841,5 +900,49 @@ export async function updateStatus(id: string, toStatus: string, actor: Actor, r
       }
     }
     return tx.parcel.findUniqueOrThrow({ where: { id } });
+}
+
+export async function updateStatus(id: string, toStatus: string, actor: Actor, reasonCode?: string, note?: string, actualCodCollected?: number, collectionWallet?: "CASH" | "KBZ_PAY" | "WAVE_PAY") {
+  const scope = await actorScope(actor);
+  return serializableTransaction((tx) => updateStatusInTransaction(tx, {
+    parcelId: id,
+    status: toStatus,
+    reasonCode,
+    note,
+    actualCodCollected,
+    collectionWallet,
+  }, actor, scope));
+}
+
+export async function bulkUpdateStatus(inputs: StatusUpdateInput[], actor: Actor) {
+  const scope = await actorScope(actor);
+  if (!["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"].includes(scope.role)) {
+    throw new ApiError(403, "FORBIDDEN", "You may not update parcel statuses in bulk");
+  }
+  if (inputs.length < 1 || inputs.length > 50) {
+    throw new ApiError(400, "BATCH_TOO_LARGE", "Bulk status requires between 1 and 50 parcels");
+  }
+  const ids = inputs.map((input) => input.parcelId);
+  if (new Set(ids).size !== ids.length) throw new ApiError(400, "DUPLICATE_PARCEL", "Each parcel may appear only once");
+
+  return serializableTransaction(async (tx) => {
+    // Resolve the complete selection before applying changes. Individual transition
+    // validation and every side effect still run through the single-item domain path.
+    const selected = await tx.parcel.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        batch: { select: { hubId: true } },
+        rider: { select: { userId: true } },
+      },
+    });
+    if (selected.length !== ids.length) throw new ApiError(404, "PARCEL_NOT_FOUND", "One or more parcels were not found");
+    for (const parcel of selected) {
+      assertParcelAccess(scope, { batchHubId: parcel.batch.hubId, riderUserId: parcel.rider?.userId ?? null });
+    }
+
+    const updated = [];
+    for (const input of inputs) updated.push(await updateStatusInTransaction(tx, input, actor, scope));
+    return updated;
   });
 }

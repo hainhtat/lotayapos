@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import { api, apiRaw } from "@/lib/api";
+import { ParcelFieldHistory } from "@/components/parcel-field-history";
 
 type Location = { id: string; code?: string; nameEn: string; nameMy?: string };
 type Township = Location & {
@@ -36,6 +37,7 @@ type SavedParcel = {
 };
 type Batch = {
   id: string;
+  hubId: string;
   label: string;
   advancePaid: number;
   totalCod: number;
@@ -224,14 +226,14 @@ function townshipOptionLabel(
   return parts.join(" · ");
 }
 
-function useRowLocationData(row: ParcelRow, townships: Township[]) {
+function useRowLocationData(row: ParcelRow, townships: Township[], hubId?: string) {
   const resolvedTownship = match(townships, row.townshipId);
   const township = townships.find((item) => item.id === resolvedTownship);
   const zones = useQuery({
-    queryKey: ["locations", "zones", resolvedTownship],
-    enabled: Boolean(resolvedTownship && townships.some((item) => item.id === resolvedTownship)),
+    queryKey: ["locations", "zones", hubId, resolvedTownship],
+    enabled: Boolean(hubId && resolvedTownship && townships.some((item) => item.id === resolvedTownship)),
     queryFn: () =>
-      api<Zone[]>(`/master-data/locations/zones?townshipId=${encodeURIComponent(resolvedTownship!)}`).then((response) => response.data),
+      api<Zone[]>(`/master-data/locations/zones?townshipId=${encodeURIComponent(resolvedTownship!)}&hubId=${encodeURIComponent(hubId!)}`).then((response) => response.data),
   });
   return { zones, deliveryFee: township?.deliveryFee, resolvedTownship, township };
 }
@@ -241,6 +243,7 @@ function LocationCells({
   index,
   regions,
   townships,
+  hubId,
   onChangeRegion,
   onApplyTownship,
   onChangeZone,
@@ -250,6 +253,7 @@ function LocationCells({
   index: number;
   regions: Location[];
   townships: Township[];
+  hubId?: string;
   onChangeRegion: (regionStateId: string) => void;
   onApplyTownship: (townshipId: string) => void;
   onChangeZone: (zoneId: string) => void;
@@ -262,7 +266,7 @@ function LocationCells({
     () => townshipsForRegion(townships, resolvedRegion && regions.some((item) => item.id === resolvedRegion) ? resolvedRegion : ""),
     [townships, resolvedRegion, regions],
   );
-  const { zones, resolvedTownship, township } = useRowLocationData(row, regionTownships);
+  const { zones, resolvedTownship, township } = useRowLocationData(row, regionTownships, hubId);
   const districtLabel = locationLabel(township?.district, preferMyanmar);
 
   return (
@@ -330,9 +334,9 @@ function LocationCells({
   );
 }
 
-function DeliveryFeeCell({ row, townships }: { row: ParcelRow; townships: Township[] }) {
+function DeliveryFeeCell({ row, townships, hubId }: { row: ParcelRow; townships: Township[]; hubId?: string }) {
   const scoped = row.regionStateId ? townshipsForRegion(townships, row.regionStateId) : townships;
-  const { deliveryFee } = useRowLocationData(row, scoped);
+  const { deliveryFee } = useRowLocationData(row, scoped, hubId);
   return (
     <td className="px-2 text-sm font-bold">
       {deliveryFee != null && isParcelRowLocationConsistent(row, townships) ? `${deliveryFee.toLocaleString()} MMK` : "—"}
@@ -356,6 +360,7 @@ export function BatchDetailPage() {
   const [message, setMessage] = useState("");
   const [preview, setPreview] = useState<ManifestPreview | null>(null);
   const [editing, setEditing] = useState<SavedParcel | null>(null);
+  const [historyParcel,setHistoryParcel]=useState<{id:string;trackingNumber:string}|null>(null);
   const [savedPage, setSavedPage] = useState(1);
   const [editForm, setEditForm] = useState({ orderId: "", customerName: "", address: "", customerPhone: "", codAmount: "", deliveryFee: "", townshipId: "", zoneId: "" });
   const batch = useQuery({
@@ -371,14 +376,14 @@ export function BatchDetailPage() {
     queryFn: () => api<Township[]>("/master-data/locations/townships").then((response) => response.data),
   });
   const editZones = useQuery({
-    queryKey: ["locations", "zones", editForm.townshipId],
-    enabled: Boolean(editForm.townshipId),
-    queryFn: () => api<Zone[]>(`/master-data/locations/zones?townshipId=${encodeURIComponent(editForm.townshipId)}`).then((response) => response.data),
+    queryKey: ["locations", "zones", batch.data?.hubId, editForm.townshipId],
+    enabled: Boolean(batch.data?.hubId && editForm.townshipId),
+    queryFn: () => api<Zone[]>(`/master-data/locations/zones?townshipId=${encodeURIComponent(editForm.townshipId)}&hubId=${encodeURIComponent(batch.data!.hubId)}`).then((response) => response.data),
   });
   const formZones = useQuery({
-    queryKey: ["locations", "zones", formDraft.townshipId],
-    enabled: Boolean(formOpen && formDraft.townshipId),
-    queryFn: () => api<Zone[]>(`/master-data/locations/zones?townshipId=${encodeURIComponent(formDraft.townshipId)}`).then((response) => response.data),
+    queryKey: ["locations", "zones", batch.data?.hubId, formDraft.townshipId],
+    enabled: Boolean(formOpen && batch.data?.hubId && formDraft.townshipId),
+    queryFn: () => api<Zone[]>(`/master-data/locations/zones?townshipId=${encodeURIComponent(formDraft.townshipId)}&hubId=${encodeURIComponent(batch.data!.hubId)}`).then((response) => response.data),
   });
   useEffect(() => {
     if (!editing) return;
@@ -519,12 +524,11 @@ export function BatchDetailPage() {
     gridRef.current?.querySelector<HTMLElement>(`[data-cell="${next}-${column}"]`)?.focus();
   };
   const save = useMutation({
-    mutationFn: () =>
+    mutationFn: (drafts: ParcelRow[]) =>
       api(`/operations/batches/${id}/parcels/bulk`, {
         method: "POST",
         body: JSON.stringify({
-          parcels: populated.map(({ row, index }) => ({
-            trackingNumber: trackingForIndex(index),
+          parcels: drafts.map((row) => ({
             orderId: row.orderId.trim() || undefined,
             customerName: row.customerName.trim(),
             address: row.address.trim(),
@@ -535,11 +539,12 @@ export function BatchDetailPage() {
           })),
         }),
       }),
-    onSuccess: async () => {
-      setMessage(t("parcelsSaved", { count: populated.length }));
+    onSuccess: async (_data, drafts) => {
+      setMessage(t("parcelsSaved", { count: drafts.length }));
       setRows(Array.from({ length: 10 }, blank));
       await Promise.all([queryClient.invalidateQueries({ queryKey: ["batch", id] }), queryClient.invalidateQueries({ queryKey: ["parcels"] })]);
     },
+    onError: (error) => setMessage(error instanceof Error ? error.message : t("loadError")),
   });
 
   return (
@@ -628,7 +633,7 @@ export function BatchDetailPage() {
               {t("addParcelModal")}
             </button>
           )}
-          <button disabled={!populated.length || invalid || save.isPending} onClick={() => save.mutate()} className="rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+          <button disabled={!populated.length || invalid || save.isPending} onClick={() => save.mutate(populated.map(({ row }) => ({ ...row })))} className="rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
             <Save className="mr-1 inline" size={16} />
             {t("saveParcels", { count: populated.length })}
           </button>
@@ -752,6 +757,7 @@ export function BatchDetailPage() {
                     index={index}
                     regions={regions.data ?? []}
                     townships={allTownships.data ?? []}
+                    hubId={batch.data?.hubId}
                     onChangeRegion={(regionStateId) => applyRowRegion(index, regionStateId)}
                     onApplyTownship={(townshipId) => applyRowTownship(index, townshipId)}
                     onChangeZone={(zoneId) => update(index, "zoneId", zoneId)}
@@ -759,7 +765,7 @@ export function BatchDetailPage() {
                   />
                   <td>{input("customerPhone", 8)}</td>
                   <td>{input("codAmount", 9, "number")}</td>
-                  <DeliveryFeeCell row={row} townships={allTownships.data ?? []} />
+                  <DeliveryFeeCell row={row} townships={allTownships.data ?? []} hubId={batch.data?.hubId} />
                   <td>
                     <button aria-label={`${t("removeParcel")} ${index + 1}`} onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} className="p-2 text-rose-500">
                       <Trash2 size={16} />
@@ -823,6 +829,7 @@ export function BatchDetailPage() {
                     <td className="py-3 text-right">{(parcel.deliveryFee ?? 0).toLocaleString()} MMK</td>
                     <td className="py-3">{parcel.status}</td>
                     <td className="py-3 text-right">
+                      <button aria-label={`${t("viewFieldHistory")} ${parcel.trackingNumber}`} onClick={()=>setHistoryParcel({id:parcel.id,trackingNumber:parcel.trackingNumber})} className="mr-1 rounded-lg border px-2 py-1 text-xs font-bold text-slate-600 dark:text-slate-300">{t("history")}</button>
                       {["CREATED", "PICKED_UP", "ASSIGNED"].includes(parcel.status) && (
                         <button aria-label={`${t("editParcel")} ${parcel.trackingNumber}`} onClick={() => setEditing(parcel)} className="rounded-lg border px-2 py-1 text-xs font-bold text-[#0787df]">
                           <Pencil size={14} className="mr-1 inline" />
@@ -897,12 +904,14 @@ export function BatchDetailPage() {
               <label className="text-xs font-bold text-slate-500">{t("cod")}<input required disabled={!fieldEditableStatuses.has(editing.status) || Boolean(editing.linkGroupId)} type="number" min={0} value={editForm.codAmount} onChange={(e) => setEditForm((v) => ({ ...v, codAmount: e.target.value }))} className={field} /></label>
             </div>
             <div className="mt-6 flex justify-end gap-3">
+              <button type="button" onClick={()=>{setHistoryParcel({id:editing.id,trackingNumber:editing.trackingNumber});setEditing(null)}} className="rounded-xl border px-4 py-2 text-sm font-bold">{t("viewFieldHistory")}</button>
               <button type="button" onClick={() => setEditing(null)} className="rounded-xl border px-4 py-2 text-sm font-bold">{t("cancel")}</button>
               <button disabled={updateParcel.isPending} className="rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{updateParcel.isPending ? t("loading") : t("save")}</button>
             </div>
           </form>
         </div>
       )}
+      {historyParcel&&<ParcelFieldHistory parcel={historyParcel} onClose={()=>setHistoryParcel(null)}/>}
     </div>
   );
 }

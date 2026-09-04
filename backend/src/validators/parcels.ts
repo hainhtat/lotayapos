@@ -31,6 +31,16 @@ export const parcelStatusValidation = [
   body("collectionWallet").if(body("status").equals("PARTIAL")).isIn(["CASH", "KBZ_PAY", "WAVE_PAY"]),
 ];
 
+export const parcelBulkStatusValidation = [
+  body("parcelIds").isArray({ min: 1, max: 50 }),
+  body("parcelIds.*").isString().trim().notEmpty(),
+  body("status").isIn(["CREATED", "PICKED_UP", "ASSIGNED", "OUT_FOR_DELIVERY", "DELIVERED", "PARTIAL", "FAILED", "REJECTED", "PENDING_RETURN", "RETURNED"]),
+  body("reasonCode").optional().isString().trim().notEmpty(),
+  body("note").optional().isString().trim(),
+  body("actualCodCollected").optional().isInt({ min: 0 }).toInt(),
+  body("collectionWallet").if(body("status").equals("PARTIAL")).isIn(["CASH", "KBZ_PAY", "WAVE_PAY"]),
+];
+
 export const parcelUpdateValidation = [
   param("id").isString().trim().notEmpty(),
   body("orderId").optional({ nullable: true }).isString().trim().isLength({ max: 255 }),

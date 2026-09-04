@@ -38,6 +38,20 @@ describe("operations router", () => {
   });
 });
 
+describe("rider app route", () => {
+  it("serves the download page on /app", async () => {
+    const memoryRouter = createMemoryRouter(router.routes, { initialEntries: ["/app"] });
+    render(
+      <AuthProvider>
+        <RouterProvider router={memoryRouter} />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Use the Lotaya rider app" })).toBeInTheDocument());
+    expect(memoryRouter.state.location.pathname).toBe("/app");
+  });
+});
+
 describe("rider web gate", () => {
   beforeEach(() => {
     localStorage.clear();

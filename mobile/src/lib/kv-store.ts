@@ -3,7 +3,7 @@ import * as SecureStore from "expo-secure-store";
 
 const memory = new Map<string, string>();
 
-async function useSecureStore() {
+async function secureStoreAvailable() {
   if (Platform.OS === "web") return false;
   try {
     return await SecureStore.isAvailableAsync();
@@ -47,12 +47,12 @@ function webDelete(key: string) {
 
 /** SecureStore on native; localStorage (or memory) on web / unavailable SecureStore. */
 export async function kvGet(key: string): Promise<string | null> {
-  if (await useSecureStore()) return SecureStore.getItemAsync(key);
+  if (await secureStoreAvailable()) return SecureStore.getItemAsync(key);
   return webGet(key);
 }
 
 export async function kvSet(key: string, value: string): Promise<void> {
-  if (await useSecureStore()) {
+  if (await secureStoreAvailable()) {
     await SecureStore.setItemAsync(key, value);
     return;
   }
@@ -60,7 +60,7 @@ export async function kvSet(key: string, value: string): Promise<void> {
 }
 
 export async function kvDelete(key: string): Promise<void> {
-  if (await useSecureStore()) {
+  if (await secureStoreAvailable()) {
     await SecureStore.deleteItemAsync(key);
     return;
   }

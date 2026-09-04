@@ -3,14 +3,15 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../config/database.js";
 import { ApiError } from "../utils/api-error.js";
 import { revokeUserRefreshTokens } from "../utils/refresh-token.js";
+import { normalizeMyanmarPhone } from "../utils/phone.js";
 
 export const USER_ROLES = ["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "DISPATCHER", "RIDER", "AUDITOR"] as const;
 type UserRole = (typeof USER_ROLES)[number];
 type Actor = { id: string; role: string };
-type UserInput = { name: string; username: string; email: string; role: UserRole; hubId?: string | null };
+type UserInput = { name: string; username: string; email: string; phone?: string | null; role: UserRole; hubId?: string | null };
 
-const publicSelect = { id:true,name:true,username:true,email:true,role:true,active:true,hubId:true,createdAt:true,updatedAt:true,hub:{select:{id:true,name:true}} } as const;
-const auditState = (user: {name:string;username:string|null;email:string;role:string;active:boolean;hubId:string|null}) => ({name:user.name,username:user.username,email:user.email,role:user.role,active:user.active,hubId:user.hubId});
+const publicSelect = { id:true,name:true,username:true,email:true,phone:true,role:true,active:true,hubId:true,createdAt:true,updatedAt:true,hub:{select:{id:true,name:true}} } as const;
+const auditState = (user: {name:string;username:string|null;email:string;phone:string|null;role:string;active:boolean;hubId:string|null}) => ({name:user.name,username:user.username,email:user.email,phone:user.phone,role:user.role,active:user.active,hubId:user.hubId});
 
 async function requireSuperadmin(tx: Prisma.TransactionClient | typeof prisma, actor: Actor) {
   const persisted = await tx.user.findUnique({where:{id:actor.id},select:{active:true,role:true}});
@@ -26,7 +27,7 @@ async function normalizeScope(tx: Prisma.TransactionClient | typeof prisma, role
 }
 
 function duplicateError(error: unknown): never {
-  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") throw new ApiError(409,"USER_EXISTS","An account with this email or username already exists");
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") throw new ApiError(409,"USER_EXISTS","An account with this email, username, or phone already exists");
   throw error;
 }
 
@@ -50,16 +51,19 @@ export async function listUsers(input:{page:number;pageSize:number;search?:strin
   await requireSuperadmin(prisma,actor);
   const where: Prisma.UserWhereInput = {
     ...(input.role ? {role:input.role} : {}), ...(input.active === undefined ? {} : {active:input.active}), ...(input.hubId ? {hubId:input.hubId} : {}),
-    ...(input.search ? {OR:[{name:{contains:input.search}},{email:{contains:input.search}},{username:{contains:input.search}}]} : {}),
+    ...(input.search ? {OR:[{name:{contains:input.search}},{email:{contains:input.search}},{username:{contains:input.search}},{phone:{contains:input.search}}]} : {}),
   };
   const [items,total] = await Promise.all([prisma.user.findMany({where,select:publicSelect,orderBy:[{active:"desc"},{name:"asc"}],skip:(input.page-1)*input.pageSize,take:input.pageSize}),prisma.user.count({where})]);
   return {items,pagination:{page:input.page,pageSize:input.pageSize,total,totalPages:Math.ceil(total/input.pageSize)}};
 }
 
 export async function createUser(input:UserInput & {password:string},actor:Actor) {
+  const passwordHash=await bcrypt.hash(input.password,12);
   try { return await prisma.$transaction(async tx => {
     await requireSuperadmin(tx,actor); const hubId=await normalizeScope(tx,input.role,input.hubId); const username=input.username.trim().toLowerCase(); const email=input.email.trim().toLowerCase();
-    const created=await tx.user.create({data:{name:input.name.trim(),username,email,role:input.role,hubId,passwordHash:await bcrypt.hash(input.password,12),...(input.role === "RIDER" ? {rider:{create:{hubId}}}: {})},select:publicSelect});
+    const phone=input.phone ? normalizeMyanmarPhone(input.phone) : null;
+    if(input.phone && !phone) throw new ApiError(400,"INVALID_PHONE","Phone must be a valid Myanmar mobile number");
+    const created=await tx.user.create({data:{name:input.name.trim(),username,email,phone,role:input.role,hubId,passwordHash,...(input.role === "RIDER" ? {rider:{create:{hubId}}}: {})},select:publicSelect});
     await tx.userAdminAudit.create({data:{action:"USER_CREATED",actorId:actor.id,targetUserId:created.id,afterJson:JSON.stringify(auditState(created))}}); return created;
   }); } catch(error){ duplicateError(error); }
 }
@@ -71,7 +75,9 @@ export async function updateUser(id:string,input:Partial<UserInput>,actor:Actor)
     if(id===actor.id && role!=="SUPERADMIN") throw new ApiError(409,"SELF_PRIVILEGE_CHANGE","You cannot demote your own account");
     if(current.role==="SUPERADMIN" && role!=="SUPERADMIN" && current.active && await tx.user.count({where:{role:"SUPERADMIN",active:true}})<=1) throw new ApiError(409,"LAST_SUPERADMIN","At least one active Superadmin is required");
     const privilegeChanged=role!==current.role || hubId!==current.hubId;
-    const updated=await tx.user.update({where:{id},data:{...(input.name!==undefined?{name:input.name.trim()}:{}),...(input.username!==undefined?{username:input.username.trim().toLowerCase()}:{}),...(input.email!==undefined?{email:input.email.trim().toLowerCase()}:{}),role,hubId,...(privilegeChanged?{tokenVersion:{increment:1}}:{})},select:publicSelect});
+    const phone=input.phone === undefined ? undefined : input.phone === null || !input.phone.trim() ? null : normalizeMyanmarPhone(input.phone);
+    if(input.phone !== undefined && input.phone !== null && input.phone.trim() && !phone) throw new ApiError(400,"INVALID_PHONE","Phone must be a valid Myanmar mobile number");
+    const updated=await tx.user.update({where:{id},data:{...(input.name!==undefined?{name:input.name.trim()}:{}),...(input.username!==undefined?{username:input.username.trim().toLowerCase()}:{}),...(input.email!==undefined?{email:input.email.trim().toLowerCase()}:{}),...(phone!==undefined?{phone}:{}),role,hubId,...(privilegeChanged?{tokenVersion:{increment:1}}:{})},select:publicSelect});
     if(privilegeChanged) await revokeUserRefreshTokens(id,tx);
     if(role==="RIDER"){ if(current.rider) await tx.rider.update({where:{userId:id},data:{hubId}}); else await tx.rider.create({data:{userId:id,hubId}}); }
     await tx.userAdminAudit.create({data:{action:"USER_UPDATED",actorId:actor.id,targetUserId:id,beforeJson:JSON.stringify(auditState(current)),afterJson:JSON.stringify(auditState(updated))}}); return updated;
@@ -87,6 +93,7 @@ export async function setUserActive(id:string,active:boolean,actor:Actor) {
 }
 
 export async function resetUserPassword(id:string,password:string,actor:Actor) {
+  const passwordHash=await bcrypt.hash(password,12);
   return prisma.$transaction(async tx=>{ await requireSuperadmin(tx,actor); const current=await tx.user.findUnique({where:{id},select:{id:true}}); if(!current) throw new ApiError(404,"USER_NOT_FOUND","User not found");
-    await tx.user.update({where:{id},data:{passwordHash:await bcrypt.hash(password,12),tokenVersion:{increment:1}}}); await revokeUserRefreshTokens(id,tx); await tx.userAdminAudit.create({data:{action:"USER_PASSWORD_RESET",actorId:actor.id,targetUserId:id}}); return {id,passwordReset:true}; });
+    await tx.user.update({where:{id},data:{passwordHash,tokenVersion:{increment:1}}}); await revokeUserRefreshTokens(id,tx); await tx.userAdminAudit.create({data:{action:"USER_PASSWORD_RESET",actorId:actor.id,targetUserId:id}}); return {id,passwordReset:true}; });
 }

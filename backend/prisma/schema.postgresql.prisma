@@ -10,6 +10,7 @@ model User {
   id                 String                @id @default(cuid())
   email              String                @unique
   username           String?               @unique
+  phone              String?               @unique
   passwordHash       String
   name               String
   role               String                @default("RIDER")
@@ -25,6 +26,7 @@ model User {
   locationImports    LocationImportAudit[]
   userAuditsAuthored UserAdminAudit[]       @relation("UserAdminAuditActor")
   userAuditsTargeted UserAdminAudit[]       @relation("UserAdminAuditTarget")
+  parcelFieldAudits  ParcelFieldAudit[]     @relation("ParcelFieldAuditActor")
   refreshTokens      RefreshToken[]
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
@@ -223,6 +225,7 @@ model Parcel {
   reasonCode             String?
   returnDueAt            DateTime?
   statusHistory          StatusHistory[]
+  fieldAudits            ParcelFieldAudit[]
   ways                   DeliveryWay[]
   alerts                 Alert[]
   createdAt              DateTime            @default(now())
@@ -287,6 +290,20 @@ model StatusHistory {
   reasonCode String?
   note       String?
   createdAt  DateTime @default(now())
+}
+
+model ParcelFieldAudit {
+  id         String   @id @default(cuid())
+  parcelId   String
+  parcel     Parcel   @relation(fields: [parcelId], references: [id], onDelete: Restrict)
+  actorId    String
+  actor      User     @relation("ParcelFieldAuditActor", fields: [actorId], references: [id], onDelete: Restrict)
+  beforeJson String
+  afterJson  String
+  createdAt  DateTime @default(now())
+
+  @@index([parcelId, createdAt])
+  @@index([actorId, createdAt])
 }
 
 model JournalEntry {
@@ -403,6 +420,7 @@ model Settlement {
   expectedAmount Int
   actualAmount   Int
   variance       Int
+  salaryDeduction Int              @default(0)
   status         String           @default("OPEN")
   idempotencyKey String           @unique
   lines          SettlementLine[]
@@ -463,9 +481,48 @@ model OsSettlement {
   journalEntry              JournalEntry        @relation("OsSettlementJournal", fields: [journalEntryId], references: [id])
   batches                   OsSettlementBatch[]
   createdAt                 DateTime             @default(now())
+  version                   Int                  @default(1)
+  supersedesId              String?              @unique
 
   @@index([hubId, businessDate])
   @@index([shopId, status, businessDate])
+}
+
+model OsSettlementDraft {
+  id                   String   @id @default(cuid())
+  shopId               String
+  hubId                String
+  batchIdsJson         String
+  businessDate         DateTime
+  wallet               String
+  advanceDeduction     Int
+  returnDeduction      Int
+  deliveryFeeDeduction Int
+  adjustmentAmount     Int      @default(0)
+  adjustmentReason     String?
+  version              Int      @default(1)
+  createdBy            String
+  updatedBy            String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([hubId, updatedAt])
+  @@index([shopId, updatedAt])
+}
+
+model OsSettlementEditAudit {
+  id             String   @id @default(cuid())
+  targetType     String
+  targetId       String
+  action         String
+  actorId        String
+  reason         String
+  beforeJson     String
+  afterJson      String
+  idempotencyKey String   @unique
+  createdAt      DateTime @default(now())
+
+  @@index([targetType, targetId, createdAt])
 }
 
 model OsSettlementBatch {

@@ -2,8 +2,9 @@ const STRIPPED_QUERY_KEYS = new Set(["sslmode", "uselibpqcompat"]);
 
 /**
  * Pool options for PrismaPg / node-pg.
- * Supabase poolers often need rejectUnauthorized=false (default).
- * Set DATABASE_SSL_REJECT_UNAUTHORIZED=true when a verifying CA bundle is configured.
+ * Certificate verification is secure by default. DATABASE_SSL_CA may contain
+ * a PEM CA bundle (literal newlines or escaped `\\n`). The explicit `false`
+ * override is break-glass only for a controlled private network.
  */
 export function postgresPoolOptions(databaseUrl: string) {
   const url = new URL(databaseUrl);
@@ -16,10 +17,15 @@ export function postgresPoolOptions(databaseUrl: string) {
     url.searchParams.set("pgbouncer", "true");
   }
 
-  const rejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === "true";
+  const configuredVerification = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED;
+  if (configuredVerification && !["true", "false"].includes(configuredVerification)) {
+    throw new Error("DATABASE_SSL_REJECT_UNAUTHORIZED must be true or false");
+  }
+  const rejectUnauthorized = configuredVerification !== "false";
+  const ca = process.env.DATABASE_SSL_CA?.replace(/\\n/g, "\n").trim();
 
   return {
     connectionString: url.toString(),
-    ssl: { rejectUnauthorized },
+    ssl: { rejectUnauthorized, ...(ca ? { ca } : {}) },
   };
 }

@@ -1,17 +1,28 @@
+import { lazy, Suspense, type ReactNode } from "react";
 import { createBrowserRouter, Navigate, Outlet, useLocation } from "react-router-dom";
-import { AppShell } from "@/components/app-shell";
-import { Dashboard } from "@/pages/dashboard";
-import { OperationsPage } from "@/pages/operations-page";
-import { BatchesPage } from "@/pages/batches-page";
-import { FinancePage } from "@/pages/finance-page";
-import { SettingsPage } from "@/pages/settings-page";
-import { ReportsPage } from "@/pages/reports-page";
-import { ProfilePage } from "@/pages/profile-page";
 import { AuthPage } from "@/pages/auth-page";
-import { BatchDetailPage } from "@/pages/batch-detail-page";
-import { RiderAppPage } from "@/pages/rider-app-page";
 import { useAuth } from "./auth";
 import { useTranslation } from "react-i18next";
+
+const AppShell = lazy(() => import("@/components/app-shell").then((module) => ({ default: module.AppShell })));
+const Dashboard = lazy(() => import("@/pages/dashboard").then((module) => ({ default: module.Dashboard })));
+const OperationsPage = lazy(() => import("@/pages/operations-page").then((module) => ({ default: module.OperationsPage })));
+const BatchesPage = lazy(() => import("@/pages/batches-page").then((module) => ({ default: module.BatchesPage })));
+const FinancePage = lazy(() => import("@/pages/finance-page").then((module) => ({ default: module.FinancePage })));
+const SettingsPage = lazy(() => import("@/pages/settings-page").then((module) => ({ default: module.SettingsPage })));
+const ReportsPage = lazy(() => import("@/pages/reports-page").then((module) => ({ default: module.ReportsPage })));
+const ProfilePage = lazy(() => import("@/pages/profile-page").then((module) => ({ default: module.ProfilePage })));
+const BatchDetailPage = lazy(() => import("@/pages/batch-detail-page").then((module) => ({ default: module.BatchDetailPage })));
+const RiderAppPage = lazy(() => import("@/pages/rider-app-page").then((module) => ({ default: module.RiderAppPage })));
+
+function RouteLoading() {
+  const { t } = useTranslation();
+  return <div role="status" className="grid min-h-screen place-items-center text-sm text-slate-500">{t("loading")}</div>;
+}
+
+function lazyElement(element: ReactNode) {
+  return <Suspense fallback={<RouteLoading />}>{element}</Suspense>;
+}
 
 function Protected() {
   const { user, loading } = useAuth();
@@ -32,23 +43,24 @@ function OperationsRedirect() {
 
 export const router = createBrowserRouter([
   { path: "/login", element: <AuthPage /> },
+  { path: "/app", element: lazyElement(<RiderAppPage />) },
   {
     element: <Protected />,
     children: [
-      { path: "rider-app", element: <RiderAppPage /> },
+      { path: "rider-app", element: lazyElement(<RiderAppPage />) },
       {
         path: "/",
-        element: <AppShell />,
+        element: lazyElement(<AppShell />),
         children: [
-          { index: true, element: <Dashboard /> },
-          { path: "batches/:id", element: <BatchDetailPage /> },
+          { index: true, element: lazyElement(<Dashboard />) },
+          { path: "batches/:id", element: lazyElement(<BatchDetailPage />) },
           { path: "operations", element: <OperationsRedirect /> },
-          { path: "operations/batches", element: <BatchesPage /> },
-          { path: "operations/dispatch", element: <OperationsPage /> },
-          { path: "finance", element: <FinancePage /> },
-          { path: "reports", element: <ReportsPage /> },
-          { path: "settings", element: <SettingsPage /> },
-          { path: "profile", element: <ProfilePage /> },
+          { path: "operations/batches", element: lazyElement(<BatchesPage />) },
+          { path: "operations/dispatch", element: lazyElement(<OperationsPage />) },
+          { path: "finance", element: lazyElement(<FinancePage />) },
+          { path: "reports", element: lazyElement(<ReportsPage />) },
+          { path: "settings", element: lazyElement(<SettingsPage />) },
+          { path: "profile", element: lazyElement(<ProfilePage />) },
         ],
       },
     ],

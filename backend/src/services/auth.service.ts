@@ -3,16 +3,20 @@ import { prisma } from "../config/database.js";
 import { ApiError } from "../utils/api-error.js";
 import { accessTokenExpiresAt, signAccessToken } from "../utils/jwt.js";
 import { hashRefreshToken, issueRefreshToken, readCookie, rotateRefreshToken, revokeUserRefreshTokens } from "../utils/refresh-token.js";
+import { normalizeMyanmarPhone } from "../utils/phone.js";
 
-const publicUser = (user: { id: string; name: string; username: string | null; email: string; role: string }) => ({
+const DUMMY_PASSWORD_HASH = "$2b$12$bQJCBn3qX8.RQm1dEZE3ueLn8We2HZ7008Bc8F4kVThVuYQl1GBES";
+
+const publicUser = (user: { id: string; name: string; username: string | null; phone: string | null; email: string; role: string }) => ({
   id: user.id,
   name: user.name,
   username: user.username,
+  phone: user.phone,
   email: user.email,
   role: user.role,
 });
 
-async function sessionFor(user: { id: string; name: string; username: string | null; email: string; role: string; tokenVersion: number }, remember: boolean) {
+async function sessionFor(user: { id: string; name: string; username: string | null; phone: string | null; email: string; role: string; tokenVersion: number }, remember: boolean) {
   const refresh = await issueRefreshToken(user.id, remember);
   return {
     user: publicUser(user),
@@ -35,8 +39,12 @@ export async function register(input: { name: string; username: string; email: s
 
 export async function login(input: { identifier?: string; email?: string; password: string; remember?: boolean }) {
   const identifier = (input.identifier ?? input.email)!.trim().toLowerCase();
-  const user = await prisma.user.findFirst({ where: { OR: [{ email: identifier }, { username: identifier }] } });
-  if (!user || !user.active || !(await bcrypt.compare(input.password, user.passwordHash))) throw new ApiError(401, "AUTH_INVALID", "Invalid credentials");
+  const normalizedPhone = normalizeMyanmarPhone(identifier);
+  const user = await prisma.user.findFirst({
+    where: { OR: [{ email: identifier }, { username: identifier }, ...(normalizedPhone ? [{ phone: normalizedPhone }] : [])] },
+  });
+  const passwordMatches = await bcrypt.compare(input.password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
+  if (!user || !user.active || !passwordMatches) throw new ApiError(401, "AUTH_INVALID", "Invalid credentials");
   return sessionFor(user, Boolean(input.remember));
 }
 

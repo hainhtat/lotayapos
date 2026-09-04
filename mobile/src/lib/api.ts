@@ -1,6 +1,13 @@
 import {clearAccessToken,getAccessToken,getRefreshToken,setAccessToken,setRefreshToken} from "@/lib/session-store";
+import {Platform} from "react-native";
 
-const base=process.env.EXPO_PUBLIC_API_BASE_URL??"http://localhost:4000/api/v1";
+export function resolveApiBaseUrl(value:string|undefined,isDevelopment:boolean){
+  const configured=value?.trim().replace(/\/$/,"");
+  if(configured)return configured;
+  if(isDevelopment)return "http://localhost:4000/api/v1";
+  throw new Error("EXPO_PUBLIC_API_BASE_URL is required for production rider builds");
+}
+const base=resolveApiBaseUrl(process.env.EXPO_PUBLIC_API_BASE_URL,typeof __DEV__!=="undefined"&&__DEV__);
 
 type UnauthorizedListener=()=>void;
 const unauthorizedListeners=new Set<UnauthorizedListener>();
@@ -16,6 +23,7 @@ export class ApiError extends Error{
     this.name="ApiError";
   }
 }
+export function isOfflineError(error:unknown){return error instanceof ApiError&&error.status===0;}
 
 type ApiSuccess<T>={success:true;data:T;pagination?:{page:number;pageSize:number;total:number;totalPages:number}};
 
@@ -40,7 +48,7 @@ export async function refreshSession():Promise<boolean>{
     try{
       const response=await fetch(`${base}/auth/refresh`,{
         method:"POST",
-        headers:{"content-type":"application/json"},
+        headers:{"content-type":"application/json",...(Platform.OS!=="web"?{"X-Client-Platform":"mobile"}:{})},
         body:JSON.stringify({refreshToken}),
       });
       const body=await response.json().catch(()=>null);
@@ -59,6 +67,7 @@ async function send(path:string,init:RequestInit){
     ...init,
     headers:{
       "content-type":"application/json",
+      ...(Platform.OS!=="web"&&path.startsWith("/auth/login")?{"X-Client-Platform":"mobile"}:{}),
       ...(token?{authorization:`Bearer ${token}`}:{}),
     },
   });

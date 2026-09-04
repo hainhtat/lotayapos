@@ -512,4 +512,53 @@ describe("FinancePage",()=>{
     expect(screen.getByText("Pending return")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Received" })).not.toBeInTheDocument();
   });
+
+  it("saves a reviewed OS statement draft with an idempotency key", async () => {
+    apiMock.mockImplementation((path:string,init?:RequestInit)=>{
+      if(path==="/master-data/shops")return Promise.resolve({data:[{id:"shop-1",name:"SNMD"}]});
+      if(path==="/master-data")return Promise.resolve({data:{hubs:[{id:"hub-1",name:"Main Hub"}]}});
+      if(path.startsWith("/finance/os-settlement-drafts/saved"))return Promise.resolve({data:[]});
+      if(path==="/finance/os-settlement-drafts"&&init)return Promise.resolve({data:{id:"draft-1",version:1}});
+      if(path.startsWith("/finance/os-settlement-drafts"))return Promise.resolve({data:[{id:"batch-1",label:"June batch",pickupDate:"2026-06-01",shop:{id:"shop-1",name:"SNMD"},hubId:"hub-1",hub:{id:"hub-1",name:"Main Hub"},parcelCount:1,advancePaid:5000,collectedCod:10000,deliveryFees:1000,returnedAdvance:0,unresolvedCount:0,eligible:true}]});
+      if(path==="/finance/os-settlements/preview"&&init)return Promise.resolve({data:{shop:{id:"shop-1",name:"SNMD"},hubId:"hub-1",batches:[{batchId:"batch-1",label:"June batch",collectedCod:10000,deliveryFees:1000,returnedAdvance:0,advanceAmount:5000}],defaults:{grossCollectedCod:10000,advanceDeduction:5000,returnDeduction:0,deliveryFeeDeduction:1000,adjustmentAmount:0,netAmount:4000}}});
+      if(path.startsWith("/finance/rider-outstanding")||path.startsWith("/finance/os-settlements")||path.startsWith("/finance/os-pending-returns"))return Promise.resolve({data:path.startsWith("/finance/os-pending-returns")?emptyPendingReturns:[]});
+      if(path==="/operations/batches"||path==="/finance/expense-categories"||path.startsWith("/finance/expenses?"))return Promise.resolve({data:[]});
+      return Promise.resolve({data:ledgerReport});
+    });
+    const user=userEvent.setup();renderPage("/finance?tab=settlements");
+    const shopOption=await screen.findByRole("option",{name:"SNMD"});
+    await user.selectOptions(shopOption.closest("select")!,"shop-1");
+    await user.click(await screen.findByRole("checkbox",{name:"Select June batch for settlement"}));
+    await user.click(screen.getByRole("button",{name:"Review settlement"}));
+    await user.type(await screen.findByLabelText("Reason for saving this draft"),"Awaiting manager review");
+    await user.click(screen.getByRole("button",{name:"Save draft"}));
+    await waitFor(()=>expect(apiMock).toHaveBeenCalledWith("/finance/os-settlement-drafts",expect.objectContaining({method:"POST"})));
+    const call=apiMock.mock.calls.find(([path,init])=>path==="/finance/os-settlement-drafts"&&init)!;
+    expect(JSON.parse(call[1].body)).toEqual(expect.objectContaining({shopId:"shop-1",batchIds:["batch-1"],reason:"Awaiting manager review",advanceDeduction:5000}));
+    expect(JSON.parse(call[1].body).idempotencyKey).toMatch(/^os-draft-/);
+  });
+
+  it("amends a posted settlement through an explicit reversal and replacement warning", async () => {
+    const posted={id:"settlement-1",businessDate:"2026-08-10",status:"POSTED",netAmount:4000,wallet:"CASH",version:2,shop:{id:"shop-1",name:"SNMD"},batches:[{batchId:"batch-1"}],advanceDeduction:5000,returnDeduction:0,deliveryFeeDeduction:1000,adjustmentAmount:0,adjustmentReason:null};
+    apiMock.mockImplementation((path:string,init?:RequestInit)=>{
+      if(path==="/finance/os-settlements/settlement-1"&&!init)return Promise.resolve({data:{...posted,editHistory:[{id:"audit-1",action:"REVERSED_AND_REPLACED",reason:"Correct fee",createdAt:"2026-08-10",beforeJson:"{}",afterJson:"{}"}]}});
+      if(path==="/finance/os-settlements/settlement-1"&&init)return Promise.resolve({data:{id:"replacement-1"}});
+      if(path==="/finance/os-settlements")return Promise.resolve({data:[posted]});
+      if(path.startsWith("/finance/os-settlement-drafts")||path.startsWith("/finance/rider-outstanding"))return Promise.resolve({data:[]});
+      if(path.startsWith("/finance/os-pending-returns"))return Promise.resolve({data:emptyPendingReturns});
+      if(path==="/master-data")return Promise.resolve({data:{hubs:[]}});
+      if(path==="/master-data/shops"||path==="/operations/batches"||path==="/finance/expense-categories"||path.startsWith("/finance/expenses?"))return Promise.resolve({data:[]});
+      return Promise.resolve({data:ledgerReport});
+    });
+    const user=userEvent.setup();renderPage("/finance?tab=settlements");
+    await user.click(await screen.findByRole("button",{name:"SNMD · version 2 details"}));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/reverse it and post a replacement/i);
+    expect(screen.getByText("Correct fee")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Reason for amendment"),"Correct statement fee");
+    await user.click(screen.getByRole("button",{name:"Reverse and post replacement"}));
+    await waitFor(()=>expect(apiMock).toHaveBeenCalledWith("/finance/os-settlements/settlement-1",expect.objectContaining({method:"PATCH"})));
+    const call=apiMock.mock.calls.find(([path,init])=>path==="/finance/os-settlements/settlement-1"&&init)!;
+    expect(JSON.parse(call[1].body)).toEqual(expect.objectContaining({expectedVersion:2,reason:"Correct statement fee",advanceDeduction:5000}));
+    expect(JSON.parse(call[1].body).idempotencyKey).toMatch(/^os-amend-/);
+  });
 });

@@ -1,8 +1,25 @@
-import { body, param } from "express-validator";
+import { body, param, query } from "express-validator";
 
 export const parcelIdValidation = [param("id").isString().trim().notEmpty()];
 export const alertIdValidation = [param("id").isString().trim().notEmpty()];
 export const batchIdValidation = [param("id").isString().trim().notEmpty()];
+
+export const batchListValidation = [
+  query("page").optional().isInt({ min: 1, max: 100000 }).toInt(),
+  query("pageSize").optional().isInt({ min: 1, max: 200 }).toInt(),
+  query("shopId").optional().isString().trim().notEmpty(),
+  query("hubId").optional().isString().trim().notEmpty(),
+  query("dateFrom").optional().matches(/^\d{4}-\d{2}-\d{2}$/).withMessage("dateFrom must be YYYY-MM-DD").bail().isISO8601({ strict: true }),
+  query("dateTo").optional().matches(/^\d{4}-\d{2}-\d{2}$/).withMessage("dateTo must be YYYY-MM-DD").bail().isISO8601({ strict: true }),
+  query("search").optional().isString().trim().isLength({ min: 1, max: 150 }),
+];
+
+export const overdueUnsentValidation = [
+  query("page").optional().isInt({ min: 1, max: 100000 }).toInt(),
+  query("pageSize").optional().isInt({ min: 1, max: 100 }).toInt(),
+  query("days").optional().isInt({ min: 3, max: 30 }).toInt(),
+  query("hubId").optional().isString().trim().notEmpty(),
+];
 
 export const createBatchValidation = [
   body("shopId").isString().trim().notEmpty(),
@@ -18,7 +35,8 @@ export const createBatchValidation = [
 export const bulkParcelCreateValidation = [
   param("id").isString().trim().notEmpty(),
   body("parcels").isArray({min:1,max:500}),
-  body("parcels.*.trackingNumber").isString().trim().notEmpty(),
+  // Legacy clients may still send their preview value; the server allocates the authoritative value.
+  body("parcels.*.trackingNumber").optional().isString().trim().notEmpty(),
   body("parcels.*.orderId").optional({nullable:true}).isString().trim().isLength({max:255}),
   body("parcels.*.customerName").isString().trim().notEmpty(),
   body("parcels.*.customerPhone").optional().isString().trim().isLength({max:50}),

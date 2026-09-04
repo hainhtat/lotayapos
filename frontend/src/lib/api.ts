@@ -37,13 +37,16 @@ function failed(body: { error?: { message?: string; code?: string } } | null, st
   return new ApiError(body?.error?.message ?? "Request failed", body?.error?.code, status);
 }
 
-export async function api<T>(path: string, init: RequestInit = {}, allowReauth = true): Promise<{ success: true; data: T }> {
+export type ApiPagination = { page: number; pageSize: number; total: number; totalPages: number };
+export type ApiResponse<T> = { success: true; data: T; pagination?: ApiPagination };
+
+export async function api<T>(path: string, init: RequestInit = {}, allowReauth = true): Promise<ApiResponse<T>> {
   const response = await send(path, init);
   const body = await parseBody(response);
   if (response.ok) {
     if (body?.data?.expiresAt) noteAccessExpiry(body.data.expiresAt);
     if (body?.data?.accessToken) setAuthToken(body.data.accessToken, false);
-    return body as { success: true; data: T };
+    return body as ApiResponse<T>;
   }
   if (response.status === 401 && !skipRefresh(path)) {
     const refreshed = await requestSilentRefresh();

@@ -239,6 +239,23 @@ describe("OperationsPage", () => {
     expect(within(dialog).getByDisplayValue("Customer")).toBeInTheDocument();
   });
 
+  it("lazy-loads attributable parcel field history",async()=>{
+    mockParcelList([{id:"audit-1",trackingNumber:"TRK-AUDIT",customerName:"Customer",address:"Address",status:"DELIVERED",codAmount:25000,deliveryFee:3000,batch:{label:"Batch",pickupDate:"2026-08-11T00:00:00.000Z",shop:{name:"Shop"}},rider:{id:"rider-1",user:{name:"Rider"}}}]);
+    apiMock.mockImplementation((path:string)=>{
+      if(path==="/parcels/audit-1/field-history")return Promise.resolve({data:[{id:"audit-row-1",createdAt:"2026-08-12T10:00:00.000Z",before:{customerName:"Old customer",deliveryFee:2500},after:{customerName:"New customer",deliveryFee:3000},actor:{id:"ops-1",name:"Ops Manager",role:"OPERATIONS_MANAGER"}}]});
+      if(path==="/master-data")return Promise.resolve({data:{riders:[]}});
+      return Promise.resolve({data:[]});
+    });
+    renderPage();await screen.findByText("TRK-AUDIT");
+    expect(apiMock).not.toHaveBeenCalledWith("/parcels/audit-1/field-history");
+    fireEvent.click(screen.getByRole("button",{name:"Field history TRK-AUDIT"}));
+    const dialog=await screen.findByRole("dialog",{name:"Parcel field history"});
+    expect(await within(dialog).findByText("Ops Manager")).toBeInTheDocument();
+    expect(within(dialog).getByText("Old customer")).toBeInTheDocument();
+    expect(within(dialog).getByText("New customer")).toBeInTheDocument();
+    expect(apiMock).toHaveBeenCalledWith("/parcels/audit-1/field-history");
+  });
+
   it("opens delivered parcels for contact corrections while locking delivery fields", async () => {
     mockParcelList([{
       id: "delivered", trackingNumber: "TRK-DELIVERED", customerName: "Customer", address: "Address",
@@ -339,6 +356,31 @@ describe("OperationsPage", () => {
     expect(checkbox).toBeEnabled();
     fireEvent.click(checkbox);
     expect(checkbox).toBeChecked();
+  });
+
+  it("updates selected parcel statuses in one atomic bulk request", async () => {
+    mockParcelList([
+      { id: "parcel-1", trackingNumber: "TRK-1", customerName: "One", address: "A", status: "ASSIGNED", codAmount: 1000, batch: { label: "Batch", shop: { name: "Shop" } }, rider: { id: "rider-1", user: { name: "Rider" } } },
+      { id: "parcel-2", trackingNumber: "TRK-2", customerName: "Two", address: "B", status: "PICKED_UP", codAmount: 2000, batch: { label: "Batch", shop: { name: "Shop" } }, rider: null },
+    ]);
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/master-data") return Promise.resolve({ data: { riders: [{ id: "rider-1", user: { name: "Rider" } }] } });
+      if (path === "/operations/batches" || path === "/master-data/reason-codes") return Promise.resolve({ data: [] });
+      if (path === "/parcels/bulk-status") return Promise.resolve({ data: { updatedCount: 2, parcels: [] } });
+      return Promise.resolve({ data: [] });
+    });
+    renderPage();
+    await screen.findByText("TRK-1");
+    fireEvent.click(screen.getByRole("checkbox", { name: /select TRK-1/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /select TRK-2/i }));
+    fireEvent.change(screen.getByLabelText("Apply status"), { target: { value: "OUT_FOR_DELIVERY" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply status" }));
+
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/parcels/bulk-status", {
+      method: "POST",
+      body: JSON.stringify({ parcelIds: ["parcel-1", "parcel-2"], status: "OUT_FOR_DELIVERY", note: "Ops correction" }),
+    }));
+    expect(apiMock.mock.calls.filter(([path]) => /^\/parcels\/[^/]+\/status$/.test(path))).toHaveLength(0);
   });
 
   it("reassigns an eligible parcel via inline rider select", async () => {

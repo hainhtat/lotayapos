@@ -82,11 +82,24 @@ export function parseDeliveryManifestText(pages: string[]): ParsedManifestLine[]
 
 const COL = { no: 95, customer: 215, address: 400 };
 
-function columnOf(x: number) {
+function columnOf(x: number, normalizeX: (value: number) => number = (value) => value) {
+  x = normalizeX(x);
   if (x < COL.no) return "no" as const;
   if (x < COL.customer) return "customer" as const;
   if (x < COL.address) return "address" as const;
   return "tail" as const;
+}
+
+function pageGeometry(items: PdfTextItem[], anchors: PdfTextItem[]) {
+  const anchorX = Math.min(...anchors.map((item) => item.x));
+  const rightX = Math.max(...items.map((item) => item.x));
+  const width = rightX - anchorX;
+  const normalizeX = width > 0
+    ? (x: number) => 65 + ((x - anchorX) * (492 - 65)) / width
+    : (x: number) => x;
+  const gaps = anchors.slice(0, -1).map((anchor, index) => anchor.y - anchors[index + 1]!.y).filter((gap) => gap > 0);
+  const rowGap = gaps.length ? gaps.sort((a, b) => a - b)[Math.floor(gaps.length / 2)]! : 48;
+  return { normalizeX, rowGap };
 }
 
 function joinItems(items: PdfTextItem[]) {
@@ -104,11 +117,15 @@ export function parseDeliveryManifestItems(items: PdfTextItem[]): ParsedManifest
   const pages = [...new Set(items.map((item) => item.page))].sort((a, b) => a - b);
   for (const page of pages) {
     const pageItems = items.filter((item) => item.page === page);
-    const orderAnchors = pageItems
-      .filter((item) => columnOf(item.x) === "no" && /^\d{1,5}$/.test(item.str.trim()))
+    const numericItems = pageItems.filter((item) => /^\d{1,5}$/.test(myanmarDigitsToAscii(item.str.trim())));
+    const leftmostX = Math.min(...numericItems.map((item) => item.x));
+    const orderAnchors = numericItems
+      .filter((item) => item.x <= leftmostX + 2)
       .sort((a, b) => b.y - a.y);
+    if (!orderAnchors.length) continue;
+    const { normalizeX, rowGap } = pageGeometry(pageItems, orderAnchors);
     if (rows.length && orderAnchors[0]) {
-      const leftover = pageItems.filter((item) => item.y > orderAnchors[0]!.y + 24 && !isNoise(item.str));
+      const leftover = pageItems.filter((item) => item.y > orderAnchors[0]!.y + rowGap / 2 && !isNoise(item.str));
       const extra = extractPhonesFromText(joinItems(leftover));
       const prior = rows.at(-1)!;
       if (extra.rest && !isNoise(extra.rest)) prior.address = `${prior.address} ${extra.rest}`.trim();
@@ -118,15 +135,14 @@ export function parseDeliveryManifestItems(items: PdfTextItem[]): ParsedManifest
       const anchor = orderAnchors[index]!;
       const nextY = orderAnchors[index + 1]?.y ?? -Infinity;
       const prevY = orderAnchors[index - 1]?.y ?? Infinity;
-      const upper = Math.min(anchor.y + 24, (anchor.y + prevY) / 2);
-      const lower = Number.isFinite(nextY) ? (anchor.y + nextY) / 2 : anchor.y - 80;
+      const upper = Math.min(anchor.y + rowGap / 2, (anchor.y + prevY) / 2);
+      const lower = Number.isFinite(nextY) ? (anchor.y + nextY) / 2 : anchor.y - Math.max(rowGap / 2, 80);
       const block = pageItems.filter((item) => item.y <= upper + 0.5 && item.y > lower + 0.5);
-      const customer = joinItems(block.filter((item) => columnOf(item.x) === "customer"));
-      const addressRaw = joinItems(block.filter((item) => columnOf(item.x) === "address"));
-      const tail = joinItems(block.filter((item) => columnOf(item.x) === "tail"));
-      const amountMatch = myanmarDigitsToAscii(`${addressRaw} ${tail}`).match(/([\d,]+)\s*MMK/i);
-      if (!amountMatch) continue;
-      const codAmount = amount(amountMatch[1]);
+      const customer = joinItems(block.filter((item) => columnOf(item.x, normalizeX) === "customer"));
+      const addressRaw = joinItems(block.filter((item) => columnOf(item.x, normalizeX) === "address"));
+      const tail = joinItems(block.filter((item) => columnOf(item.x, normalizeX) === "tail"));
+      const codAmount = parseAmountToken(tail);
+      if (codAmount === undefined) continue;
       if (!Number.isSafeInteger(codAmount) || codAmount < 0) continue;
       const extracted = extractPhonesFromText(`${addressRaw} ${tail}`);
       const address = extractPhonesFromText(addressRaw).rest.replace(/[—–\-]\s*$/, "").trim();
@@ -142,7 +158,6 @@ export function parseDeliveryManifestItems(items: PdfTextItem[]): ParsedManifest
       });
     }
   }
-  if (rows.length) return rows.slice(0, MAX_MANIFEST_ROWS);
   const pagesText = pages.map((page) => {
     const grouped = new Map<number, PdfTextItem[]>();
     for (const item of items.filter((entry) => entry.page === page)) {
@@ -151,8 +166,19 @@ export function parseDeliveryManifestItems(items: PdfTextItem[]): ParsedManifest
     }
     return [...grouped.entries()]
       .sort((a, b) => b[0] - a[0])
-      .map(([, lineItems]) => joinItems(lineItems))
+      .map(([, lineItems]) => lineItems.slice().sort((a, b) => a.x - b.x).map((item) => item.str).join(" ").trim())
       .join("\n");
   });
-  return parseDeliveryManifestText(pagesText);
+  const fallbackRows = parseDeliveryManifestText(pagesText);
+  const seen = new Set(rows.map((row) => `${row.sourcePage}:${row.reference ?? ""}`));
+  for (const row of fallbackRows) {
+    const key = `${row.sourcePage}:${row.reference ?? ""}`;
+    if (!seen.has(key)) {
+      rows.push(row);
+      seen.add(key);
+    }
+  }
+  return rows
+    .sort((a, b) => a.sourcePage - b.sourcePage || Number(a.reference ?? 0) - Number(b.reference ?? 0))
+    .slice(0, MAX_MANIFEST_ROWS);
 }

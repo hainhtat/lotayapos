@@ -1,7 +1,11 @@
-import {requireVerifiedUser} from "./auth-response";
+import {requireRiderUser,requireVerifiedUser} from "./auth-response";
 const user={id:"user-1",name:"Rider",email:"rider@example.com",role:"RIDER"};
 describe("auth verification response",()=>{
   it("accepts the direct API data shape",()=>expect(requireVerifiedUser(user)).toEqual(user));
+  it("accepts only a rider for the mobile app",()=>{
+    expect(requireRiderUser(user)).toEqual(user);
+    expect(()=>requireRiderUser({...user,role:"DISPATCHER"})).toThrow("RIDER_ROLE_REQUIRED");
+  });
   it("rejects the obsolete nested user shape",()=>expect(()=>requireVerifiedUser({user})).toThrow("Invalid verification response"));
   it.each([
     {id:"",name:"Rider",email:"rider@example.com",role:"RIDER"},

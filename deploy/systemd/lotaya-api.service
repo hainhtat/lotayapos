@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/lotaya/backend
+WorkingDirectory=/opt/lotaya/current/backend
 Environment=PORT=4010
 Environment=LISTEN_HOST=127.0.0.1
 EnvironmentFile=/opt/lotaya/shared/lotaya.env

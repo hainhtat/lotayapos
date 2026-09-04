@@ -50,6 +50,17 @@ export function calculateRiderSettlementAmounts(input: {
   };
 }
 
+export function buildRiderSettlementReceivableLines(actualAmount: number, salaryDeduction: number) {
+  if (!Number.isInteger(actualAmount) || actualAmount < 0 || !Number.isInteger(salaryDeduction) || salaryDeduction < 0)
+    throw new ApiError(400, "INVALID_SETTLEMENT_AMOUNT", "Settlement and salary amounts must be non-negative integers");
+  return salaryDeduction > 0
+    ? [
+        { account: "RIDER_RECEIVABLE", debit: 0, credit: actualAmount + salaryDeduction },
+        { account: "RIDER_RECEIVABLE", debit: salaryDeduction, credit: 0 },
+      ]
+    : [{ account: "RIDER_RECEIVABLE", debit: 0, credit: actualAmount }];
+}
+
 /** Daily salary share for settlement day: floor(monthlySalary / daysInMonth). */
 export function calculateDailySalaryDeduction(
   monthlySalary: number | null | undefined,
@@ -807,6 +818,151 @@ export async function postOsSettlement(input: OsSettlementInput, actor: FinanceA
   }, { isolationLevel: "Serializable" });
 }
 
+type EditableOsSettlementComponents = {
+  advanceDeduction: number;
+  returnDeduction: number;
+  deliveryFeeDeduction: number;
+  adjustmentAmount: number;
+  adjustmentReason?: string;
+};
+
+function replayMatchesComponents(afterJson: string, input: EditableOsSettlementComponents & { wallet?: string }) {
+  const prior = JSON.parse(afterJson) as Record<string, unknown>;
+  return prior.advanceDeduction === input.advanceDeduction
+    && prior.returnDeduction === input.returnDeduction
+    && prior.deliveryFeeDeduction === input.deliveryFeeDeduction
+    && prior.adjustmentAmount === input.adjustmentAmount
+    && (prior.adjustmentReason ?? null) === (input.adjustmentReason?.trim() || null)
+    && (input.wallet === undefined || prior.wallet === input.wallet);
+}
+
+function replayMatchesDraftCreate(
+  afterJson: string,
+  input: SaveOsSettlementDraftInput,
+  resolvedHubId: string,
+) {
+  const prior = JSON.parse(afterJson) as Record<string, unknown>;
+  const batchIds = [...new Set(input.batchIds)].sort();
+  return replayMatchesComponents(afterJson, input)
+    && prior.shopId === input.shopId
+    && prior.hubId === resolvedHubId
+    && JSON.stringify(prior.batchIds) === JSON.stringify(batchIds)
+    && prior.businessDate === input.businessDate.slice(0, 10);
+}
+
+function validateEditableSettlementComponents(
+  values: EditableOsSettlementComponents,
+  maximums: { grossCollectedCod: number; advanceDeduction: number; returnDeduction: number; deliveryFeeDeduction: number },
+) {
+  for (const [field, value, maximum] of [
+    ["advanceDeduction", values.advanceDeduction, maximums.advanceDeduction],
+    ["returnDeduction", values.returnDeduction, maximums.returnDeduction],
+    ["deliveryFeeDeduction", values.deliveryFeeDeduction, maximums.deliveryFeeDeduction],
+  ] as const) {
+    if (!Number.isInteger(value) || value < 0 || value > maximum)
+      throw new ApiError(400, "INVALID_SETTLEMENT_COMPONENT", `${field} must be between zero and its statement maximum`);
+  }
+  const adjustmentLimit = maximums.grossCollectedCod + maximums.advanceDeduction + maximums.returnDeduction + maximums.deliveryFeeDeduction;
+  if (!Number.isInteger(values.adjustmentAmount) || Math.abs(values.adjustmentAmount) > adjustmentLimit)
+    throw new ApiError(400, "INVALID_SETTLEMENT_ADJUSTMENT", "Adjustment is outside the statement bounds");
+  if (values.adjustmentAmount !== 0 && !values.adjustmentReason?.trim())
+    throw new ApiError(400, "ADJUSTMENT_REASON_REQUIRED", "A reason is required for a settlement adjustment");
+}
+
+type SaveOsSettlementDraftInput = EditableOsSettlementComponents & {
+  shopId: string;
+  hubId?: string;
+  batchIds: string[];
+  businessDate: string;
+  wallet: CashbookWallet;
+  reason: string;
+  idempotencyKey: string;
+};
+
+export async function createOsSettlementDraft(input: SaveOsSettlementDraftInput, actor: FinanceActor) {
+  const resolvedHubId = await resolveFinanceHub(actor, input.hubId);
+  const replay = await prisma.osSettlementEditAudit.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+  if (replay) {
+    if (replay.targetType !== "DRAFT" || replay.action !== "CREATED")
+      throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key was already used for another settlement edit");
+    if (!replayMatchesDraftCreate(replay.afterJson, input, resolvedHubId))
+      throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key was already used for different draft values");
+    return prisma.osSettlementDraft.findUniqueOrThrow({ where: { id: replay.targetId } });
+  }
+  const preview = await previewOsSettlement(input, actor);
+  validateEditableSettlementComponents(input, preview.defaults);
+  const batchIds = [...new Set(input.batchIds)].sort();
+  const snapshot = {
+    shopId: input.shopId, hubId: preview.hubId, batchIds,
+    businessDate: input.businessDate.slice(0, 10), wallet: input.wallet,
+    advanceDeduction: input.advanceDeduction, returnDeduction: input.returnDeduction,
+    deliveryFeeDeduction: input.deliveryFeeDeduction, adjustmentAmount: input.adjustmentAmount,
+    adjustmentReason: input.adjustmentReason?.trim() || null,
+  };
+  return prisma.$transaction(async (tx) => {
+    const draft = await tx.osSettlementDraft.create({ data: {
+      shopId: input.shopId, hubId: preview.hubId, batchIdsJson: JSON.stringify(batchIds),
+      businessDate: businessDay(input.businessDate), wallet: input.wallet,
+      advanceDeduction: input.advanceDeduction, returnDeduction: input.returnDeduction,
+      deliveryFeeDeduction: input.deliveryFeeDeduction, adjustmentAmount: input.adjustmentAmount,
+      adjustmentReason: input.adjustmentReason?.trim() || null, createdBy: actor.id, updatedBy: actor.id,
+    } });
+    await tx.osSettlementEditAudit.create({ data: {
+      targetType: "DRAFT", targetId: draft.id, action: "CREATED", actorId: actor.id,
+      reason: input.reason.trim(), beforeJson: "null", afterJson: JSON.stringify(snapshot), idempotencyKey: input.idempotencyKey,
+    } });
+    return draft;
+  }, { isolationLevel: "Serializable" });
+}
+
+export async function listSavedOsSettlementDrafts(input: { shopId?: string; hubId?: string }, actor: FinanceActor) {
+  const hubId = await resolveFinanceListHub(actor, input.hubId);
+  return prisma.osSettlementDraft.findMany({
+    where: { ...(hubId ? { hubId } : {}), ...(input.shopId ? { shopId: input.shopId } : {}) },
+    orderBy: { updatedAt: "desc" }, take: 200,
+  });
+}
+
+export async function updateOsSettlementDraft(
+  input: EditableOsSettlementComponents & { id: string; expectedVersion: number; reason: string; idempotencyKey: string },
+  actor: FinanceActor,
+) {
+  const user = await assertFinanceActor(actor);
+  const replay = await prisma.osSettlementEditAudit.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+  if (replay) {
+    if (replay.targetType !== "DRAFT" || replay.targetId !== input.id || replay.action !== "UPDATED")
+      throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key was already used for another settlement edit");
+    const prior = JSON.parse(replay.afterJson) as { version?: number };
+    if (prior.version !== input.expectedVersion + 1 || !replayMatchesComponents(replay.afterJson, input))
+      throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key was already used for different draft values");
+    return prisma.osSettlementDraft.findUniqueOrThrow({ where: { id: input.id } });
+  }
+  const draft = await prisma.osSettlementDraft.findUnique({ where: { id: input.id } });
+  if (!draft) throw new ApiError(404, "OS_SETTLEMENT_DRAFT_NOT_FOUND", "Saved settlement draft not found");
+  if (user.role !== "SUPERADMIN" && draft.hubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Draft is outside your hub scope");
+  const preview = await previewOsSettlement({ shopId: draft.shopId, hubId: draft.hubId, batchIds: JSON.parse(draft.batchIdsJson) as string[] }, actor);
+  validateEditableSettlementComponents(input, preview.defaults);
+  const before = JSON.stringify(draft);
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.osSettlementDraft.updateMany({
+      where: { id: draft.id, version: input.expectedVersion },
+      data: {
+        advanceDeduction: input.advanceDeduction, returnDeduction: input.returnDeduction,
+        deliveryFeeDeduction: input.deliveryFeeDeduction, adjustmentAmount: input.adjustmentAmount,
+        adjustmentReason: input.adjustmentReason?.trim() || null, updatedBy: actor.id,
+        version: { increment: 1 },
+      },
+    });
+    if (updated.count !== 1) throw new ApiError(409, "EDIT_CONFLICT", "Draft changed; refresh and retry");
+    const result = await tx.osSettlementDraft.findUniqueOrThrow({ where: { id: draft.id } });
+    await tx.osSettlementEditAudit.create({ data: {
+      targetType: "DRAFT", targetId: draft.id, action: "UPDATED", actorId: actor.id,
+      reason: input.reason.trim(), beforeJson: before, afterJson: JSON.stringify(result), idempotencyKey: input.idempotencyKey,
+    } });
+    return result;
+  }, { isolationLevel: "Serializable" });
+}
+
 function supportsOrgWideFinanceRead(user: { role: string; hubId: string | null }) {
   return user.role === "SUPERADMIN" || (user.role === "AUDITOR" && !user.hubId);
 }
@@ -1121,7 +1277,131 @@ export async function getOsSettlement(id: string, actor: FinanceActor) {
   const settlement = await prisma.osSettlement.findUnique({ where: { id }, include: { shop: true, batches: { include: { batch: true } }, journalEntry: { include: { lines: true } } } });
   if (!settlement) throw new ApiError(404, "OS_SETTLEMENT_NOT_FOUND", "OS settlement not found");
   if (user.role !== "SUPERADMIN" && settlement.hubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Settlement is outside your hub scope");
-  return settlement;
+  const chainIds = new Set<string>([settlement.id]);
+  let predecessorId = settlement.supersedesId;
+  let rootId = settlement.id;
+  while (predecessorId && !chainIds.has(predecessorId)) {
+    chainIds.add(predecessorId);
+    rootId = predecessorId;
+    const predecessor = await prisma.osSettlement.findUnique({ where: { id: predecessorId }, select: { supersedesId: true } });
+    predecessorId = predecessor?.supersedesId ?? null;
+  }
+  let successorOf = rootId;
+  while (true) {
+    const successor = await prisma.osSettlement.findUnique({ where: { supersedesId: successorOf }, select: { id: true } });
+    if (!successor) break;
+    const seen = chainIds.has(successor.id);
+    chainIds.add(successor.id);
+    successorOf = successor.id;
+    if (seen && successor.id === rootId) break;
+  }
+  const editHistory = await prisma.osSettlementEditAudit.findMany({
+    where: { targetType: "POSTED", targetId: { in: [...chainIds] } },
+    orderBy: { createdAt: "asc" },
+  });
+  return { ...settlement, editHistory, supersessionChainIds: [...chainIds] };
+}
+
+export async function amendOsSettlement(
+  input: EditableOsSettlementComponents & {
+    id: string; expectedVersion: number; businessDate: string; wallet: CashbookWallet;
+    reason: string; idempotencyKey: string;
+  },
+  actor: FinanceActor,
+) {
+  const user = await assertFinanceActor(actor);
+  if (!["SUPERADMIN", "FINANCE"].includes(user.role))
+    throw new ApiError(403, "FORBIDDEN", "Only Superadmin or Finance may amend a posted OS settlement");
+  const replay = await prisma.osSettlementEditAudit.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+  if (replay) {
+    if (replay.targetType !== "POSTED" || replay.targetId !== input.id)
+      throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key was already used for another settlement edit");
+    if (!replayMatchesComponents(replay.afterJson, input))
+      throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key was already used for different settlement values");
+    const replacementId = (JSON.parse(replay.afterJson) as { replacementId?: string }).replacementId;
+    if (!replacementId) throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Prior edit result is incomplete");
+    return getOsSettlement(replacementId, actor);
+  }
+  const correctionDate = businessDay(input.businessDate);
+  return prisma.$transaction(async (tx) => {
+    const original = await tx.osSettlement.findUnique({
+      where: { id: input.id },
+      include: { batches: true, journalEntry: { include: { lines: true } } },
+    });
+    if (!original) throw new ApiError(404, "OS_SETTLEMENT_NOT_FOUND", "OS settlement not found");
+    if (user.role !== "SUPERADMIN" && original.hubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Settlement is outside your hub scope");
+    if (original.status !== "POSTED") throw new ApiError(409, "SETTLEMENT_NOT_EDITABLE", "Only the current posted settlement version can be amended");
+    if (original.version !== input.expectedVersion) throw new ApiError(409, "EDIT_CONFLICT", "Settlement changed; refresh and retry");
+    await assertCashbookOpen(tx, correctionDate, original.hubId);
+    const maximums = {
+      grossCollectedCod: original.batches.reduce((sum, row) => sum + row.collectedCod, 0),
+      advanceDeduction: original.batches.reduce((sum, row) => sum + row.advanceAmount, 0),
+      returnDeduction: original.batches.reduce((sum, row) => sum + row.returnedAdvance, 0),
+      deliveryFeeDeduction: original.batches.reduce((sum, row) => sum + row.deliveryFees, 0),
+    };
+    validateEditableSettlementComponents(input, maximums);
+    const stagedReturnMaximum = original.journalEntry.lines
+      .filter((line) => line.account === "OS_SETTLEMENT_OFFSET")
+      .reduce((sum, line) => sum + line.credit, 0);
+    if (input.returnDeduction < stagedReturnMaximum)
+      throw new ApiError(400, "INVALID_SETTLEMENT_COMPONENT", "Return deduction cannot be below the staged return offset");
+    const netAmount = calculateOsSettlementNet({ ...maximums, ...input });
+    const replacementId = randomUUID();
+    const replacementLines = [
+      { account: "OS_COD_PAYABLE", debit: maximums.grossCollectedCod, credit: 0 },
+      ...(input.advanceDeduction ? [{ account: "OS_ADVANCE_RECEIVABLE", debit: 0, credit: input.advanceDeduction }] : []),
+      ...buildOsSettlementReturnDeductionLines(input.returnDeduction, Math.min(input.returnDeduction, stagedReturnMaximum)),
+      ...(input.deliveryFeeDeduction ? [{ account: "DELIVERY_FEE_REVENUE", debit: 0, credit: input.deliveryFeeDeduction }] : []),
+      ...(input.adjustmentAmount > 0
+        ? [{ account: "OS_SETTLEMENT_ADJUSTMENT", debit: input.adjustmentAmount, credit: 0 }]
+        : input.adjustmentAmount < 0
+          ? [{ account: "OS_SETTLEMENT_ADJUSTMENT", debit: 0, credit: -input.adjustmentAmount }]
+          : []),
+      ...(netAmount > 0 ? [{ account: walletAccount(input.wallet), debit: 0, credit: netAmount }] : netAmount < 0 ? [{ account: "OS_SETTLEMENT_RECEIVABLE", debit: -netAmount, credit: 0 }] : []),
+    ];
+    const claimed = await tx.osSettlement.updateMany({
+      where: { id: original.id, status: "POSTED", version: input.expectedVersion },
+      data: { status: "REPLACED", reversedAt: new Date(), reversedBy: actor.id, reversalReason: input.reason.trim() },
+    });
+    if (claimed.count !== 1) throw new ApiError(409, "EDIT_CONFLICT", "Settlement changed; refresh and retry");
+    await tx.journalEntry.create({ data: {
+      sourceType: "LEDGER_REVERSAL", sourceId: original.journalEntry.id, hubId: original.hubId,
+      businessDate: correctionDate, description: `OS settlement amendment reversal: ${input.reason.trim()}`,
+      lines: { create: original.journalEntry.lines.map((line) => ({ account: line.account, debit: line.credit, credit: line.debit })) },
+    } });
+    const journal = await tx.journalEntry.create({ data: {
+      sourceType: "OS_SETTLEMENT", sourceId: replacementId, hubId: original.hubId,
+      businessDate: correctionDate, description: `OS settlement replacement for ${original.id}: ${input.reason.trim()}`,
+      lines: { create: replacementLines },
+    } });
+    const replacement = await tx.osSettlement.create({ data: {
+      id: replacementId, shopId: original.shopId, hubId: original.hubId, businessDate: correctionDate,
+      grossCollectedCod: maximums.grossCollectedCod, advanceDeduction: input.advanceDeduction,
+      returnDeduction: input.returnDeduction, deliveryFeeDeduction: input.deliveryFeeDeduction,
+      adjustmentAmount: input.adjustmentAmount, adjustmentReason: input.adjustmentReason?.trim() || null,
+      netAmount, wallet: input.wallet, status: "POSTED", idempotencyKey: `amend:${input.idempotencyKey}`,
+      postedBy: actor.id, journalEntryId: journal.id, version: original.version + 1, supersedesId: original.id,
+      batches: { create: original.batches.map((row) => ({
+        batchId: row.batchId, collectedCod: row.collectedCod, advanceAmount: row.advanceAmount,
+        returnedAdvance: row.returnedAdvance, deliveryFees: row.deliveryFees,
+      })) },
+    }, include: { shop: true, batches: { include: { batch: true } }, journalEntry: { include: { lines: true } } } });
+    await tx.osSettlementEditAudit.create({ data: {
+      targetType: "POSTED", targetId: original.id, action: "REVERSED_AND_REPLACED", actorId: actor.id,
+      reason: input.reason.trim(), beforeJson: JSON.stringify({
+        settlementId: original.id, version: original.version, advanceDeduction: original.advanceDeduction,
+        returnDeduction: original.returnDeduction, deliveryFeeDeduction: original.deliveryFeeDeduction,
+        adjustmentAmount: original.adjustmentAmount, adjustmentReason: original.adjustmentReason,
+        wallet: original.wallet, netAmount: original.netAmount,
+      }),
+      afterJson: JSON.stringify({ replacementId, version: replacement.version, advanceDeduction: replacement.advanceDeduction,
+        returnDeduction: replacement.returnDeduction, deliveryFeeDeduction: replacement.deliveryFeeDeduction,
+        adjustmentAmount: replacement.adjustmentAmount, adjustmentReason: replacement.adjustmentReason,
+        wallet: replacement.wallet, netAmount: replacement.netAmount }),
+      idempotencyKey: input.idempotencyKey,
+    } });
+    return replacement;
+  }, { isolationLevel: "Serializable" });
 }
 
 export async function reverseOsSettlement(input: { id: string; businessDate: string; reason: string }, actor: FinanceActor) {
@@ -1660,12 +1940,13 @@ export async function createRiderSettlement(
         salaryDeduction,
         ...input,
       });
+      let appliedSalaryDeduction = 0;
       if (salaryDeduction > 0) {
         const salarySourceId = `${input.riderId}:${input.businessDate}`;
         const priorSalary = await tx.riderReceivableRecognition.findUnique({ where: { sourceType_sourceId: { sourceType: "RIDER_SALARY_DEDUCTION", sourceId: salarySourceId } } });
         if (!priorSalary) {
-          await tx.journalEntry.create({ data: { sourceType: "RIDER_SALARY_DEDUCTION", sourceId: salarySourceId, hubId: riderHubId, businessDate: date, description: `Daily salary deduction for ${input.riderId}`, lines: { create: [{ account: "RIDER_COMMISSION_PAYABLE", debit: salaryDeduction, credit: 0 }, { account: "RIDER_RECEIVABLE", debit: 0, credit: salaryDeduction }] } } });
           await tx.riderReceivableRecognition.create({ data: { sourceType: "RIDER_SALARY_DEDUCTION", sourceId: salarySourceId, riderId: input.riderId, hubId: riderHubId, businessDate: date, codAmount: 0, deliveryFee: 0, commissionAmount: salaryDeduction, receivableAmount: -salaryDeduction } });
+          appliedSalaryDeduction = salaryDeduction;
         }
       }
       const position = await riderReceivablePosition(input.riderId, date, tx);
@@ -1725,6 +2006,7 @@ export async function createRiderSettlement(
           // receipt's immutable wallet evidence remains in SettlementLine.
           actualAmount: cumulative.paidAmount,
           variance: cumulative.variance,
+          salaryDeduction: appliedSalaryDeduction,
           status: cumulative.status,
           idempotencyKey: input.idempotencyKey,
           lines: {
@@ -1742,7 +2024,7 @@ export async function createRiderSettlement(
         { account: "WALLET_KBZ_PAY", debit: input.kbzPay, credit: 0 },
         { account: "WALLET_WAVE_PAY", debit: input.wavePay, credit: 0 },
       ];
-      const receivableLines = [{ account: "RIDER_RECEIVABLE", debit: 0, credit: amounts.actualAmount }];
+      const receivableLines = buildRiderSettlementReceivableLines(amounts.actualAmount, appliedSalaryDeduction);
       await tx.journalEntry.create({
         data: {
           sourceType: "RIDER_SETTLEMENT",
@@ -1750,8 +2032,8 @@ export async function createRiderSettlement(
           hubId: riderHubId,
           businessDate: date,
           description:
-            amounts.salaryDeduction > 0
-              ? `Rider settlement for ${input.riderId} (salary deduction ${amounts.salaryDeduction})`
+            appliedSalaryDeduction > 0
+              ? `Rider settlement for ${input.riderId} (salary deduction ${appliedSalaryDeduction})`
               : `Rider settlement for ${input.riderId}`,
           lines: { create: [...walletLines.filter((line) => line.debit > 0), ...receivableLines] },
         },

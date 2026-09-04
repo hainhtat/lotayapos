@@ -24,7 +24,6 @@ export async function extractPdfTextItems(pdf: Buffer, maxPages = MAX_PAGES) {
     const items: PdfTextItem[] = [];
     for (let page = 1; page <= pageCount; page += 1) {
       const pdfPage = await doc.getPage(page);
-      await pdfPage.getOperatorList();
       const content = await pdfPage.getTextContent();
       const names = new Map<string, string>();
       for (const item of content.items) {

@@ -8,6 +8,7 @@ import { DeliveryStatusPanel, type ManifestPreviewData } from "@/components/deli
 import { ApiError, api, apiRaw } from "@/lib/api";
 import { resolveManifestPdfFilename } from "@/lib/content-disposition";
 import { isDateChangeReason } from "@/lib/exception-reasons";
+import { ParcelFieldHistory } from "@/components/parcel-field-history";
 import {
   buildManifestBody,
   MANIFEST_DATE_PRESETS,
@@ -153,6 +154,7 @@ export function OperationsPage() {
   const [manifestDateTo, setManifestDateTo] = useState("");
   const [partial, setPartial] = useState<Parcel | null>(null);
   const [editing, setEditing] = useState<Parcel | null>(null);
+  const [historyParcel,setHistoryParcel]=useState<{id:string;trackingNumber:string}|null>(null);
   const [editForm, setEditForm] = useState({
     orderId: "",
     customerName: "",
@@ -499,27 +501,20 @@ export function OperationsPage() {
       if (selectedParcels.length > 50) {
         throw new Error(t("bulkStatusCap"));
       }
-      let updated = 0;
-      for (const parcel of selectedParcels) {
-        if (parcel.status === bulkStatus) continue;
-        try {
-          await api(`/parcels/${parcel.id}/status`, {
-            method: "POST",
-            body: JSON.stringify({
-              status: bulkStatus,
-              note,
-              ...((bulkStatus === "FAILED" || bulkStatus === "REJECTED") && bulkReasonCode
-                ? { reasonCode: bulkReasonCode }
-                : {}),
-            }),
-          });
-          updated += 1;
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : t("loadError");
-          throw new Error(t("bulkStatusPartialFailure", { updated, detail }));
-        }
-      }
-      return updated;
+      const parcelIds = selectedParcels.filter((parcel) => parcel.status !== bulkStatus).map((parcel) => parcel.id);
+      if (!parcelIds.length) return 0;
+      const result = await api<{ updatedCount: number }>("/parcels/bulk-status", {
+        method: "POST",
+        body: JSON.stringify({
+          parcelIds,
+          status: bulkStatus,
+          note,
+          ...((bulkStatus === "FAILED" || bulkStatus === "REJECTED") && bulkReasonCode
+            ? { reasonCode: bulkReasonCode }
+            : {}),
+        }),
+      });
+      return result.data.updatedCount;
     },
     onSuccess: async (count) => {
       setSelected([]);
@@ -1035,6 +1030,7 @@ export function OperationsPage() {
                       </td>
                       <td className="py-1.5 text-right">
                         <div className="flex justify-end gap-1">
+                          <button type="button" aria-label={`${t("viewFieldHistory")} ${p.trackingNumber}`} onClick={()=>setHistoryParcel({id:p.id,trackingNumber:p.trackingNumber})} className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-bold text-slate-600 dark:border-white/15 dark:text-slate-300">{t("history")}</button>
                           {canCorrectRider ? (
                             <button
                               type="button"
@@ -1337,6 +1333,7 @@ export function OperationsPage() {
               </label>
             </div>
             <div className="mt-6 flex justify-end gap-3">
+              <button type="button" onClick={()=>{setHistoryParcel({id:editing.id,trackingNumber:editing.trackingNumber});setEditing(null)}} className={control}>{t("viewFieldHistory")}</button>
               <button type="button" onClick={() => setEditing(null)} className={control}>
                 {t("cancel")}
               </button>
@@ -1351,6 +1348,7 @@ export function OperationsPage() {
           </form>
         </div>
       )}
+      {historyParcel&&<ParcelFieldHistory parcel={historyParcel} onClose={()=>setHistoryParcel(null)}/>}
 
       {correctingRider && (
         <div role="dialog" aria-modal="true" aria-labelledby="correct-rider-title" className="fixed inset-0 z-20 grid place-items-center bg-black/40 p-4">

@@ -31,7 +31,7 @@ describe("Superadmin user administration",()=>{
     const password="DeactivatePass123";
     const user=await prisma.user.create({data:{name:"Finance Deactivate",username:`finance-deactivate-${suffix}`,email:`finance-deactivate-${suffix}@example.com`,passwordHash:await bcrypt.hash(password,4),role:"FINANCE",hubId}});
     createdIds.push(user.id);
-    const loggedIn=await request(app).post("/api/v1/auth/login").send({identifier:user.email,password});
+    const loggedIn=await request(app).post("/api/v1/auth/login").set("X-Client-Platform","mobile").send({identifier:user.email,password});
     expect(loggedIn.status).toBe(200);
     const staleAccess=loggedIn.body.data.accessToken as string;
     const refreshToken=loggedIn.body.data.refreshToken as string;
@@ -45,7 +45,7 @@ describe("Superadmin user administration",()=>{
     const password="PrivilegePass123";
     const user=await prisma.user.create({data:{name:"Finance Privilege",username:`finance-privilege-${suffix}`,email:`finance-privilege-${suffix}@example.com`,passwordHash:await bcrypt.hash(password,4),role:"FINANCE",hubId}});
     createdIds.push(user.id);
-    const loggedIn=await request(app).post("/api/v1/auth/login").send({identifier:user.email,password});
+    const loggedIn=await request(app).post("/api/v1/auth/login").set("X-Client-Platform","mobile").send({identifier:user.email,password});
     expect(loggedIn.status).toBe(200);
     const staleAccess=loggedIn.body.data.accessToken as string;
     const refreshToken=loggedIn.body.data.refreshToken as string;

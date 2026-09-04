@@ -12,7 +12,7 @@ describe("postgresPoolOptions", () => {
     expect(options.connectionString).toContain("user");
     expect(options.connectionString).toMatch(/\/postgres(?:\?|$)/);
     expect(options.connectionString).toContain("schema=public");
-    expect(options.ssl.rejectUnauthorized).toBe(false);
+    expect(options.ssl.rejectUnauthorized).toBe(true);
   });
 
   test("strips uselibpqcompat while keeping TLS enabled", () => {
@@ -23,7 +23,7 @@ describe("postgresPoolOptions", () => {
     expect(options.connectionString).not.toContain("sslmode");
     expect(options.connectionString).not.toContain("uselibpqcompat");
     expect(options.connectionString).toContain("db.example.com");
-    expect(options.ssl).toEqual({ rejectUnauthorized: false });
+    expect(options.ssl).toEqual({ rejectUnauthorized: true });
   });
 
   test("adds pgbouncer=true for transaction pooler port 6543", () => {
@@ -44,6 +44,19 @@ describe("postgresPoolOptions", () => {
     } finally {
       if (previous === undefined) delete process.env.DATABASE_SSL_REJECT_UNAUTHORIZED;
       else process.env.DATABASE_SSL_REJECT_UNAUTHORIZED = previous;
+    }
+  });
+
+  test("loads a configured CA and permits only an explicit break-glass opt-out", () => {
+    const oldCa = process.env.DATABASE_SSL_CA;
+    const oldVerify = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED;
+    process.env.DATABASE_SSL_CA = "BEGIN\\nCA\\nEND";
+    process.env.DATABASE_SSL_REJECT_UNAUTHORIZED = "false";
+    try {
+      expect(postgresPoolOptions("postgresql://user:pass@db.example.com/postgres").ssl).toEqual({ rejectUnauthorized: false, ca: "BEGIN\nCA\nEND" });
+    } finally {
+      if (oldCa === undefined) delete process.env.DATABASE_SSL_CA; else process.env.DATABASE_SSL_CA = oldCa;
+      if (oldVerify === undefined) delete process.env.DATABASE_SSL_REJECT_UNAUTHORIZED; else process.env.DATABASE_SSL_REJECT_UNAUTHORIZED = oldVerify;
     }
   });
 });

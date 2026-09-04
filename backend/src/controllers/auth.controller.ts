@@ -20,12 +20,16 @@ function clearSessionCookies(res: Response) {
   appendCookie(res, `refreshToken=; HttpOnly; Path=/api/v1/auth; SameSite=Lax; Max-Age=0${cookieSecurity}`);
 }
 
-function sessionBody(result: Awaited<ReturnType<typeof service.login>>) {
+function isExplicitNativeClient(req: Parameters<RequestHandler>[0]) {
+  return req.get("X-Client-Platform") === "mobile" && !req.get("Origin");
+}
+
+function sessionBody(result: Awaited<ReturnType<typeof service.login>>, includeRefreshToken: boolean) {
   return {
     user: result.user,
     accessToken: result.accessToken,
     token: result.accessToken,
-    refreshToken: result.refreshToken,
+    ...(includeRefreshToken ? { refreshToken: result.refreshToken } : {}),
     expiresAt: result.expiresAt,
   };
 }
@@ -33,19 +37,19 @@ function sessionBody(result: Awaited<ReturnType<typeof service.login>>) {
 export const register: RequestHandler = async (req, res) => {
   const result = await service.register(req.body, { id: req.auth!.sub, role: req.auth!.role });
   setSessionCookies(res, result);
-  return res.status(201).json({ success: true, data: sessionBody(result) });
+  return res.status(201).json({ success: true, data: sessionBody(result, isExplicitNativeClient(req)) });
 };
 
 export const login: RequestHandler = async (req, res) => {
   const result = await service.login(req.body);
   setSessionCookies(res, result);
-  return res.json({ success: true, data: sessionBody(result) });
+  return res.json({ success: true, data: sessionBody(result, isExplicitNativeClient(req)) });
 };
 
 export const refresh: RequestHandler = async (req, res) => {
   const result = await service.refresh({ cookieHeader: req.headers.cookie, refreshToken: req.body?.refreshToken });
   setSessionCookies(res, result);
-  return res.json({ success: true, data: sessionBody(result) });
+  return res.json({ success: true, data: sessionBody(result, isExplicitNativeClient(req)) });
 };
 
 export const verify: RequestHandler = async (req, res) => res.json({ success: true, data: await service.verify(req.auth!.sub) });

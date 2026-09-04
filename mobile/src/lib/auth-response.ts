@@ -5,3 +5,9 @@ export function requireVerifiedUser(data:unknown):User{
   if(!user.id||!user.name||!user.email||!user.role)throw new Error("Invalid verification response");
   return user as User;
 }
+
+export function requireRiderUser(data:unknown):User{
+  const user=requireVerifiedUser(data);
+  if(user.role!=="RIDER")throw new Error("RIDER_ROLE_REQUIRED");
+  return user;
+}

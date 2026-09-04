@@ -92,4 +92,46 @@ describe("OS delivery manifest parsing", () => {
       },
     ]);
   });
+
+  test("parses scaled and shifted shop-manifest coordinates with Ks and bare COD amounts", () => {
+    const rows = parseDeliveryManifestItems([
+      { str: "21", x: 330, y: 1400, page: 1 },
+      { str: "Ko Min", x: 420, y: 1424, page: 1 },
+      { str: "North Dagon", x: 660, y: 1400, page: 1 },
+      { str: "09 777 111222", x: 660, y: 1372, page: 1 },
+      { str: "75,000 Ks", x: 1184, y: 1400, page: 1 },
+      { str: "22", x: 330, y: 1280, page: 1 },
+      { str: "Daw Nu", x: 420, y: 1280, page: 1 },
+      { str: "Hlaing", x: 660, y: 1280, page: 1 },
+      { str: "30,000", x: 1184, y: 1280, page: 1 },
+    ]);
+
+    expect(rows).toEqual([
+      { reference: "21", customerName: "Ko Min", address: "North Dagon", phone: "09777111222", codAmount: 75000, sourcePage: 1 },
+      { reference: "22", customerName: "Daw Nu", address: "Hlaing", codAmount: 30000, sourcePage: 1 },
+    ]);
+  });
+
+  test("merges text fallback rows when geometry recognizes only part of a page", () => {
+    const rows = parseDeliveryManifestItems([
+      { str: "1", x: 65, y: 700, page: 1 },
+      { str: "Ma Su", x: 110, y: 700, page: 1 },
+      { str: "Kamayut", x: 230, y: 700, page: 1 },
+      { str: "10,000 MMK", x: 492, y: 700, page: 1 },
+      { str: "2    Ko Aung              Bahan Road                    20,000", x: 65, y: 640, page: 1 },
+    ]);
+
+    expect(rows.map((row) => row.reference)).toEqual(["1", "2"]);
+  });
+
+  test("keeps a one-row manifest block whose details sit well below its order anchor", () => {
+    expect(parseDeliveryManifestItems([
+      { str: "31", x: 65, y: 700, page: 1 },
+      { str: "Ko Tun", x: 110, y: 688, page: 1 },
+      { str: "Thingangyun", x: 230, y: 660, page: 1 },
+      { str: "45,000 MMK", x: 492, y: 660, page: 1 },
+    ])).toEqual([
+      { reference: "31", customerName: "Ko Tun", address: "Thingangyun", codAmount: 45000, sourcePage: 1 },
+    ]);
+  });
 });

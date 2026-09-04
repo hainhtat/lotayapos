@@ -1,5 +1,6 @@
 import { prisma } from "../config/database.js";
 import { env } from "../config/env.js";
+import type { Prisma } from "@prisma/client";
 import { ApiError } from "../utils/api-error.js";
 import { assertCashbookOpen } from "./finance.service.js";
 import { journalEntryIsUnreversed, nextVersionedJournalSourceId } from "./parcel.service.js";
@@ -104,15 +105,104 @@ async function assertOperationsReader(actor: BatchActor) {
   return user;
 }
 
-export async function listBatches(actor: BatchActor) {
+export type BatchListFilters = {
+  page?: number;
+  pageSize?: number;
+  shopId?: string;
+  hubId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  search?: string;
+};
+
+export const OVERDUE_UNSENT_STATUSES = ["CREATED", "PICKED_UP", "ASSIGNED"] as const;
+
+function calendarDateInZone(at: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(at);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+export function overdueUnsentCutoffDate(at = new Date(), days = 3, timeZone = env.hubTimezone) {
+  const today = calendarDateInZone(at, timeZone);
+  const [year, month, day] = today.split("-").map(Number);
+  return new Date(Date.UTC(year!, month! - 1, day! - days)).toISOString().slice(0, 10);
+}
+
+export async function listOverdueUnsentParcels(
+  actor: BatchActor,
+  input: { page?: number; pageSize?: number; days?: number; hubId?: string } = {},
+) {
   const user = await assertOperationsReader(actor);
-  const batches = await prisma.batch.findMany({
-    where: user.role === "SUPERADMIN" ? {} : { hubId: user.hubId },
-    include: { shop: true, parcels: { select: { status: true } } },
-    orderBy: { pickupDate: "desc" },
-    take: 200,
-  });
-  if (!batches.length) return [];
+  const page = input.page ?? 1;
+  const pageSize = input.pageSize ?? 50;
+  const days = input.days ?? 3;
+  if (user.role !== "SUPERADMIN" && input.hubId && input.hubId !== user.hubId)
+    throw new ApiError(403, "FORBIDDEN", "Overdue parcels are outside your hub scope");
+  const hubId = user.role === "SUPERADMIN" ? input.hubId : user.hubId ?? undefined;
+  const cutoffDate = overdueUnsentCutoffDate(new Date(), days);
+  // Batch pickup dates are stored as normalized calendar dates at UTC midnight.
+  const cutoff = new Date(`${cutoffDate}T00:00:00.000Z`);
+  const where: Prisma.ParcelWhereInput = {
+    status: { in: [...OVERDUE_UNSENT_STATUSES] },
+    batch: { pickupDate: { lte: cutoff }, ...(hubId ? { hubId } : {}) },
+  };
+  const [items, total] = await Promise.all([
+    prisma.parcel.findMany({
+      where,
+      include: {
+        batch: { select: { id: true, label: true, pickupDate: true, shop: { select: { id: true, name: true } } } },
+        rider: { select: { id: true, user: { select: { name: true } } } },
+      },
+      orderBy: [{ batch: { pickupDate: "asc" } }, { trackingNumber: "asc" }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    prisma.parcel.count({ where }),
+  ]);
+  return { items, total, page, pageSize, days, cutoffDate };
+}
+
+function batchSearchWhere(search: string): Prisma.BatchWhereInput {
+  const contains = env.databaseProvider === "postgresql"
+    ? { contains: search.trim(), mode: "insensitive" as const }
+    : { contains: search.trim() };
+  return { OR: [{ label: contains }, { shop: { name: contains } }] };
+}
+
+export async function listBatches(actor: BatchActor, filters: BatchListFilters = {}) {
+  const user = await assertOperationsReader(actor);
+  if (user.role !== "SUPERADMIN" && filters.hubId && filters.hubId !== user.hubId) {
+    throw new ApiError(403, "FORBIDDEN", "Batch hub is outside your hub scope");
+  }
+  const page = filters.page ?? 1;
+  const pageSize = filters.pageSize ?? 200;
+  const dateFrom = filters.dateFrom ? new Date(`${filters.dateFrom}T00:00:00.000Z`) : undefined;
+  const dateTo = filters.dateTo ? new Date(`${filters.dateTo}T23:59:59.999Z`) : undefined;
+  if (dateFrom && dateTo && dateFrom > dateTo) throw new ApiError(400, "INVALID_DATE_RANGE", "dateFrom must not be after dateTo");
+  const conditions: Prisma.BatchWhereInput[] = [
+    user.role === "SUPERADMIN" ? (filters.hubId ? { hubId: filters.hubId } : {}) : { hubId: user.hubId },
+  ];
+  if (filters.shopId) conditions.push({ shopId: filters.shopId });
+  if (dateFrom || dateTo) conditions.push({ pickupDate: { ...(dateFrom ? { gte: dateFrom } : {}), ...(dateTo ? { lte: dateTo } : {}) } });
+  if (filters.search?.trim()) conditions.push(batchSearchWhere(filters.search));
+  const where: Prisma.BatchWhereInput = conditions.length === 1 ? conditions[0]! : { AND: conditions };
+  const [batches, total] = await Promise.all([
+    prisma.batch.findMany({
+      where,
+      include: { shop: true, parcels: { select: { status: true } } },
+      orderBy: [{ pickupDate: "desc" }, { id: "asc" }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    prisma.batch.count({ where }),
+  ]);
+  if (!batches.length) return { items: [], total, page, pageSize };
   const batchIds = batches.map((batch) => batch.id);
   const postedEntries = await prisma.journalEntry.findMany({
     where: {
@@ -126,27 +216,33 @@ export async function listBatches(actor: BatchActor) {
     if (!entry.sourceId || !(await journalEntryIsUnreversed(prisma, entry.id))) continue;
     postedBatchIds.add(entry.sourceId.split(":")[0]!);
   }
-  return batches.map((batch) => ({ ...batch, advancePosted: postedBatchIds.has(batch.id) }));
+  return { items: batches.map((batch) => ({ ...batch, advancePosted: postedBatchIds.has(batch.id) })), total, page, pageSize };
 }
 export function formatTrackingNumber(sequence: number) {
   return `LTY-${String(sequence).padStart(3, "0")}`;
 }
 
-export async function nextTrackingSequenceStart() {
+type TrackingSequenceClient = Pick<Prisma.TransactionClient, "$queryRaw" | "parcel">;
+
+async function nextTrackingSequenceStartWith(client: TrackingSequenceClient) {
   if (env.databaseProvider === "postgresql") {
-    const rows = await prisma.$queryRaw<Array<{ max: number | null }>>`
+    const rows = await client.$queryRaw<Array<{ max: number | null }>>`
       SELECT MAX(CAST(SUBSTRING("trackingNumber" FROM 5) AS INTEGER)) AS max
       FROM "Parcel"
       WHERE "trackingNumber" ~ '^LTY-[0-9]+$'
     `;
     return Number(rows[0]?.max ?? 0) + 1;
   }
-  const parcels = await prisma.parcel.findMany({ where: { trackingNumber: { startsWith: "LTY-" } }, select: { trackingNumber: true } });
+  const parcels = await client.parcel.findMany({ where: { trackingNumber: { startsWith: "LTY-" } }, select: { trackingNumber: true } });
   const highest = parcels.reduce((max, parcel) => {
     const match = /^LTY-(\d+)$/.exec(parcel.trackingNumber);
     return match ? Math.max(max, Number(match[1])) : max;
   }, 0);
   return highest + 1;
+}
+
+export async function nextTrackingSequenceStart() {
+  return nextTrackingSequenceStartWith(prisma);
 }
 
 export async function getBatchDetail(id:string,actor:BatchActor){
@@ -161,7 +257,7 @@ export async function getBatchDetail(id:string,actor:BatchActor){
   return {...batch,totalCod,remainingToOs,nextTrackingSequence:await nextTrackingSequenceStart()};
 }
 
-type NewParcelInput = { trackingNumber: string; orderId?: string | null; customerName: string; customerPhone?: string; address: string; codAmount: number; townshipId: string; zoneId?: string };
+type NewParcelInput = { trackingNumber?: string; orderId?: string | null; customerName: string; customerPhone?: string; address: string; codAmount: number; townshipId: string; zoneId?: string };
 
 export async function createBatch(input: { shopId: string; pickupDate: string; batchName: string; advancePaid: number; hubId?: string }, actor: BatchActor) {
   const pickupDate = new Date(input.pickupDate);
@@ -192,10 +288,26 @@ export async function bulkCreateParcels(batchId:string,input:{parcels:NewParcelI
   const zones=zoneIds.length?await prisma.zone.findMany({where:{id:{in:zoneIds}},select:{id:true,townshipId:true,hubId:true,name:true}}):[];
   const zoneById=new Map(zones.map(z=>[z.id,z]));
   if(zones.length!==zoneIds.length||input.parcels.some(p=>p.zoneId&&(zoneById.get(p.zoneId)?.townshipId!==p.townshipId||zoneById.get(p.zoneId)?.hubId!==batch.hubId))) throw new ApiError(400,"INVALID_ZONE","Zone must belong to the selected township and batch hub");
-  return prisma.$transaction(async tx=>{
-    await tx.parcel.createMany({data:input.parcels.map(p=>{const township=townshipById.get(p.townshipId)!;const zone=p.zoneId?zoneById.get(p.zoneId):undefined;return {...p,zoneId:p.zoneId,zone:zone?.name,township:township.nameEn,deliveryFee:township.deliveryFee,advanceAmount:0,batchId};})});
-    return tx.parcel.findMany({where:{batchId,trackingNumber:{in:input.parcels.map(p=>p.trackingNumber)}},include:{townshipRelation:{include:{district:{include:{regionState:true}}}},zoneRelation:true}});
+  const createAttempt = () => prisma.$transaction(async tx=>{
+    // Serialize allocation in PostgreSQL. SQLite writes are serialized by the database;
+    // the bounded retry below also covers a stale read racing another transaction.
+    if (env.databaseProvider === "postgresql") {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(1280268628)`;
+    }
+    const sequenceStart = await nextTrackingSequenceStartWith(tx);
+    const trackingNumbers = input.parcels.map((_, index) => formatTrackingNumber(sequenceStart + index));
+    await tx.parcel.createMany({data:input.parcels.map((p,index)=>{const township=townshipById.get(p.townshipId)!;const zone=p.zoneId?zoneById.get(p.zoneId):undefined;return {orderId:p.orderId,customerName:p.customerName,customerPhone:p.customerPhone,address:p.address,codAmount:p.codAmount,townshipId:p.townshipId,zoneId:p.zoneId,zone:zone?.name,township:township.nameEn,deliveryFee:township.deliveryFee,advanceAmount:0,batchId,trackingNumber:trackingNumbers[index]!};})});
+    return tx.parcel.findMany({where:{batchId,trackingNumber:{in:trackingNumbers}},include:{townshipRelation:{include:{district:{include:{regionState:true}}}},zoneRelation:true}});
   });
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await createAttempt();
+    } catch (error) {
+      if ((error as { code?: string }).code !== "P2002" || attempt === 4) throw error;
+    }
+  }
+  throw new ApiError(409, "TRACKING_ALLOCATION_CONFLICT", "Could not allocate unique tracking numbers; retry the request");
 }
 
 export function pickupAdvancePostingDisposition(parcelCount: number, postedCount: number) {

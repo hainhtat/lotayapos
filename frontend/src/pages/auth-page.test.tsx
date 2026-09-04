@@ -17,7 +17,7 @@ describe("AuthPage",()=>{
     render(<MemoryRouter><AuthProvider><AuthPage/></AuthProvider></MemoryRouter>);
     const heading=await screen.findByRole("heading",{name:"Log in"});
     expect(heading.closest("form")).toHaveClass("text-slate-950");
-    expect(screen.getByRole("textbox",{name:/Username or email/})).toHaveClass("bg-white","text-slate-950");
+    expect(screen.getByRole("textbox",{name:/Email, username, or phone/})).toHaveClass("bg-white","text-slate-950");
     document.documentElement.classList.remove("dark");
   });
   it("shows required validation without submitting",async()=>{
@@ -60,7 +60,7 @@ describe("AuthPage",()=>{
       </MemoryRouter>,
     );
     await screen.findByRole("heading",{name:"Log in"});
-    fireEvent.change(screen.getByRole("textbox",{name:/Username or email/}),{target:{value:"rider@example.com"}});
+    fireEvent.change(screen.getByRole("textbox",{name:/Email, username, or phone/}),{target:{value:"rider@example.com"}});
     fireEvent.change(screen.getByLabelText(/^Password/),{target:{value:"password123"}});
     fireEvent.click(screen.getByRole("button",{name:"Sign in"}));
     await waitFor(()=>expect(screen.getByText("rider-destination")).toBeInTheDocument());

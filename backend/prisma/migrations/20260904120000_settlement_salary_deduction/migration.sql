@@ -1,0 +1,1 @@
+ALTER TABLE "Settlement" ADD COLUMN "salaryDeduction" INTEGER NOT NULL DEFAULT 0;

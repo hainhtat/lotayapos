@@ -8,11 +8,15 @@ export const settlement: RequestHandler = async (req, res) => res.status(201).js
 export const settlementPreview: RequestHandler = async (req, res) => res.json({ success: true, data: await service.previewRiderSettlement({ businessDate: String(req.query.businessDate), riderId: typeof req.query.riderId === "string" ? req.query.riderId : undefined }, actor(req)) });
 export const riderOutstanding: RequestHandler = async (req, res) => res.json({ success: true, data: await service.listRiderOutstanding({ businessDate: String(req.query.businessDate) }, actor(req)) });
 export const osSettlementDrafts: RequestHandler = async (req, res) => res.json({ success: true, data: await service.listOsSettlementDrafts({ shopId: typeof req.query.shopId === "string" ? req.query.shopId : undefined }, actor(req)) });
+export const savedOsSettlementDrafts: RequestHandler = async (req, res) => res.json({ success: true, data: await service.listSavedOsSettlementDrafts({ shopId: typeof req.query.shopId === "string" ? req.query.shopId : undefined, hubId: typeof req.query.hubId === "string" ? req.query.hubId : undefined }, actor(req)) });
+export const saveOsSettlementDraft: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await service.createOsSettlementDraft(req.body, actor(req)) });
+export const editOsSettlementDraft: RequestHandler = async (req, res) => res.json({ success: true, data: await service.updateOsSettlementDraft({ id: String(req.params.id), ...req.body }, actor(req)) });
 export const osSettlementPreview: RequestHandler = async (req, res) => res.json({ success: true, data: await service.previewOsSettlement(req.body, actor(req)) });
 export const createOsSettlement: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await service.postOsSettlement(req.body, actor(req)) });
 export const osSettlements: RequestHandler = async (req, res) => res.json({ success: true, data: await service.listOsSettlements({ shopId: typeof req.query.shopId === "string" ? req.query.shopId : undefined, hubId: typeof req.query.hubId === "string" ? req.query.hubId : undefined }, actor(req)) });
 export const osSettlementDetail: RequestHandler = async (req, res) => res.json({ success: true, data: await service.getOsSettlement(String(req.params.id), actor(req)) });
 export const reverseOsSettlement: RequestHandler = async (req, res) => res.json({ success: true, data: await service.reverseOsSettlement({ id: String(req.params.id), ...req.body }, actor(req)) });
+export const amendOsSettlement: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await service.amendOsSettlement({ id: String(req.params.id), ...req.body }, actor(req)) });
 export const osPendingReturns: RequestHandler = async (req, res) => res.json({ success: true, data: await service.listOsPendingReturns({ shopId: typeof req.query.shopId === "string" ? req.query.shopId : undefined, hubId: typeof req.query.hubId === "string" ? req.query.hubId : undefined }, actor(req)) });
 export const receiveOsReturn: RequestHandler = async (req, res) => {
   const data = await service.receiveOsReturn(req.body, actor(req));

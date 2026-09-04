@@ -1,5 +1,6 @@
 import {useEffect,useState} from "react";
-import {Pressable,SafeAreaView,ScrollView,StyleSheet,Text,TextInput,View} from "react-native";
+import {Pressable,ScrollView,StyleSheet,Text,TextInput,View} from "react-native";
+import {SafeAreaView} from "react-native-safe-area-context";
 import {useMutation,useQuery,useQueryClient} from "@tanstack/react-query";
 import {declareRiderSettlement,getRiderSettlementPreview} from "@/lib/api";
 import {buildSettlementDeclaration,localBusinessDate} from "@/lib/settlement";
@@ -11,7 +12,7 @@ export default function Settlement(){
   const {theme}=useTheme();const dark=theme==="dark";const businessDate=localBusinessDate();const queryClient=useQueryClient();
   const preview=useQuery({queryKey:["rider-settlement-preview",businessDate],queryFn:()=>getRiderSettlementPreview(businessDate)});
   const [cash,setCash]=useState("0");const [kbzPay,setKbzPay]=useState("0");const [wavePay,setWavePay]=useState("0");const [error,setError]=useState("");const [saved,setSaved]=useState(false);
-  useEffect(()=>{const declaration=preview.data?.declaration;if(declaration){setCash(String(declaration.cash));setKbzPay(String(declaration.kbzPay));setWavePay(String(declaration.wavePay))}},[preview.data?.declaration]);
+  useEffect(()=>{const declaration=preview.data?.declaration;if(!declaration)return;const timer=setTimeout(()=>{setCash(String(declaration.cash));setKbzPay(String(declaration.kbzPay));setWavePay(String(declaration.wavePay))},0);return()=>clearTimeout(timer)},[preview.data?.declaration]);
   const mutation=useMutation({mutationFn:declareRiderSettlement,onSuccess:async()=>{setSaved(true);await queryClient.invalidateQueries({queryKey:["rider-settlement-preview",businessDate]})},onError:e=>setError(e instanceof Error?e.message:i18n.t("requestError"))});
   const parsed=buildSettlementDeclaration(businessDate,{cash,kbzPay,wavePay});
   const submit=()=>{setSaved(false);setError("");if("error" in parsed){setError(i18n.t("walletAmountInvalid"));return}mutation.mutate(parsed.payload)};

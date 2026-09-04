@@ -16,6 +16,7 @@ describe("BatchDetailPage settlement totals", () => {
         return Promise.resolve({
           data: {
             id: "batch-1",
+            hubId: "hub-1",
             label: "Shop 11.08.2026",
             advancePaid: 40000,
             totalCod: 100000,
@@ -168,5 +169,66 @@ describe("BatchDetailPage settlement totals", () => {
     const customer = screen.getByLabelText("Customer");
     expect(customer).toHaveClass("border-slate-200");
     expect(customer).not.toHaveClass("border-0");
+  });
+
+  it("scopes zone options to the batch hub", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <MemoryRouter initialEntries={["/batches/batch-1"]}>
+        <QueryClientProvider client={client}>
+          <Routes>
+            <Route path="/batches/:id" element={<BatchDetailPage />} />
+          </Routes>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    const region = await screen.findByLabelText("Region / State 1");
+    await waitFor(() => expect(region.querySelector('option[value="r-yangon"]')).not.toBeNull());
+    fireEvent.change(region, { target: { value: "r-yangon" } });
+    const township = screen.getByLabelText("Township 1");
+    await waitFor(() => expect(township.querySelector('option[value="t-hlaing"]')).not.toBeNull());
+    fireEvent.change(township, { target: { value: "t-hlaing" } });
+
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith("/master-data/locations/zones?townshipId=t-hlaing&hubId=hub-1"),
+    );
+  });
+
+  it("leaves failed parcel drafts editable, reports the error, and lets the server allocate tracking numbers", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/operations/batches/batch-1/parcels/bulk") return Promise.reject(new Error("Zone is outside the batch hub"));
+      if (path === "/operations/batches/batch-1") return Promise.resolve({ data: {
+        id: "batch-1", hubId: "hub-1", label: "Shop 11.08.2026", advancePaid: 40000,
+        totalCod: 100000, remainingToOs: 60000, nextTrackingSequence: 1, shop: { name: "Shop One" }, parcels: [],
+      } });
+      if (path === "/master-data/locations/regions") return Promise.resolve({ data: [{ id: "r-yangon", nameEn: "Yangon" }] });
+      if (path === "/master-data/locations/townships") return Promise.resolve({ data: [{
+        id: "t-hlaing", nameEn: "Hlaing", deliveryFee: 2500,
+        district: { id: "d-west", nameEn: "West Yangon", regionStateId: "r-yangon", regionState: { id: "r-yangon", nameEn: "Yangon" } },
+      }] });
+      return Promise.resolve({ data: [] });
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(
+      <MemoryRouter initialEntries={["/batches/batch-1"]}>
+        <QueryClientProvider client={client}>
+          <Routes><Route path="/batches/:id" element={<BatchDetailPage />} /></Routes>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Customer 1"), { target: { value: "Ma Su" } });
+    fireEvent.change(screen.getByLabelText("Address 1"), { target: { value: "Hlaing" } });
+    fireEvent.change(screen.getByLabelText("Region / State 1"), { target: { value: "r-yangon" } });
+    fireEvent.change(screen.getByLabelText("Township 1"), { target: { value: "t-hlaing" } });
+    fireEvent.change(screen.getByLabelText("COD 1"), { target: { value: "25000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save parcels (1)" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Zone is outside the batch hub");
+    expect(screen.getByLabelText("Customer 1")).toHaveValue("Ma Su");
+    expect(screen.getByLabelText("COD 1")).toHaveValue(25000);
+    const bulkCall = apiMock.mock.calls.find(([path]) => path === "/operations/batches/batch-1/parcels/bulk");
+    expect(JSON.parse(bulkCall?.[1]?.body as string).parcels[0]).not.toHaveProperty("trackingNumber");
   });
 });

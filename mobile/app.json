@@ -2,7 +2,7 @@
   "expo": {
     "name": "LOTAYA Rider",
     "slug": "lotaya-rider",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "lotayarider",
@@ -13,7 +13,7 @@
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "com.lotaya.rider",
-      "versionCode": 1,
+      "versionCode": 2,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#000000"

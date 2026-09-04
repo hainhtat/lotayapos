@@ -48,7 +48,7 @@ describe("auth refresh rotation", () => {
     line.split(";").map((part) => part.trim()).find((part) => part.toLowerCase().startsWith(`${name.toLowerCase()}=`));
 
   async function loginUser(input: { identifier: string; remember?: boolean | string }) {
-    return request(app).post("/api/v1/auth/login").send({ identifier: input.identifier, password, remember: input.remember });
+    return request(app).post("/api/v1/auth/login").set("X-Client-Platform", "mobile").send({ identifier: input.identifier, password, remember: input.remember });
   }
 
   test("login sets refreshToken httpOnly cookie Path=/api/v1/auth and JSON refreshToken", async () => {
@@ -96,6 +96,7 @@ describe("auth refresh rotation", () => {
 
     const rotated = await request(app)
       .post("/api/v1/auth/refresh")
+      .set("X-Client-Platform", "mobile")
       .set("Cookie", `${refreshCookie.split(";")[0]}`);
     expect(rotated.status).toBe(200);
     const next = rotated.body.data.refreshToken as string;
@@ -128,11 +129,18 @@ describe("auth refresh rotation", () => {
     expect(loggedIn.status).toBe(200);
     const original = loggedIn.body.data.refreshToken as string;
 
-    const rotated = await request(app).post("/api/v1/auth/refresh").send({ refreshToken: original });
+    const rotated = await request(app).post("/api/v1/auth/refresh").set("X-Client-Platform", "mobile").send({ refreshToken: original });
     expect(rotated.status).toBe(200);
     expect(rotated.body.data.refreshToken).toEqual(expect.any(String));
     expect(rotated.body.data.refreshToken).not.toBe(original);
     expect(cookieValue(cookieLine(setCookies(rotated), "refreshToken"), "refreshToken")).toBe(rotated.body.data.refreshToken);
+  });
+
+  test("browser login keeps refresh credentials in HttpOnly cookies only", async () => {
+    const response = await request(app).post("/api/v1/auth/login").set("Origin", "http://localhost:5173").send({ identifier: `refresh-admin-${suffix}@example.com`, password });
+    expect(response.status).toBe(200);
+    expect(response.body.data).not.toHaveProperty("refreshToken");
+    expect(cookieLine(setCookies(response), "refreshToken").toLowerCase()).toContain("httponly");
   });
 
   test("logout revokes by hash lookup and does not issue a new refresh token", async () => {

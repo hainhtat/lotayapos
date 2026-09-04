@@ -1,10 +1,11 @@
 import {useEffect,useMemo,useState} from "react";
-import {Alert,Linking,Pressable,SafeAreaView,ScrollView,StyleSheet,Text,TextInput,View} from "react-native";
+import {Alert,Linking,Pressable,ScrollView,StyleSheet,Text,TextInput,View} from "react-native";
+import {SafeAreaView} from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import Constants from "expo-constants";
 import {router} from "expo-router";
 import {useQuery} from "@tanstack/react-query";
-import {getAssignedParcels,type AssignedParcel} from "@/lib/api";
+import {getAssignedParcels,isOfflineError,type AssignedParcel} from "@/lib/api";
 import {fetchRiderAppRelease,isNewerRelease} from "@/lib/app-release";
 import {callCustomer,sanitizedCustomerPhone} from "@/lib/phone";
 import {DATE_PRESETS,DELIVERY_FILTERS,datePresetRange,filterAndSortRoute,isUndeliveredParcel,parcelTownship,routeTownships,type DatePreset,type DeliveryFilter} from "@/lib/route-parcels";
@@ -89,7 +90,7 @@ export default function Home(){
     queryKey:["assigned-parcels",dateRange.dateFrom,dateRange.dateTo],
     queryFn:()=>getAssignedParcels(dateRange),
   });
-  const parcels=query.data??[];
+  const parcels=useMemo(()=>query.data??[],[query.data]);
   const townships=useMemo(()=>routeTownships(parcels,i18n.locale),[parcels]);
   const visible=useMemo(
     ()=>filterAndSortRoute(parcels,{search,township,sortByTownship,deliveryFilter,locale:i18n.locale}),
@@ -113,7 +114,7 @@ export default function Home(){
 
   useEffect(()=>{
     const url=process.env.EXPO_PUBLIC_RIDER_UPDATE_URL;
-    if(!url)return;
+    if(!url||!url.startsWith("https://"))return;
     const current=Constants.expoConfig?.version??"0.0.0";
     void fetchRiderAppRelease(url).then((release)=>{
       if(!release||!isNewerRelease(current,release.version))return;
@@ -209,7 +210,7 @@ export default function Home(){
         {query.isLoading?<Text style={s.muted}>{i18n.t("loading")}</Text>:null}
         {query.isError?(
           <View>
-            <Text accessibilityRole="alert" style={s.error}>{i18n.t("requestError")}</Text>
+            <Text accessibilityRole="alert" style={s.error}>{i18n.t(isOfflineError(query.error)?"offlineAssignments":"requestError")}</Text>
             <Pressable accessibilityRole="button" onPress={()=>void query.refetch()} style={s.retry}>
               <Text style={s.retryText}>{i18n.t("retry")}</Text>
             </Pressable>

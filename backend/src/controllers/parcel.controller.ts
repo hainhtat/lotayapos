@@ -25,6 +25,21 @@ export const list: RequestHandler = async (req, res) => {
   res.json({ success: true, data: result.items, pagination: { page: result.page, pageSize: result.pageSize, total: result.total, totalPages: Math.ceil(result.total / result.pageSize) } });
 };
 export const updateStatus: RequestHandler = async (req, res) => res.json({ success: true, data: await service.updateStatus(String(req.params.id), req.body.status, { id: req.auth!.sub, role: req.auth!.role }, req.body.reasonCode, req.body.note, req.body.actualCodCollected, req.body.collectionWallet) });
+export const bulkUpdateStatus: RequestHandler = async (req, res) => {
+  const parcels = await service.bulkUpdateStatus(
+    req.body.parcelIds.map((parcelId: string) => ({
+      parcelId,
+      status: req.body.status,
+      reasonCode: req.body.reasonCode,
+      note: req.body.note,
+      actualCodCollected: req.body.actualCodCollected,
+      collectionWallet: req.body.collectionWallet,
+    })),
+    { id: req.auth!.sub, role: req.auth!.role },
+  );
+  res.json({ success: true, data: { updatedCount: parcels.length, parcels } });
+};
 export const updateParcel: RequestHandler = async (req, res) => res.json({ success: true, data: await service.updateParcel(String(req.params.id), req.body, { id: req.auth!.sub, role: req.auth!.role }) });
 export const history: RequestHandler = async (req, res) => res.json({ success: true, data: await service.getParcelHistory(String(req.params.id), { id: req.auth!.sub, role: req.auth!.role }) });
+export const fieldHistory: RequestHandler = async (req, res) => res.json({ success: true, data: await service.getParcelFieldHistory(String(req.params.id), { id: req.auth!.sub, role: req.auth!.role }) });
 export const detail: RequestHandler = async (req, res) => res.json({ success: true, data: await service.getParcelDetail(String(req.params.id), { id: req.auth!.sub, role: req.auth!.role }) });

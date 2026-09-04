@@ -4,7 +4,7 @@ import { api, clearAuthToken, getAuthToken, setAuthToken } from "@/lib/api";
 import { setAccessExpiryHandler, setReauthHandler, setRefreshHandler } from "@/lib/session-bridge";
 import { SessionExpiredDialog } from "@/components/session-expired-dialog";
 
-export type User = { id: string; name: string; username?: string; email: string; role: string };
+export type User = { id: string; name: string; username?: string; email: string; phone?: string | null; role: string };
 type AuthResponse = { user: User; accessToken: string; expiresAt?: string };
 type Auth = {
   user: User | null;

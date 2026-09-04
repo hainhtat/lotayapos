@@ -145,6 +145,14 @@ describe("assigned parcel linked groups", () => {
   });
 });
 
+describe("native auth client identity",()=>{
+  beforeEach(()=>{jest.clearAllMocks();(getAccessToken as jest.Mock).mockResolvedValue(null);globalThis.fetch=jest.fn().mockImplementation(()=>okJson({user:{},accessToken:"token"}))});
+  it("marks native login requests for the backend origin policy",async()=>{
+    await api("/auth/login",{method:"POST",body:"{}"});
+    expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringContaining("/auth/login"),expect.objectContaining({headers:expect.objectContaining({"X-Client-Platform":"mobile"})}));
+  });
+});
+
 describe("api unauthorized handling", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -175,7 +183,7 @@ describe("api unauthorized handling", () => {
     expect(globalThis.fetch).toHaveBeenNthCalledWith(
       2,
       expect.stringContaining("/auth/refresh"),
-      expect.objectContaining({ method: "POST", body: JSON.stringify({ refreshToken: "refresh-token" }) }),
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ refreshToken: "refresh-token" }),headers:expect.objectContaining({"X-Client-Platform":"mobile"}) }),
     );
     expect(setAccessToken).toHaveBeenCalledWith("new-access");
     expect(setRefreshToken).toHaveBeenCalledWith("new-refresh");

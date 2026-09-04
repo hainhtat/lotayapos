@@ -135,6 +135,21 @@ lotaya-pos/
 
 `PROJECT_SPEC.md` is authoritative for domain language, permissions, ledger rules, and acceptance criteria.
 
+### Version history
+
+The current ERP/API release is stored in [`VERSION`](VERSION), and every release
+is recorded in [`CHANGELOG.md`](CHANGELOG.md). Releases use Semantic Versioning:
+
+- Patch: backward-compatible fixes.
+- Minor: backward-compatible features.
+- Major: incompatible behavior or contracts.
+
+For each release, update `VERSION`, the backend/frontend package versions and
+lockfiles, add a dated changelog entry, and tag the release as `v<version>`. The
+Rider APK has an independent version in `mobile/app.json`,
+`mobile/package.json`, and `deploy/app/version.json`; update all three together
+only when a new APK is built and published.
+
 ---
 
 ## Local development
@@ -163,7 +178,24 @@ Useful scripts:
 | --- | --- |
 | backend | `npm test` · `npm run typecheck` · `npm run seed:locations` |
 | frontend | `npm test` · `npm run typecheck` · `npm run build` |
-| mobile | `npm test` · `npm run build:apk` |
+| mobile | `npm test` · `npm run typecheck` · `npm run lint` · `npm run doctor` · `npm run build:apk` |
+
+The production Rider APK is published at `/app/lotaya-rider.apk`; `/app/` is its
+bilingual download page. `deploy.sh` updates APK metadata only when a release
+artifact exists, so a web-only deployment cannot advertise an APK that was not
+built. A release is eligible only when `releases/lotaya-rider.version` exactly
+matches the version in `mobile/app.json`.
+
+Production deployment is fail-closed on TLS: provision a valid certificate at
+`/etc/letsencrypt/live/lotaya.mmds.site/{fullchain.pem,privkey.pem}` before the
+first deploy (for example with the host operator's ACME/Certbot process). The
+deploy script never opens the authenticated ERP over plain HTTP. It builds into
+`/opt/lotaya/deployments/<release>`, runs migrations only after build validation,
+atomically switches `/opt/lotaya/current`, and rolls application files back when
+the readiness probe fails. Database migrations are forward-only and require a
+separate database backup/restore plan. A Rider APK is published only when `aapt`
+or `apkanalyzer` confirms package/version metadata and `apksigner` confirms a
+non-debug signature.
 
 ---
 

@@ -1,7 +1,7 @@
 import {useEffect,useState} from "react";
-import {KeyboardAvoidingView,Platform,Pressable,SafeAreaView,ScrollView,StyleSheet,Text,TextInput,View} from "react-native";
+import {KeyboardAvoidingView,Platform,Pressable,ScrollView,StyleSheet,Text,TextInput,View} from "react-native";
+import {SafeAreaView} from "react-native-safe-area-context";
 import {Controller,useForm} from "react-hook-form";
-import {router} from "expo-router";
 import {useAuth} from "@/providers/auth";
 import {useTheme} from "@/providers/theme";
 import {getRememberedIdentifier} from "@/lib/session-store";
@@ -38,7 +38,6 @@ export default function Login(){
       setSubmitting(true);
       setError("");
       await signIn(identifier,values.password,remember);
-      router.replace("/(tabs)");
     }catch(e){
       setError(e instanceof Error?e.message:i18n.t("loginError"));
     }finally{
@@ -63,6 +62,8 @@ export default function Login(){
                 placeholderTextColor="#94a3b8"
                 autoCapitalize="none"
                 autoCorrect={false}
+                autoComplete="username"
+                keyboardType="default"
                 textContentType="username"
                 value={field.value}
                 onChangeText={field.onChange}
@@ -79,6 +80,7 @@ export default function Login(){
                   accessibilityLabel={i18n.t("password")}
                   placeholder={i18n.t("password")}
                   placeholderTextColor="#94a3b8"
+                  autoComplete="password"
                   secureTextEntry={!showPassword}
                   textContentType="password"
                   value={field.value}

@@ -1,6 +1,8 @@
 import {useState} from "react";
-import {Pressable,SafeAreaView,StyleSheet,Text,View} from "react-native";
+import {Pressable,StyleSheet,Text,View} from "react-native";
+import {SafeAreaView} from "react-native-safe-area-context";
 import {i18n,setLocale} from "@/i18n";
+import Constants from "expo-constants";
 import {useAuth} from "@/providers/auth";
 import {useTheme} from "@/providers/theme";
 
@@ -16,7 +18,7 @@ export default function Settings(){
     <Text style={[s.title,dark&&s.white]}>{i18n.t("settings")}</Text>
     <Text style={s.label}>{i18n.t("language")}</Text><View style={s.row}>{(["en","my"] as const).map(value=><Pressable accessibilityRole="radio" accessibilityState={{selected:locale===value}} key={value} onPress={()=>void chooseLocale(value)} style={[s.choice,locale===value&&s.selected]}><Text style={locale===value?s.selectedText:undefined}>{value==="en"?"English":"မြန်မာ"}</Text></Pressable>)}</View>
     <Text style={s.label}>{i18n.t("theme")}</Text><Pressable accessibilityRole="button" onPress={toggle} style={s.action}><Text style={s.actionText}>{i18n.t(theme==="dark"?"light":"dark")}</Text></Pressable>
-    <Text style={s.label}>{i18n.t("appVersion")}</Text><Text style={[s.version,dark&&s.white]}>0.1.0</Text>
+    <Text style={s.label}>{i18n.t("appVersion")}</Text><Text style={[s.version,dark&&s.white]}>{Constants.expoConfig?.version??"—"}</Text>
     <Pressable accessibilityRole="button" disabled={busy} onPress={()=>void logout()} style={[s.logout,busy&&s.disabled]}><Text style={s.logoutText}>{busy?i18n.t("loading"):i18n.t("logout")}</Text></Pressable>
   </View></SafeAreaView>
 }

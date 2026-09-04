@@ -1,9 +1,10 @@
 import {useState} from "react";
-import {Alert,Linking,Pressable,SafeAreaView,ScrollView,StyleSheet,Text,TextInput,View} from "react-native";
+import {Alert,Linking,Pressable,ScrollView,StyleSheet,Text,TextInput,View} from "react-native";
+import {SafeAreaView} from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import {router,useLocalSearchParams} from "expo-router";
 import {useQuery,useQueryClient} from "@tanstack/react-query";
-import {api,getAssignedParcel,getReasonCodes,type ReasonCode} from "@/lib/api";
+import {api,getAssignedParcel,getReasonCodes,isOfflineError,type ReasonCode} from "@/lib/api";
 import {i18n} from "@/i18n";
 import {useTheme} from "@/providers/theme";
 import {buildOutcomePayload,reasonErrorKey} from "@/lib/outcomes";
@@ -14,7 +15,7 @@ import {callCustomer,sanitizedCustomerPhone} from "@/lib/phone";
 import {isUndeliveredParcel} from "@/lib/route-parcels";
 
 export default function Parcel(){
-  const {id}=useLocalSearchParams<{id:string}>();
+  const params=useLocalSearchParams<{id?:string|string[]}>();const id=typeof params.id==="string"&&params.id.length<=128?params.id:"";
   const {theme}=useTheme();
   const queryClient=useQueryClient();
   const parcelQuery=useQuery({queryKey:["assigned-parcel",id],queryFn:()=>getAssignedParcel(id),enabled:Boolean(id)});
@@ -36,7 +37,7 @@ export default function Parcel(){
     if(result.error){setError(i18n.t(result.error==="reason"?(reasonErrorKey(choice)??"requestError"):result.error));return}
     setSaving(true);setError("");
     try{await api(`/parcels/${id}/status`,{method:"POST",body:JSON.stringify(result.payload)});await queryClient.invalidateQueries({queryKey:["assigned-parcels"]});router.back()}
-    catch(e){setError(e instanceof Error?e.message:i18n.t("requestError"))}
+    catch(e){setError(isOfflineError(e)?i18n.t("offlineStatusNotQueued"):e instanceof Error?e.message:i18n.t("requestError"))}
     finally{setSaving(false)}
   };
   const confirmSave=()=>Alert.alert(i18n.t("confirmTitle"),i18n.t("confirmOutcome",{outcome:i18n.t(choice.toLowerCase())}),[{text:i18n.t("cancel"),style:"cancel"},{text:i18n.t("confirm"),onPress:()=>void save()}]);
@@ -56,7 +57,8 @@ export default function Parcel(){
   };
 
   if(parcelQuery.isLoading)return <SafeAreaView style={[s.safe,dark&&s.dark]}><View style={s.content}><Text style={s.muted}>{i18n.t("loading")}</Text></View></SafeAreaView>;
-  if(parcelQuery.isError)return <SafeAreaView style={[s.safe,dark&&s.dark]}><View style={s.content}><Text accessibilityRole="alert" style={s.error}>{i18n.t("requestError")}</Text><Pressable accessibilityRole="button" onPress={()=>void parcelQuery.refetch()} style={s.button}><Text style={s.buttonText}>{i18n.t("retry")}</Text></Pressable></View></SafeAreaView>;
+  if(!id)return <SafeAreaView style={[s.safe,dark&&s.dark]}><View style={s.content}><Text accessibilityRole="alert" style={s.error}>{i18n.t("invalidParcelLink")}</Text><Pressable accessibilityRole="button" onPress={()=>router.back()} style={s.button}><Text style={s.buttonText}>{i18n.t("back")}</Text></Pressable></View></SafeAreaView>;
+  if(parcelQuery.isError)return <SafeAreaView style={[s.safe,dark&&s.dark]}><View style={s.content}><Text accessibilityRole="alert" style={s.error}>{i18n.t(isOfflineError(parcelQuery.error)?"offlineAssignments":"requestError")}</Text><Pressable accessibilityRole="button" onPress={()=>void parcelQuery.refetch()} style={s.button}><Text style={s.buttonText}>{i18n.t("retry")}</Text></Pressable></View></SafeAreaView>;
   if(!parcelQuery.data)return <SafeAreaView style={[s.safe,dark&&s.dark]}><View style={s.content}><Text accessibilityRole="alert" style={s.error}>{i18n.t("empty")}</Text><Pressable accessibilityRole="button" onPress={()=>router.back()} style={s.button}><Text style={s.buttonText}>{i18n.t("back")}</Text></Pressable></View></SafeAreaView>;
   const parcel=parcelQuery.data;
   return <SafeAreaView style={[s.safe,dark&&s.dark]}><ScrollView contentContainerStyle={s.content}>
@@ -68,7 +70,7 @@ export default function Parcel(){
     {!isUndeliveredParcel(parcel)&&<Text style={s.muted}>{i18n.t("currentStatus")}: {i18n.t(({DELIVERED:"delivered",PARTIAL:"partial",FAILED:"failed",REJECTED:"rejected",PENDING_RETURN:"pending",RETURNED:"pending",CANCELLED:"rejected"} as Record<string,string>)[parcel.status]??"pending")}</Text>}
     {isUndeliveredParcel(parcel)&&<>
     <Text style={s.muted}>{i18n.t("outcomeHelp")}</Text>
-    {currentStatus==="ASSIGNED"&&<Pressable disabled={saving} onPress={async()=>{setSaving(true);setError("");try{await api(`/parcels/${id}/status`,{method:"POST",body:JSON.stringify({status:"OUT_FOR_DELIVERY"})});setStarted(true);await queryClient.invalidateQueries({queryKey:["assigned-parcels"]})}catch(e){setError(e instanceof Error?e.message:i18n.t("requestError"))}finally{setSaving(false)}}} style={s.button}><Text style={s.buttonText}>{i18n.t("deliveryUpdate")}</Text></Pressable>}
+    {currentStatus==="ASSIGNED"&&<Pressable accessibilityRole="button" disabled={saving} onPress={async()=>{setSaving(true);setError("");try{await api(`/parcels/${id}/status`,{method:"POST",body:JSON.stringify({status:"OUT_FOR_DELIVERY"})});setStarted(true);await queryClient.invalidateQueries({queryKey:["assigned-parcels"]})}catch(e){setError(isOfflineError(e)?i18n.t("offlineStatusNotQueued"):e instanceof Error?e.message:i18n.t("requestError"))}finally{setSaving(false)}}} style={[s.button,saving&&s.disabled]}><Text style={s.buttonText}>{i18n.t("deliveryUpdate")}</Text></Pressable>}
     {currentStatus==="OUT_FOR_DELIVERY"&&<>
     <SelectMenu
       label={i18n.t("status")}

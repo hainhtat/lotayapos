@@ -4,6 +4,8 @@ import type { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { assertCashbookOpen } from "./finance.service.js";
 import { resolveCommissionRateBps } from "../utils/commission.js";
+import { env } from "../config/env.js";
+import { businessDateUtcBoundary, nextCalendarDate } from "../utils/business-date.js";
 import {
   buildReturnDeductionLines,
   postReturnDeductionInTx,
@@ -372,15 +374,19 @@ async function entryInScope(entry: { sourceType: string; sourceId: string | null
 export async function getLedgerReport(input: { from?: string; to?: string; account?: string }, actor: LedgerActor) {
   const user = await assertLedgerReadAccess(actor);
   if (user.role !== "SUPERADMIN" && !user.hubId) throw new ApiError(403, "FORBIDDEN", "A hub scope is required");
-  const from = input.from ? businessDay(input.from) : undefined;
-  const to = input.to ? businessDay(input.to) : undefined;
+  const from = input.from ? businessDateUtcBoundary(input.from, env.hubTimezone) : undefined;
+  const to = input.to ? businessDateUtcBoundary(input.to, env.hubTimezone) : undefined;
+  const toExclusive = input.to ? businessDateUtcBoundary(nextCalendarDate(input.to), env.hubTimezone) : undefined;
   if (from && to && from > to) throw new ApiError(400, "INVALID_DATE_RANGE", "Ledger start date must be before the end date");
+  if (input.from && input.to && (Date.parse(`${input.to}T00:00:00Z`) - Date.parse(`${input.from}T00:00:00Z`)) / 86_400_000 + 1 > 366)
+    throw new ApiError(400, "REPORT_RANGE_TOO_LARGE", "Ledger range cannot exceed 366 calendar days");
   const entries = await prisma.journalEntry.findMany({
-    where: { ...(user.role === "SUPERADMIN" ? {} : { hubId: user.hubId! }), ...(from || to ? { businessDate: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}) },
+    where: { ...(user.role === "SUPERADMIN" ? {} : { hubId: user.hubId! }), ...(from || toExclusive ? { businessDate: { ...(from ? { gte: from } : {}), ...(toExclusive ? { lt: toExclusive } : {}) } } : {}) },
     include: { lines: true },
     orderBy: [{ businessDate: "asc" }, { createdAt: "asc" }],
-    take: 500,
+    take: 501,
   });
+  if (entries.length > 500) throw new ApiError(400, "REPORT_TOO_LARGE", "Ledger contains more than 500 entries; narrow the filters or date range");
   const scopedEntries = entries;
   const filteredEntries = input.account ? scopedEntries.filter((entry) => entry.lines.some((line) => line.account === input.account)) : scopedEntries;
   const balances = new Map<string, { debit: number; credit: number }>();
