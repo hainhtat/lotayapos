@@ -89,9 +89,27 @@ systemctl daemon-reload
 systemctl enable lotaya-api
 ln -sfn "${RELEASE}" "${ROOT}/current.next"
 mv -Tf "${ROOT}/current.next" "${ROOT}/current"
-if ! systemctl restart lotaya-api || ! curl --fail --silent --show-error --max-time 15 http://127.0.0.1:4010/api/v1/health/ready >/dev/null; then
+ready=0
+if systemctl restart lotaya-api; then
+  for _attempt in {1..30}; do
+    if curl --fail --silent --show-error --max-time 2 http://127.0.0.1:4010/api/v1/health/ready >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    sleep 1
+  done
+fi
+if [[ "${ready}" -ne 1 ]]; then
   echo "Release readiness failed; rolling application files back. Database migrations are forward-only and are not automatically reversed." >&2
-  if [[ -n "${PREVIOUS_RELEASE}" && -d "${PREVIOUS_RELEASE}" ]]; then ln -sfn "${PREVIOUS_RELEASE}" "${ROOT}/current.next";mv -Tf "${ROOT}/current.next" "${ROOT}/current";systemctl restart lotaya-api;else unlink "${ROOT}/current";fi
+  systemctl status lotaya-api --no-pager -l >&2 || true
+  journalctl -u lotaya-api -n 80 --no-pager >&2 || true
+  if [[ -n "${PREVIOUS_RELEASE}" && -d "${PREVIOUS_RELEASE}" ]]; then
+    ln -sfn "${PREVIOUS_RELEASE}" "${ROOT}/current.next"
+    mv -Tf "${ROOT}/current.next" "${ROOT}/current"
+    systemctl restart lotaya-api
+  else
+    echo "No previous atomic release exists; retaining ${RELEASE} as /opt/lotaya/current so systemd has a valid working directory and startup logs remain actionable." >&2
+  fi
   exit 1
 fi
 systemctl reload nginx
