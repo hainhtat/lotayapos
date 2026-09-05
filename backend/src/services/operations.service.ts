@@ -224,6 +224,22 @@ export function formatTrackingNumber(sequence: number) {
 
 type TrackingSequenceClient = Pick<Prisma.TransactionClient, "$queryRaw" | "parcel">;
 
+export async function acquireTrackingAllocationLock(
+  client: Pick<Prisma.TransactionClient, "$queryRaw">,
+  provider = env.databaseProvider,
+) {
+  if (provider !== "postgresql") return;
+  // Prisma's PostgreSQL adapter cannot deserialize pg_advisory_xact_lock's
+  // native void return value. Project a supported scalar while evaluating it.
+  const lock = await client.$queryRaw<Array<{ locked: number }>>`
+    SELECT 1::integer AS locked
+    FROM pg_advisory_xact_lock(1280268628)
+  `;
+  if (lock[0]?.locked !== 1) {
+    throw new ApiError(500, "TRACKING_LOCK_FAILED", "Could not acquire the tracking allocation lock");
+  }
+}
+
 async function nextTrackingSequenceStartWith(client: TrackingSequenceClient) {
   if (env.databaseProvider === "postgresql") {
     const rows = await client.$queryRaw<Array<{ max: number | null }>>`
@@ -291,9 +307,7 @@ export async function bulkCreateParcels(batchId:string,input:{parcels:NewParcelI
   const createAttempt = () => prisma.$transaction(async tx=>{
     // Serialize allocation in PostgreSQL. SQLite writes are serialized by the database;
     // the bounded retry below also covers a stale read racing another transaction.
-    if (env.databaseProvider === "postgresql") {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(1280268628)`;
-    }
+    await acquireTrackingAllocationLock(tx);
     const sequenceStart = await nextTrackingSequenceStartWith(tx);
     const trackingNumbers = input.parcels.map((_, index) => formatTrackingNumber(sequenceStart + index));
     await tx.parcel.createMany({data:input.parcels.map((p,index)=>{const township=townshipById.get(p.townshipId)!;const zone=p.zoneId?zoneById.get(p.zoneId):undefined;return {orderId:p.orderId,customerName:p.customerName,customerPhone:p.customerPhone,address:p.address,codAmount:p.codAmount,townshipId:p.townshipId,zoneId:p.zoneId,zone:zone?.name,township:township.nameEn,deliveryFee:township.deliveryFee,advanceAmount:0,batchId,trackingNumber:trackingNumbers[index]!};})});

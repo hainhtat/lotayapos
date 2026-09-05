@@ -1,7 +1,7 @@
 import request from "supertest";
 import { app } from "../src/app.js";
 import { prisma } from "../src/config/database.js";
-import { formatTrackingNumber, nextTrackingSequenceStart } from "../src/services/operations.service.js";
+import { acquireTrackingAllocationLock, formatTrackingNumber, nextTrackingSequenceStart } from "../src/services/operations.service.js";
 import { signAccessToken } from "../src/utils/jwt.js";
 
 describe("bulk parcel tracking allocation", () => {
@@ -92,5 +92,22 @@ describe("bulk parcel tracking allocation", () => {
 
     expect(response.status).toBe(201);
     expect(response.body.data[0].trackingNumber).toMatch(/^LTY-\d+$/);
+  });
+});
+
+describe("PostgreSQL tracking allocation lock", () => {
+  test("projects the advisory lock to a Prisma-supported integer", async () => {
+    let sql = "";
+    const client = {
+      $queryRaw: jest.fn(async (parts: TemplateStringsArray) => {
+        sql = parts.join("");
+        return [{ locked: 1 }];
+      }),
+    };
+
+    await acquireTrackingAllocationLock(client as never, "postgresql");
+
+    expect(sql).toContain("SELECT 1::integer AS locked");
+    expect(sql).toContain("FROM pg_advisory_xact_lock(1280268628)");
   });
 });
