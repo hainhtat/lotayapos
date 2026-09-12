@@ -470,7 +470,8 @@ export function OperationsPage() {
     mutationFn: () =>
       api("/operations/parcels/link", {
         method: "POST",
-        body: JSON.stringify({ parcelIds: selected, responsibleRiderId: riderId, reason: linkReason.trim() }),
+        // Never submit IDs retained from a different filter/page.
+        body: JSON.stringify({ parcelIds: selectedParcels.map((parcel) => parcel.id), responsibleRiderId: riderId, reason: linkReason.trim() }),
       }),
     onSuccess: async () => {
       setSelected([]);
@@ -879,12 +880,12 @@ export function OperationsPage() {
           </button>
           <button
             type="button"
-            disabled={Boolean(linkValidation) || !riderId || link.isPending}
+            disabled={Boolean(linkValidation) || selected.length !== selectedParcels.length || !riderId || link.isPending}
             onClick={() => setLinkOpen(true)}
             className="rounded-md border border-[#1598ef] px-3 py-1.5 text-xs font-bold text-[#0787df] disabled:opacity-50"
           >
             <Link2 size={14} className="mr-1 inline" />
-            {link.isPending ? t("loading") : `${t("linkParcels")} (${selected.length})`}
+            {link.isPending ? t("loading") : `${t("linkParcels")} (${selectedParcels.length})`}
           </button>
           <button
             type="button"

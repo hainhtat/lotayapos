@@ -285,8 +285,10 @@ export async function getBatchDetail(id:string,actor:BatchActor){
   if(!batch)throw new ApiError(404,"BATCH_NOT_FOUND","Batch not found");
   const totalCod=batch.parcels.reduce((sum,parcel)=>sum+parcel.codAmount,0);
   const advancePostedAmount=(await postedAdvanceByBatch(prisma,[batch.id])).get(batch.id) ?? 0;
-  const remainingToOs=totalCod-advancePostedAmount;
-  return {...batch,totalCod,advancePostedAmount,remainingToOs,nextTrackingSequence:await nextTrackingSequenceStart()};
+  const deliveryFeeCredit=batch.parcels.reduce((sum,parcel)=>sum+(parcel.deliveryFee ?? 0),0);
+  const returnedCod=batch.parcels.reduce((sum,parcel)=>sum+(parcel.status === "RETURNED" ? parcel.codAmount : 0),0);
+  const remainingToOs=totalCod-advancePostedAmount-deliveryFeeCredit-returnedCod;
+  return {...batch,totalCod,advancePostedAmount,deliveryFeeCredit,returnedCod,remainingToOs,nextTrackingSequence:await nextTrackingSequenceStart()};
 }
 
 type NewParcelInput = { trackingNumber?: string; orderId?: string | null; customerName: string; customerPhone?: string; address: string; codAmount: number; townshipId: string; zoneId?: string };

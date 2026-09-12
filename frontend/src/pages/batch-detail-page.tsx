@@ -43,6 +43,8 @@ type Batch = {
   advancePaid: number;
   totalCod: number;
   remainingToOs: number;
+  deliveryFeeCredit: number;
+  returnedCod: number;
   nextTrackingSequence: number;
   shop: { name: string };
   parcels: SavedParcel[];
@@ -470,6 +472,8 @@ export function BatchDetailPage() {
     if (savedPage > savedPageCount) setSavedPage(savedPageCount);
   }, [savedPage, savedPageCount]);
   const remainingToOs = batch.data?.remainingToOs ?? 0;
+  const deliveryFeeCredit = batch.data?.deliveryFeeCredit ?? 0;
+  const returnedCod = batch.data?.returnedCod ?? 0;
   const canFinalize=["SUPERADMIN","OPERATIONS_MANAGER","DISPATCHER"].includes(user?.role??"");
   const finalize=useMutation({mutationFn:()=>api(`/operations/batches/${id}/finalize`,{method:"POST"}),onSuccess:async()=>{setConfirmFinalize(false);setMessage(t("batchFinalized"));await queryClient.invalidateQueries({queryKey:["batch",id]})},onError:error=>setMessage(error instanceof Error?error.message:t("loadError"))});
   const updateParcel = useMutation({
@@ -656,6 +660,9 @@ export function BatchDetailPage() {
             {remainingToOs.toLocaleString()} MMK
           </p>
           <p className="mt-2 text-xs text-slate-500">{t("remainingToOsHint")}</p>
+          <p className="mt-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
+            {(batch.data?.totalCod ?? 0).toLocaleString()} − {(batch.data?.advancePaid ?? 0).toLocaleString()} − {deliveryFeeCredit.toLocaleString()} − {returnedCod.toLocaleString()} = {remainingToOs.toLocaleString()} MMK
+          </p>
         </div>
       </div>
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
