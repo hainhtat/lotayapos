@@ -134,4 +134,36 @@ describe("OS delivery manifest parsing", () => {
       { reference: "31", customerName: "Ko Tun", address: "Thingangyun", codAmount: 45000, sourcePage: 1 },
     ]);
   });
+
+  test("infers narrow customer and wide address columns without shifting cells", () => {
+    const rows = parseDeliveryManifestItems([
+      { str: "No.", x: 59, y: 691, page: 1 },
+      { str: "Customer", x: 88, y: 691, page: 1 },
+      { str: "Address", x: 256, y: 691, page: 1 },
+      { str: "Phone", x: 429, y: 691, page: 1 },
+      { str: "Amount", x: 499, y: 691, page: 1 },
+      { str: "145", x: 59, y: 362, page: 1 },
+      { str: "Thar Thar", x: 88, y: 362, page: 1 },
+      { str: "-vb", x: 124, y: 362, page: 1 },
+      { str: "466 Thamardi Road", x: 256, y: 376, page: 1 },
+      { str: "North Dagon", x: 316, y: 348, page: 1 },
+      { str: "09431844874", x: 256, y: 348, page: 1 },
+      { str: "—", x: 453, y: 362, page: 1 },
+      { str: "44,400 MMK", x: 475, y: 362, page: 1 },
+      { str: "146", x: 59, y: 304, page: 1 },
+      { str: "Kay Thi Htun", x: 88, y: 304, page: 1 },
+      { str: "UMFCCI Tower", x: 256, y: 304, page: 1 },
+      { str: "09-421000209", x: 286, y: 290, page: 1 },
+      { str: "—", x: 453, y: 304, page: 1 },
+      { str: "38,250 MMK", x: 476, y: 304, page: 1 },
+      { str: "18/08/2026, 15", x: 490, y: 250, page: 1 },
+      { str: "08", x: 545, y: 250, page: 1 },
+      { str: "Page 1 of 1", x: 514, y: 242, page: 1 },
+    ]);
+
+    expect(rows).toEqual([
+      { reference: "145", customerName: "Thar Thar -vb", address: "466 Thamardi Road North Dagon", phone: "09431844874", codAmount: 44400, sourcePage: 1 },
+      { reference: "146", customerName: "Kay Thi Htun", address: "UMFCCI Tower", phone: "09421000209", codAmount: 38250, sourcePage: 1 },
+    ]);
+  });
 });

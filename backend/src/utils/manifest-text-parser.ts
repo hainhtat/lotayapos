@@ -80,26 +80,50 @@ export function parseDeliveryManifestText(pages: string[]): ParsedManifestLine[]
   return rows.slice(0, MAX_MANIFEST_ROWS);
 }
 
-const COL = { no: 95, customer: 215, address: 400 };
+const median = (values: number[]) => {
+  const sorted = values.slice().sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+};
 
-function columnOf(x: number, normalizeX: (value: number) => number = (value) => value) {
-  x = normalizeX(x);
-  if (x < COL.no) return "no" as const;
-  if (x < COL.customer) return "customer" as const;
-  if (x < COL.address) return "address" as const;
-  return "tail" as const;
+function recurringColumn(items: PdfTextItem[], minimumX: number, maximumX: number) {
+  const groups = new Map<number, { count: number; xs: number[] }>();
+  for (const item of items) {
+    if (item.x <= minimumX || item.x >= maximumX || isNoise(item.str)) continue;
+    const key = Math.round(item.x / 2) * 2;
+    const group = groups.get(key) ?? { count: 0, xs: [] };
+    group.count += 1;
+    group.xs.push(item.x);
+    groups.set(key, group);
+  }
+  const best = [...groups.values()].sort((a, b) => b.count - a.count || Math.min(...a.xs) - Math.min(...b.xs))[0];
+  return best ? median(best.xs) : undefined;
 }
 
 function pageGeometry(items: PdfTextItem[], anchors: PdfTextItem[]) {
   const anchorX = Math.min(...anchors.map((item) => item.x));
-  const rightX = Math.max(...items.map((item) => item.x));
-  const width = rightX - anchorX;
-  const normalizeX = width > 0
-    ? (x: number) => 65 + ((x - anchorX) * (492 - 65)) / width
-    : (x: number) => x;
   const gaps = anchors.slice(0, -1).map((anchor, index) => anchor.y - anchors[index + 1]!.y).filter((gap) => gap > 0);
   const rowGap = gaps.length ? gaps.sort((a, b) => a - b)[Math.floor(gaps.length / 2)]! : 48;
-  return { normalizeX, rowGap };
+  const headerCustomer = items.find((item) => /^customer$/i.test(item.str.trim()));
+  const headerAddress = items.find((item) => /^address$/i.test(item.str.trim()));
+  const amountCandidates = anchors.flatMap((anchor) => items
+    .filter((item) => Math.abs(item.y - anchor.y) <= Math.min(30, rowGap / 2) && item.x > anchor.x)
+    .filter((item) => parseAmountToken(item.str) !== undefined)
+    .sort((a, b) => b.x - a.x)
+    .slice(0, 1));
+  const amountX = median(amountCandidates.map((item) => item.x)) ?? Math.max(...items.map((item) => item.x));
+  const customerCandidates = anchors.flatMap((anchor) => items
+    .filter((item) => Math.abs(item.y - anchor.y) <= Math.min(30, rowGap / 2) && item.x > anchor.x + 6 && item.x < amountX)
+    .sort((a, b) => a.x - b.x)
+    .slice(0, 1));
+  const customerX = headerCustomer?.x ?? median(customerCandidates.map((item) => item.x)) ?? anchorX + (amountX - anchorX) * 0.1;
+  const addressMinimum = customerX + (amountX - customerX) * 0.15;
+  const addressX = headerAddress?.x ?? recurringColumn(items, addressMinimum, amountX) ?? customerX + (amountX - customerX) * 0.4;
+  return {
+    rowGap,
+    noEnd: (anchorX + customerX) / 2,
+    customerEnd: (customerX + addressX) / 2,
+    amountX,
+  };
 }
 
 function joinItems(items: PdfTextItem[]) {
@@ -119,11 +143,18 @@ export function parseDeliveryManifestItems(items: PdfTextItem[]): ParsedManifest
     const pageItems = items.filter((item) => item.page === page);
     const numericItems = pageItems.filter((item) => /^\d{1,5}$/.test(myanmarDigitsToAscii(item.str.trim())));
     const leftmostX = Math.min(...numericItems.map((item) => item.x));
+    const pageWidth = Math.max(...pageItems.map((item) => item.x)) - Math.min(...pageItems.map((item) => item.x));
+    // Row numbers are commonly right-aligned, so 1-, 2-, and 3-digit values
+    // do not share an exact x coordinate. Keep a narrow scale-aware left band
+    // while excluding numeric address/COD tokens farther across the page.
+    const anchorBand = Math.max(8, pageWidth * 0.05);
     const orderAnchors = numericItems
-      .filter((item) => item.x <= leftmostX + 2)
+      .filter((item) => item.x <= leftmostX + anchorBand)
       .sort((a, b) => b.y - a.y);
     if (!orderAnchors.length) continue;
-    const { normalizeX, rowGap } = pageGeometry(pageItems, orderAnchors);
+    const noiseBaselines = pageItems.filter((item) => isNoise(item.str)).map((item) => item.y);
+    const isOnNoiseLine = (item: PdfTextItem) => noiseBaselines.some((y) => Math.abs(item.y - y) <= 10);
+    const { rowGap, noEnd, customerEnd, amountX } = pageGeometry(pageItems, orderAnchors);
     if (rows.length && orderAnchors[0]) {
       const leftover = pageItems.filter((item) => item.y > orderAnchors[0]!.y + rowGap / 2 && !isNoise(item.str));
       const extra = extractPhonesFromText(joinItems(leftover));
@@ -135,16 +166,26 @@ export function parseDeliveryManifestItems(items: PdfTextItem[]): ParsedManifest
       const anchor = orderAnchors[index]!;
       const nextY = orderAnchors[index + 1]?.y ?? -Infinity;
       const prevY = orderAnchors[index - 1]?.y ?? Infinity;
-      const upper = Math.min(anchor.y + rowGap / 2, (anchor.y + prevY) / 2);
+      const upper = Number.isFinite(prevY) ? (anchor.y + prevY) / 2 : anchor.y + Math.max(rowGap / 2, 30);
       const lower = Number.isFinite(nextY) ? (anchor.y + nextY) / 2 : anchor.y - Math.max(rowGap / 2, 80);
       const block = pageItems.filter((item) => item.y <= upper + 0.5 && item.y > lower + 0.5);
-      const customer = joinItems(block.filter((item) => columnOf(item.x, normalizeX) === "customer"));
-      const addressRaw = joinItems(block.filter((item) => columnOf(item.x, normalizeX) === "address"));
-      const tail = joinItems(block.filter((item) => columnOf(item.x, normalizeX) === "tail"));
-      const codAmount = parseAmountToken(tail);
+      const customer = joinItems(block.filter((item) => item.x >= noEnd && item.x < customerEnd));
+      const amountItem = block
+        .filter((item) => !isOnNoiseLine(item))
+        .filter((item) => item.x >= Math.max(customerEnd, amountX - Math.max(24, (amountX - customerEnd) * 0.2)))
+        .filter((item) => parseAmountToken(item.str) !== undefined)
+        .sort((a, b) => Math.abs(a.x - amountX) - Math.abs(b.x - amountX))[0];
+      const codAmount = amountItem ? parseAmountToken(amountItem.str) : undefined;
       if (codAmount === undefined) continue;
       if (!Number.isSafeInteger(codAmount) || codAmount < 0) continue;
-      const extracted = extractPhonesFromText(`${addressRaw} ${tail}`);
+      const addressRaw = joinItems(block.filter((item) =>
+        item.x >= customerEnd
+        && item !== amountItem
+        && !isOnNoiseLine(item)
+        && !/^\s*[—–-]\s*$/.test(item.str)
+        && !isNoise(item.str),
+      ));
+      const extracted = extractPhonesFromText(addressRaw);
       const address = extractPhonesFromText(addressRaw).rest.replace(/[—–\-]\s*$/, "").trim();
       const customerName = customer.replace(/\s+tt$/i, "").trim();
       if (!customerName || !address) continue;
