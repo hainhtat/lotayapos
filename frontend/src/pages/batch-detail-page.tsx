@@ -1,10 +1,11 @@
 import { AlertTriangle, ClipboardPaste, FileUp, LayoutGrid, ListPlus, Pencil, Plus, Save, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import { api, apiRaw } from "@/lib/api";
 import { ParcelFieldHistory } from "@/components/parcel-field-history";
+import { useAuth } from "@/app/auth";
 
 type Location = { id: string; code?: string; nameEn: string; nameMy?: string };
 type Township = Location & {
@@ -45,6 +46,7 @@ type Batch = {
   nextTrackingSequence: number;
   shop: { name: string };
   parcels: SavedParcel[];
+  finalizedAt?: string | null;
 };
 
 export type ParcelRow = {
@@ -77,8 +79,32 @@ export function isParcelRowBlank(row: ParcelRow) {
   return !Object.values(row).some(Boolean);
 }
 
+const MYANMAR_DIGITS: Record<string, string> = {
+  "\u1040": "0", "\u1041": "1", "\u1042": "2", "\u1043": "3", "\u1044": "4",
+  "\u1045": "5", "\u1046": "6", "\u1047": "7", "\u1048": "8", "\u1049": "9",
+};
+
+export function normalizeCodAmount(value: string) {
+  const normalized = value
+    .trim()
+    .replace(/[\u1040-\u1049]/g, (digit) => MYANMAR_DIGITS[digit] ?? digit)
+    .replace(/(?:MMK|Ks|ကျပ်)\.?$/i, "")
+    .replace(/[\s,]/g, "");
+  return /^\d+$/.test(normalized) ? normalized : value.trim();
+}
+
 export function isParcelRowComplete(row: ParcelRow) {
-  return Boolean(row.customerName.trim() && row.address.trim() && row.townshipId && /^\d+$/.test(row.codAmount));
+  return Boolean(row.customerName.trim() && row.address.trim() && row.townshipId && /^\d+$/.test(normalizeCodAmount(row.codAmount)));
+}
+
+export function parcelRowErrorKeys(row: ParcelRow, townships: Township[]) {
+  if (isParcelRowBlank(row)) return [];
+  const errors: string[] = [];
+  if (!row.customerName.trim()) errors.push("rowNeedsCustomer");
+  if (!row.address.trim()) errors.push("rowNeedsAddress");
+  if (!row.townshipId || !isParcelRowLocationConsistent(row, townships)) errors.push("rowNeedsTownship");
+  if (!/^\d+$/.test(normalizeCodAmount(row.codAmount))) errors.push("rowNeedsCod");
+  return errors;
 }
 
 export function appendParcelDraft(rows: ParcelRow[], draft: ParcelRow): ParcelRow[] {
@@ -92,14 +118,35 @@ export function formatTrackingNumber(sequence: number) {
 }
 
 export function parseParcelGrid(text: string): ParcelRow[] {
+  const parseCsvLine = (line: string) => {
+    const cells: string[] = [];
+    let cell = "";
+    let quoted = false;
+    for (let index = 0; index < line.length; index += 1) {
+      const character = line[index]!;
+      if (character === '"') {
+        if (quoted && line[index + 1] === '"') {
+          cell += '"';
+          index += 1;
+        } else {
+          quoted = !quoted;
+        }
+      } else if (character === "," && !quoted) {
+        cells.push(cell.trim());
+        cell = "";
+      } else {
+        cell += character;
+      }
+    }
+    cells.push(cell.trim());
+    return cells;
+  };
   return text
     .trim()
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => {
-      const cells = (line.includes("\t") ? line.split("\t") : line.split(",")).map((value) =>
-        value.trim().replace(/^"|"$/g, ""),
-      );
+      const cells = (line.includes("\t") ? line.split("\t") : parseCsvLine(line)).map((value) => value.trim());
       return {
         orderId: cells[0] ?? "",
         customerName: cells[1] ?? "",
@@ -109,7 +156,9 @@ export function parseParcelGrid(text: string): ParcelRow[] {
         townshipId: cells[5] ?? "",
         zoneId: cells[6] ?? "",
         customerPhone: cells[7] ?? "",
-        codAmount: cells[8] ?? "",
+        // COD is the final column, so tolerate an unquoted thousands separator
+        // from CSV exports (for example `25,000 MMK`).
+        codAmount: normalizeCodAmount(cells.slice(8).join(",")),
       };
     });
 }
@@ -350,10 +399,19 @@ const fieldEditableStatuses = new Set(["CREATED", "PICKED_UP", "ASSIGNED"]);
 export function BatchDetailPage() {
   const { id = "" } = useParams();
   const { t, i18n } = useTranslation();
+  const user = useAuth()?.user;
   const preferMyanmar = i18n.resolvedLanguage === "my";
   const queryClient = useQueryClient();
   const gridRef = useRef<HTMLDivElement>(null);
-  const [rows, setRows] = useState(() => Array.from({ length: 10 }, blank));
+  const draftStorageKey = `lotaya-parcel-draft:${id}`;
+  const [rows, setRows] = useState<ParcelRow[]>(() => {
+    try {
+      const saved = localStorage.getItem(draftStorageKey);
+      const parsed = saved ? JSON.parse(saved) : [];
+      if (Array.isArray(parsed) && parsed.length) return [...parsed.slice(0, 500), ...Array.from({ length: Math.max(0, 10 - parsed.length) }, blank)];
+    } catch { /* Ignore an obsolete or malformed local draft. */ }
+    return Array.from({ length: 10 }, blank);
+  });
   const [entryMode, setEntryMode] = useState<"spreadsheet" | "form">("spreadsheet");
   const [formOpen, setFormOpen] = useState(false);
   const [formDraft, setFormDraft] = useState<ParcelRow>(blank);
@@ -362,6 +420,7 @@ export function BatchDetailPage() {
   const [editing, setEditing] = useState<SavedParcel | null>(null);
   const [historyParcel,setHistoryParcel]=useState<{id:string;trackingNumber:string}|null>(null);
   const [savedPage, setSavedPage] = useState(1);
+  const [confirmFinalize,setConfirmFinalize]=useState(false);
   const [editForm, setEditForm] = useState({ orderId: "", customerName: "", address: "", customerPhone: "", codAmount: "", deliveryFee: "", townshipId: "", zoneId: "" });
   const batch = useQuery({
     queryKey: ["batch", id],
@@ -411,6 +470,8 @@ export function BatchDetailPage() {
     if (savedPage > savedPageCount) setSavedPage(savedPageCount);
   }, [savedPage, savedPageCount]);
   const remainingToOs = batch.data?.remainingToOs ?? 0;
+  const canFinalize=["SUPERADMIN","OPERATIONS_MANAGER","DISPATCHER"].includes(user?.role??"");
+  const finalize=useMutation({mutationFn:()=>api(`/operations/batches/${id}/finalize`,{method:"POST"}),onSuccess:async()=>{setConfirmFinalize(false);setMessage(t("batchFinalized"));await queryClient.invalidateQueries({queryKey:["batch",id]})},onError:error=>setMessage(error instanceof Error?error.message:t("loadError"))});
   const updateParcel = useMutation({
     mutationFn: () => {
       const canEditDeliveryFields = fieldEditableStatuses.has(editing!.status) && !editing!.linkGroupId;
@@ -464,9 +525,15 @@ export function BatchDetailPage() {
         .filter(({ row }) => !isParcelRowBlank(row)),
     [rows],
   );
-  const invalid = populated.some(
-    ({ row }) => !isParcelRowComplete(row) || !isParcelRowLocationConsistent(row, allTownships.data ?? []),
+  useEffect(() => {
+    const drafts = rows.filter((row) => !isParcelRowBlank(row));
+    if (drafts.length) localStorage.setItem(draftStorageKey, JSON.stringify(drafts));
+    else localStorage.removeItem(draftStorageKey);
+  }, [draftStorageKey, rows]);
+  const saveable = populated.filter(
+    ({ row }) => isParcelRowComplete(row) && isParcelRowLocationConsistent(row, allTownships.data ?? []),
   );
+  const invalid = saveable.length !== populated.length;
   useEffect(() => {
     const catalogTownships = allTownships.data;
     const catalogRegions = regions.data;
@@ -524,24 +591,27 @@ export function BatchDetailPage() {
     gridRef.current?.querySelector<HTMLElement>(`[data-cell="${next}-${column}"]`)?.focus();
   };
   const save = useMutation({
-    mutationFn: (drafts: ParcelRow[]) =>
+    mutationFn: (entries: Array<{ row: ParcelRow; index: number }>) =>
       api(`/operations/batches/${id}/parcels/bulk`, {
         method: "POST",
         body: JSON.stringify({
-          parcels: drafts.map((row) => ({
+          parcels: entries.map(({ row }) => ({
             orderId: row.orderId.trim() || undefined,
             customerName: row.customerName.trim(),
             address: row.address.trim(),
             townshipId: row.townshipId,
             zoneId: row.zoneId || undefined,
             customerPhone: row.customerPhone.trim() || undefined,
-            codAmount: Number(row.codAmount),
+            codAmount: Number(normalizeCodAmount(row.codAmount)),
           })),
         }),
       }),
-    onSuccess: async (_data, drafts) => {
-      setMessage(t("parcelsSaved", { count: drafts.length }));
-      setRows(Array.from({ length: 10 }, blank));
+    onSuccess: async (_data, entries) => {
+      setMessage(t("parcelsSaved", { count: entries.length }));
+      setRows((current) => current.map((row, index) => {
+        const saved = entries.find((entry) => entry.index === index);
+        return saved && saved.row === row ? blank() : row;
+      }));
       await Promise.all([queryClient.invalidateQueries({ queryKey: ["batch", id] }), queryClient.invalidateQueries({ queryKey: ["parcels"] })]);
     },
     onError: (error) => setMessage(error instanceof Error ? error.message : t("loadError")),
@@ -555,6 +625,7 @@ export function BatchDetailPage() {
           <h1 className="font-display text-3xl font-bold">{batch.data?.label ?? t("batchDetail")}</h1>
           <p className="mt-2 max-w-2xl text-sm text-slate-500">{t("batchEntryDescription")}</p>
         </div>
+        <div className="text-right">{batch.data?.finalizedAt?<span className="rounded-full bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{t("finalized")}</span>:canFinalize&&<button type="button" disabled={!savedParcels.length} onClick={()=>setConfirmFinalize(true)} className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{t("finalizeBatch")}</button>}</div>
       </div>
       <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-2xl border border-black/5 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
@@ -633,9 +704,9 @@ export function BatchDetailPage() {
               {t("addParcelModal")}
             </button>
           )}
-          <button disabled={!populated.length || invalid || save.isPending} onClick={() => save.mutate(populated.map(({ row }) => ({ ...row })))} className="rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+          <button disabled={!saveable.length || save.isPending} onClick={() => save.mutate(saveable)} className="rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
             <Save className="mr-1 inline" size={16} />
-            {t("saveParcels", { count: populated.length })}
+            {t("saveParcels", { count: saveable.length })}
           </button>
         </div>
       </div>
@@ -667,6 +738,7 @@ export function BatchDetailPage() {
           {t("parcelGridValidation")}
         </p>
       )}
+      {populated.length > 0 && <p className="mt-2 text-xs font-medium text-slate-500">{t("draftSavedLocally")}</p>}
       {entryMode === "form" && (
         <section className="mt-4 rounded-2xl border bg-white p-4 dark:border-white/10 dark:bg-[#181a1d]">
           <h2 className="font-display font-bold">{t("draftParcels")}</h2>
@@ -745,8 +817,10 @@ export function BatchDetailPage() {
                   className={`${cell} ${key === "address" ? "min-w-[240px]" : ""}`}
                 />
               );
+              const errorKeys = parcelRowErrorKeys(row, allTownships.data ?? []);
               return (
-                <tr key={index} className="border-t dark:border-white/10">
+                <Fragment key={index}>
+                <tr className={`border-t dark:border-white/10 ${errorKeys.length ? "bg-rose-50/40 dark:bg-rose-950/10" : ""}`}>
                   <td className="px-2 text-xs">{index + 1}</td>
                   <td className="px-2 text-sm font-semibold text-slate-500">{trackingForIndex(index)}</td>
                   <td>{input("orderId", 1)}</td>
@@ -764,7 +838,7 @@ export function BatchDetailPage() {
                     onMove={(event, column) => move(event, index, column)}
                   />
                   <td>{input("customerPhone", 8)}</td>
-                  <td>{input("codAmount", 9, "number")}</td>
+                  <td>{input("codAmount", 9, "text")}</td>
                   <DeliveryFeeCell row={row} townships={allTownships.data ?? []} hubId={batch.data?.hubId} />
                   <td>
                     <button aria-label={`${t("removeParcel")} ${index + 1}`} onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} className="p-2 text-rose-500">
@@ -772,6 +846,8 @@ export function BatchDetailPage() {
                     </button>
                   </td>
                 </tr>
+                {errorKeys.length > 0 && <tr><td colSpan={13} className="px-3 pb-2 text-xs font-medium text-rose-600">{t("rowNumber", { number:index+1 })}: {errorKeys.map(key=>t(key)).join(" · ")}</td></tr>}
+                </Fragment>
               );
             })}
           </tbody>
@@ -911,6 +987,7 @@ export function BatchDetailPage() {
           </form>
         </div>
       )}
+      {confirmFinalize&&<div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4"><section role="dialog" aria-modal="true" aria-labelledby="finalize-title" className="w-full max-w-lg rounded-2xl bg-white p-6 dark:bg-[#181a1d]"><h2 id="finalize-title" className="text-xl font-bold">{t("finalizeBatch")}</h2><p className="mt-3 text-sm text-slate-500">{t("finalizeBatchExplanation",{count:savedParcels.length,cod:(batch.data?.totalCod??0).toLocaleString()})}</p><div className="mt-6 flex justify-end gap-2"><button type="button" onClick={()=>setConfirmFinalize(false)} className="rounded-xl border px-4 py-2 text-sm font-bold">{t("cancel")}</button><button type="button" disabled={finalize.isPending} onClick={()=>finalize.mutate()} className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{finalize.isPending?t("loading"):t("confirmFinalize")}</button></div></section></div>}
       {historyParcel&&<ParcelFieldHistory parcel={historyParcel} onClose={()=>setHistoryParcel(null)}/>}
     </div>
   );

@@ -1,7 +1,7 @@
 import { addWalletAmounts, assertCashbookOpen, buildCashbookAdjustmentLines, buildExpenseLines, buildOpeningBalanceLines, buildRiderSettlementReceivableLines, buildWalletTransferLines, calculateDailySalaryDeduction, calculateOsSettlementNet, calculateRecognitionTotals, calculateRiderSettlementAmounts, calculateRiderSettlementTotals, calculateWalletBalances, calculateWalletReconciliationVariance, combineRiderOutstandingAggregates, cumulativeReceiptPosition, isOsSettlementCodCovered, returnedAdvanceContribution, settlementWalletMismatch } from "../src/services/finance.service.js";
 import { buildRiderReceivableRecognitionLines } from "../src/services/parcel.service.js";
 import { ApiError } from "../src/utils/api-error.js";
-import { buildManifestFilenameSuffix, buildPickupAdvanceJournalLines, bulkAssignParcels, calculateReturnExtension, isAssignmentEligible, manifestStatusesLabel, pickupAdvancePostingDisposition, sanitizeManifestFilenamePart, summarizeManifestParcels, yangonBusinessDate } from "../src/services/operations.service.js";
+import { batchMutationLockMode, buildManifestFilenameSuffix, buildPickupAdvanceJournalLines, bulkAssignParcels, calculateReturnExtension, isAssignmentEligible, manifestStatusesLabel, pickupAdvancePostingDisposition, sanitizeManifestFilenamePart, summarizeManifestParcels, yangonBusinessDate } from "../src/services/operations.service.js";
 import { businessDateFor } from "../src/services/master-data.service.js";
 import { assertParcelAccess, buildParcelListWhere, buildParcelScope, buildRiderCommissionLines, calculateCommissionAmount, canOverrideStatus, isAllowedTransition, LINKED_MONEY_POSTED_SOURCE_TYPES, MONEY_POSTED_SOURCE_TYPES, overrideLeavesMoneyBearingStatus, requiresOverrideNote, resolveCommissionRateBps, validateConfiguredReason } from "../src/services/parcel.service.js";
 import { normalizeReasonCode, normalizeRiderPayFields } from "../src/services/master-data.service.js";
@@ -411,9 +411,13 @@ describe("parcel authorization scope", () => {
 });
 
 describe("pickup advance funding wallet", () => {
+  test("selects the shared batch mutation lock strategy by database provider", () => {
+    expect(batchMutationLockMode("postgresql://db.example/lotaya")).toBe("POSTGRES_ADVISORY");
+    expect(batchMutationLockMode("file:./dev.db")).toBe("SQLITE_WRITE");
+  });
   test("credits the selected KBZ Pay wallet while keeping the entry balanced", () => {
     expect(buildPickupAdvanceJournalLines(25000, "KBZ_PAY")).toEqual([
-      { account: "OS_ADVANCE_RECEIVABLE", debit: 25000, credit: 0 },
+      { account: "OS_COD_PAYABLE", debit: 25000, credit: 0 },
       { account: "WALLET_KBZ_PAY", debit: 0, credit: 25000 },
     ]);
   });
@@ -430,23 +434,22 @@ describe("pickup advance funding wallet", () => {
 });
 
 describe("double-entry ledger rules", () => {
-  test("posts delivery COD, delivery fees, and OS shortfall as balanced lines", () => {
+  test("clears batch COD and recognizes delivery fees without duplicating OS payable", () => {
     const result = buildDeliveryCollectionLines({ collectedCod: 80000, collectedDeliveryFee: 5000, advanceAmount: 100000, wallet: "KBZ_PAY" });
-    expect(result.shortfall).toBe(20000);
+    expect(result.shortfall).toBe(0);
     expect(result.lines).toEqual([
       { account: "WALLET_KBZ_PAY", debit: 85000, credit: 0 },
-      { account: "OS_ADVANCE_RECEIVABLE", debit: 0, credit: 80000 },
+      { account: "OS_BATCH_COD_CLEARING", debit: 0, credit: 80000 },
       { account: "DELIVERY_FEE_REVENUE", debit: 0, credit: 5000 },
     ]);
     expect(assertBalancedLines(result.lines)).toEqual({ debit: 85000, credit: 85000 });
   });
 
-  test("uses COD payable when collection exceeds the pickup advance", () => {
+  test("clears the batch COD position independently from the pickup advance", () => {
     const result = buildDeliveryCollectionLines({ collectedCod: 120000, collectedDeliveryFee: 0, advanceAmount: 100000, wallet: "CASH" });
     expect(result.lines).toEqual([
       { account: "WALLET_CASH", debit: 120000, credit: 0 },
-      { account: "OS_ADVANCE_RECEIVABLE", debit: 0, credit: 100000 },
-      { account: "OS_COD_PAYABLE", debit: 0, credit: 20000 },
+      { account: "OS_BATCH_COD_CLEARING", debit: 0, credit: 120000 },
     ]);
   });
 

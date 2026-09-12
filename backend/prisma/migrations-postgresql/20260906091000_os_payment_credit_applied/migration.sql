@@ -1,0 +1,1 @@
+ALTER TABLE "OsAccountPayment" ADD COLUMN "creditApplied" INTEGER NOT NULL DEFAULT 0;

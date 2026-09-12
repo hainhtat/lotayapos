@@ -22,6 +22,10 @@ The ERP is the operational and financial source of truth. Dispatchers and ops ca
 
 **Phase 1 is internal.** Customer tracking, walk-in POS, GPS routing, and public OS portals are later phases.
 
+Phase 1 supports one Lotaya organization per deployment. Hub scoping separates
+operational access inside that organization; this release is not a shared
+multi-tenant SaaS deployment.
+
 ---
 
 ## Three apps
@@ -196,6 +200,12 @@ the readiness probe fails. Database migrations are forward-only and require a
 separate database backup/restore plan. A Rider APK is published only when `aapt`
 or `apkanalyzer` confirms package/version metadata and `apksigner` confirms a
 non-debug signature.
+
+After PostgreSQL migrations, deployment runs the read-only OS cutover audit.
+It stops the release when any migrated shop/hub balance needs reconciliation.
+A Superadmin must review and post the exact opening adjustment with a reason,
+then deploy again. To inspect a configured environment manually, run
+`cd backend && npm run audit:os-cutover`.
 
 ---
 

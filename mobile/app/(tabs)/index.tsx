@@ -84,7 +84,7 @@ export default function Home(){
   const [township,setTownship]=useState("");
   const [sortByTownship,setSortByTownship]=useState(true);
   const [deliveryFilter,setDeliveryFilter]=useState<DeliveryFilter>("toDeliver");
-  const [datePreset,setDatePreset]=useState<DatePreset>("thisWeek");
+  const [datePreset,setDatePreset]=useState<DatePreset>("all");
   const dateRange=useMemo(()=>datePresetRange(datePreset),[datePreset]);
   const query=useQuery({
     queryKey:["assigned-parcels",dateRange.dateFrom,dateRange.dateTo],
@@ -97,7 +97,7 @@ export default function Home(){
     [parcels,search,township,sortByTownship,deliveryFilter],
   );
   const heroLabel=deliveryFilter==="all"?"assigned":deliveryFilter;
-  const dateLabel=datePreset==="today"?"dateToday":datePreset;
+  const dateLabel=datePreset==="today"?"dateToday":datePreset==="all"?"allParcels":datePreset;
   const call=async(phone?:string)=>{
     const result=await callCustomer(phone,Linking);
     if(result==="opened")return;
@@ -161,13 +161,13 @@ export default function Home(){
               <Pressable
                 accessibilityRole="radio"
                 accessibilityState={{selected:datePreset===value}}
-                accessibilityLabel={i18n.t(value==="today"?"dateToday":value)}
+                accessibilityLabel={i18n.t(value==="today"?"dateToday":value==="all"?"allParcels":value)}
                 key={value}
                 onPress={()=>setDatePreset(value)}
                 style={[s.chip,dark&&s.controlDark,datePreset===value&&s.selected]}
               >
                 <Text style={[s.chipText,dark&&s.white,datePreset===value&&s.selectedText]}>
-                  {i18n.t(value==="today"?"dateToday":value)}
+                  {i18n.t(value==="today"?"dateToday":value==="all"?"allParcels":value)}
                 </Text>
               </Pressable>
             ))}

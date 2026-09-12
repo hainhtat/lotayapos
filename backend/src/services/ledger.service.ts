@@ -142,14 +142,13 @@ export function buildDeliveryCollectionLines(input: { collectedCod: number; coll
   assertAmount(input.advanceAmount, "advanceAmount");
   const total = input.collectedCod + input.collectedDeliveryFee;
   if (total <= 0) throw new ApiError(400, "INVALID_COLLECTION", "At least one collected amount is required");
-  const appliedAdvance = Math.min(input.collectedCod, input.advanceAmount);
   const lines: LedgerLineInput[] = [{ account: walletAccount(input.wallet), debit: total, credit: 0 }];
-  if (appliedAdvance > 0) lines.push({ account: "OS_ADVANCE_RECEIVABLE", debit: 0, credit: appliedAdvance });
-  const CODPayable = input.collectedCod - appliedAdvance;
-  if (CODPayable > 0) lines.push({ account: "OS_COD_PAYABLE", debit: 0, credit: CODPayable });
+  // The OS payable is recognized once when the batch is recorded. Customer
+  // collection clears the batch-COD position and must not create it again.
+  if (input.collectedCod > 0) lines.push({ account: "OS_BATCH_COD_CLEARING", debit: 0, credit: input.collectedCod });
   if (input.collectedDeliveryFee > 0) lines.push({ account: "DELIVERY_FEE_REVENUE", debit: 0, credit: input.collectedDeliveryFee });
   assertBalancedLines(lines);
-  return { lines, appliedAdvance, shortfall: Math.max(input.advanceAmount - input.collectedCod, 0), totalCollected: total };
+  return { lines, appliedAdvance: 0, shortfall: 0, totalCollected: total };
 }
 
 export function calculateLinkedDeliveryAmounts(input: { baseDeliveryFee: number; parcelCount: number; commissionRateBps: number; increment?: number }) {

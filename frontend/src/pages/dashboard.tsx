@@ -16,6 +16,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { CreateBatchDialog } from "./create-batch-dialog";
+import { useAuth } from "@/app/auth";
 
 type MasterData = { hubs: Array<{ id: string; name: string }>; shops: Array<{ id: string; name: string }> };
 type Batch = { id: string; label: string; pickupDate: string; shop: { name: string }; parcels: Array<{ status: string }> };
@@ -68,13 +69,17 @@ async function loadOverview() {
 export function Dashboard() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
+  const user = useAuth()?.user ?? { role:"SUPERADMIN" };
   const [showCreate, setShowCreate] = useState(false);
   const overview = useQuery({ queryKey: ["dashboard"], queryFn: loadOverview, retry: false });
+  const canReadOverdue=["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER"].includes(user?.role??"");
+  const overdueUnsent=useQuery({queryKey:["overdue-unsent",3,"overview"],enabled:canReadOverdue,queryFn:()=>api<unknown[]>("/operations/parcels/overdue-unsent?days=3&pageSize=1").then(response=>response.pagination?.total??response.data.length)});
   const masters = useQuery({ queryKey: ["master-data"], queryFn: () => api<MasterData>("/master-data").then((r) => r.data) });
   const locale = i18n.resolvedLanguage === "my" ? "my-MM" : "en-US";
   const money = (value: number) => `${value.toLocaleString(locale)} MMK`;
   const data = overview.data;
   const metrics: Metric[] = [
+    ...(canReadOverdue?[{key:"overdueUnsent",value:overdueUnsent.data??0,detail:t("overdueUnsentCardDetail"),icon:Clock3,to:"/operations/dispatch?overdueUnsent=3",tone:(overdueUnsent.data??0)>0?"warning" as const:"default" as const}]:[]),
     { key: "totalParcels", value: data?.totalParcels ?? 0, icon: PackageCheck, to: "/operations/dispatch" },
     { key: "delivered", value: data?.delivered ?? 0, icon: TrendingUp, to: "/operations/dispatch?status=DELIVERED" },
     {
@@ -126,7 +131,7 @@ export function Dashboard() {
     <div className="mx-auto max-w-[1400px]">
       <div className="mb-9 flex flex-col justify-between gap-4 md:flex-row md:items-end">
         <div><h1 className="font-display text-3xl font-bold lg:text-4xl">{t("welcome")}</h1><p className="mt-2 text-slate-500 dark:text-slate-400">{t("overview")}</p></div>
-        <button onClick={() => setShowCreate(true)} className="rounded-xl bg-[#1598ef] px-4 py-3 text-sm font-bold text-white">+ {t("createBatch")}</button>
+        {["SUPERADMIN","OPERATIONS_MANAGER","DISPATCHER"].includes(user?.role??"")&&<button onClick={() => setShowCreate(true)} className="rounded-xl bg-[#1598ef] px-4 py-3 text-sm font-bold text-white">+ {t("createBatch")}</button>}
       </div>
       {overview.isLoading ? <p role="status" className="rounded-2xl bg-white p-8 text-center text-sm text-slate-500 shadow-sm dark:bg-[#181a1d]">{t("loadingOverview")}</p> : overview.isError ? <div role="alert" className="rounded-2xl border border-rose-200 bg-white p-8 text-center dark:border-rose-900/60 dark:bg-[#181a1d]"><p className="font-semibold text-rose-700 dark:text-rose-300">{t("overviewLoadError")}</p><button className="mt-4 rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white" onClick={() => void overview.refetch()}>{t("retry")}</button></div> : <>
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -159,7 +164,7 @@ export function Dashboard() {
           </section>
         </div>
       </>}
-      {showCreate && <CreateBatchDialog shops={masters.data?.shops ?? []} hubs={masters.data?.hubs ?? []} onClose={() => setShowCreate(false)} />}
+      {showCreate && ["SUPERADMIN","OPERATIONS_MANAGER","DISPATCHER"].includes(user?.role??"") && <CreateBatchDialog shops={masters.data?.shops ?? []} hubs={masters.data?.hubs ?? []} onClose={() => setShowCreate(false)} />}
     </div>
   );
 }

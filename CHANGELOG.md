@@ -3,6 +3,35 @@
 All notable changes to the Lotaya ERP and API are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-09-10
+
+### Added
+
+- Added the simplified OS payable account with batch COD obligations, consumable return credits, partial and split-wallet payments, oldest-first allocations, account history, and attributable corrections.
+- Added explicit batch finalization so parcel entry remains editable until its OS obligation is intentionally created.
+- Added safe parcel unlinking with financial correction, individual reposting, concurrency protection, and audit history.
+- Added visibility for parcels left unsent for three or more days and made older open assignments visible by default in the Rider app.
+
+### Changed
+
+- Relaxed parcel linking to allow assigned and active parcels with different addresses, fees, or riders; only delivered and returned parcels are excluded. Linking assigns all selected parcels to one responsible rider and uses the highest fee plus 1,000 MMK for each additional parcel.
+- Simplified Finance around per-shop, per-batch OS outstanding balances while retaining legacy settlements as read-only history after cutover.
+- Hardened OS payment credit consumption, organization and hub scoping, idempotency, atomic corrections, migration reconciliation, and reporting against duplicate or reopened payables.
+- Improved daily workflows with role-aware navigation, Myanmar business-date defaults, safer Dispatch selections, debounced filters, persistent per-batch parcel drafts, and row-level save validation.
+- Improved rider settlement handling for incremental partial receipts and later declaration corrections.
+
+### Fixed
+
+- Prevented linked-parcel unlinking from duplicating rider receivables or leaving stale linked financial records.
+- Prevented historical paid OS batches from reappearing as outstanding during the simplified-account cutover.
+- Prevented the legacy and simplified settlement workflows from paying the same batch twice.
+- Fixed spreadsheet draft saves for formatted MMK values, quoted CSV addresses, incomplete neighboring rows, retry behavior, and retained unfinished drafts.
+
+### Release status
+
+- ERP/API `0.3.0` is the recorded source release.
+- Rider remains independently versioned at `0.1.1`; this ERP release does not claim a newly built Rider APK.
+
 ## [0.2.0] - 2026-09-04
 
 ### Added

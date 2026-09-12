@@ -1,6 +1,7 @@
 import type { RequestHandler } from "express";
 import * as service from "../services/finance.service.js";
 import * as ledgerService from "../services/ledger.service.js";
+import * as osAccountService from "../services/os-account.service.js";
 
 const actor = (req: Parameters<RequestHandler>[0]) => ({ id: req.auth!.sub, role: req.auth!.role });
 
@@ -38,3 +39,9 @@ export const ledger: RequestHandler = async (req, res) => res.json({ success: tr
 export const deliveryCollection: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await ledgerService.postDeliveryCollection(req.body, actor(req)) });
 export const returnDeduction: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await ledgerService.postReturnDeduction(req.body, actor(req)) });
 export const reversal: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await ledgerService.reverseJournalEntry(req.body, actor(req)) });
+export const osAccounts: RequestHandler = async (req, res) => res.json({ success: true, data: await osAccountService.listOsAccounts({ shopId: typeof req.query.shopId === "string" ? req.query.shopId : undefined, hubId: typeof req.query.hubId === "string" ? req.query.hubId : undefined }, actor(req)) });
+export const osAccountHistory: RequestHandler = async (req, res) => res.json({ success: true, data: await osAccountService.osAccountHistory(String(req.params.shopId), { hubId: typeof req.query.hubId === "string" ? req.query.hubId : undefined }, actor(req)) });
+export const approveOsCutoverAdjustment: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await osAccountService.approveCutoverAdjustment(req.body, actor(req)) });
+export const createOsPayment: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await osAccountService.postOsPayment(req.body, actor(req)) });
+export const voidOsPayment: RequestHandler = async (req, res) => res.json({ success: true, data: await osAccountService.voidOsPayment({ id: String(req.params.id), ...req.body }, actor(req)) });
+export const replaceOsPayment: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await osAccountService.replaceOsPayment({ id: String(req.params.id), ...req.body }, actor(req)) });

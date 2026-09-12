@@ -55,6 +55,7 @@ describe("rider route organization",()=>{
     expect(matchesDeliveryFilter({status:"REJECTED"},"all")).toBe(true);
   });
   it("computes hub-timezone today/week/month date ranges",()=>{
+    expect(datePresetRange("all",new Date("2026-08-12T15:30:00+06:30"))).toEqual({});
     const wednesday=new Date("2026-08-12T15:30:00+06:30");
     expect(datePresetRange("today",wednesday)).toEqual({dateFrom:"2026-08-12",dateTo:"2026-08-12"});
     expect(datePresetRange("thisWeek",wednesday)).toEqual({dateFrom:"2026-08-10",dateTo:"2026-08-16"});

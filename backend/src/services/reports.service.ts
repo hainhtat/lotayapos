@@ -2,6 +2,7 @@ import { prisma } from "../config/database.js";
 import { env } from "../config/env.js";
 import { ApiError } from "../utils/api-error.js";
 import { businessDateUtcBoundary, nextCalendarDate } from "../utils/business-date.js";
+import { listOsAccounts } from "./os-account.service.js";
 
 export type ReportActor = { id: string; role: string };
 
@@ -292,13 +293,19 @@ export async function getRiderPerformanceReport(input: OperationalReportInput, a
 
 export async function getOsStatementReport(input: OperationalReportInput, actor: ReportActor) {
   const scope = await reportScope(input, actor);
-  const settlements = assertReportRows(await prisma.osSettlement.findMany({
-    where: { hubId: scope.hubId, businessDate: { gte: scope.from, lt: scope.toExclusive }, ...(input.shopId ? { shopId: input.shopId } : {}) },
-    include: { shop: { select: { id: true, name: true } }, batches: { include: { batch: { select: { id: true, label: true, pickupDate: true } } } } },
-    orderBy: [{ businessDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-    take: MAX_REPORT_ROWS + 1,
-  }));
-  const active = settlements.filter((row) => row.status === "POSTED" && !row.reversedAt);
+  const [settlements, accountPayments, obligationCount, accountSnapshot] = await Promise.all([
+    prisma.osSettlement.findMany({ where: { hubId: scope.hubId, businessDate: { gte: scope.from, lt: scope.toExclusive }, ...(input.shopId ? { shopId: input.shopId } : {}) }, include: { shop: { select: { id: true, name: true } }, batches: { include: { batch: { select: { id: true, label: true, pickupDate: true } } } } }, orderBy: [{ businessDate: "asc" }, { createdAt: "asc" }, { id: "asc" }], take: MAX_REPORT_ROWS + 1 }),
+    prisma.osAccountPayment.findMany({ where: { hubId: scope.hubId, businessDate: { gte: scope.from, lt: scope.toExclusive }, ...(input.shopId ? { shopId: input.shopId } : {}) }, include: { shop: { select: { id: true, name: true } }, wallets: true, allocations: true, creditAllocations: true }, orderBy: [{ businessDate: "asc" }, { createdAt: "asc" }, { id: "asc" }], take: MAX_REPORT_ROWS + 1 }),
+    prisma.osBatchObligation.count({ where: { hubId: scope.hubId, ...(input.shopId ? { shopId: input.shopId } : {}) } }),
+    listOsAccounts({ hubId: scope.hubId, shopId: input.shopId }, actor),
+  ]);
+  assertReportRows(settlements); assertReportRows(accountPayments);
+  const active = obligationCount === 0 ? settlements.filter((row) => row.status === "POSTED" && !row.reversedAt) : [];
+  const activePayments = accountPayments.filter((row) => row.status === "POSTED");
   const sum = (field: "grossCollectedCod" | "advanceDeduction" | "returnDeduction" | "deliveryFeeDeduction" | "adjustmentAmount" | "netAmount") => active.reduce((total, row) => total + row[field], 0);
-  return { period: scope.period, hubId: scope.hubId, currency: "MMK", amountUnit: "minor", filters: { shopId: input.shopId ?? null }, totals: { records: settlements.length, settlements: active.length, reversedOrReplaced: settlements.length - active.length, grossCollectedCod: sum("grossCollectedCod"), advanceDeduction: sum("advanceDeduction"), returnDeduction: sum("returnDeduction"), deliveryFeeDeduction: sum("deliveryFeeDeduction"), adjustmentAmount: sum("adjustmentAmount"), netAmount: sum("netAmount") }, settlements };
+  const walletPaid = activePayments.reduce((total, payment) => total + payment.wallets.reduce((walletTotal, wallet) => walletTotal + wallet.amount, 0), 0);
+  const creditApplied = activePayments.reduce((total, payment) => total + payment.creditApplied, 0);
+  const accountBatches = accountSnapshot.shops.flatMap((shop) => shop.batches).filter((batch) => batch.pickupDate >= scope.from && batch.pickupDate < scope.toExclusive);
+  const accountTotals = { originalCod: accountBatches.reduce((s, row) => s + row.originalCod, 0), advancesPaid: accountBatches.reduce((s, row) => s + row.advancePaid, 0), paymentsPaid: accountBatches.reduce((s, row) => s + row.paymentPaid, 0), returnedCod: accountBatches.reduce((s, row) => s + row.returnedCod, 0), outstanding: accountBatches.reduce((s, row) => s + row.outstanding, 0), creditAvailable: accountBatches.reduce((s, row) => s + row.creditAvailable, 0) };
+  return { period: scope.period, hubId: scope.hubId, currency: "MMK", amountUnit: "minor", filters: { shopId: input.shopId ?? null }, source: obligationCount > 0 ? "OS_ACCOUNT" : "LEGACY_SETTLEMENT", totals: { records: obligationCount > 0 ? accountPayments.length : settlements.length, settlements: obligationCount > 0 ? activePayments.length : active.length, reversedOrReplaced: obligationCount > 0 ? accountPayments.length - activePayments.length : settlements.length - active.length, grossCollectedCod: obligationCount > 0 ? accountTotals.originalCod : sum("grossCollectedCod"), advanceDeduction: obligationCount > 0 ? accountTotals.advancesPaid : sum("advanceDeduction"), returnDeduction: obligationCount > 0 ? accountTotals.returnedCod : sum("returnDeduction"), deliveryFeeDeduction: sum("deliveryFeeDeduction"), adjustmentAmount: sum("adjustmentAmount"), netAmount: obligationCount > 0 ? accountTotals.outstanding : sum("netAmount"), walletPaid, creditApplied, ...accountTotals }, accountBatches, accountPayments, settlements };
 }

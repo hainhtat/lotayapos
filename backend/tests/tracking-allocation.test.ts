@@ -56,6 +56,10 @@ describe("bulk parcel tracking allocation", () => {
 
   afterAll(async () => {
     await prisma.parcel.deleteMany({ where: { batchId } });
+    await prisma.osBatchObligation.deleteMany({ where: { batchId } });
+    const obligationEntries = await prisma.journalEntry.findMany({ where: { sourceType: "OS_BATCH_OBLIGATION", sourceId: { startsWith: `${batchId}:` } }, select: { id: true } });
+    await prisma.journalLine.deleteMany({ where: { entryId: { in: obligationEntries.map((entry) => entry.id) } } });
+    await prisma.journalEntry.deleteMany({ where: { id: { in: obligationEntries.map((entry) => entry.id) } } });
     await prisma.batch.deleteMany({ where: { id: batchId } });
     await prisma.township.deleteMany({ where: { id: townshipId } });
     await prisma.district.deleteMany({ where: { id: districtId } });

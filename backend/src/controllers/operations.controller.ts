@@ -41,6 +41,7 @@ export const bulkCreateParcels: RequestHandler = async(req,res)=>res.status(201)
 export const previewManifestImport: RequestHandler = async(req,res)=>res.json({success:true,data:await previewManifestPdf(String(req.params.id),Buffer.isBuffer(req.body)?req.body:Buffer.alloc(0),actor(req))});
 export const createBatch: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await service.createBatch(req.body, actor(req)) });
 export const postPickupAdvances: RequestHandler = async (req, res) => res.json({ success: true, data: await service.postPickupAdvances(String(req.params.id), req.body, actor(req)) });
+export const finalizeBatch: RequestHandler = async (req, res) => res.json({ success: true, data: await service.finalizeBatch(String(req.params.id), actor(req)) });
 export const alerts: RequestHandler = async (req, res) => res.json({ success: true, data: await service.listAlerts(actor(req)) });
 export const acknowledgeAlert: RequestHandler = async (req, res) => res.json({ success: true, data: await service.acknowledgeAlert(String(req.params.id), actor(req)) });
 
@@ -87,6 +88,7 @@ export const downloadManifest: RequestHandler = async (req, res) => {
 };
 
 export const linkParcels: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await service.linkParcels(req.body, actor(req)) });
+export const unlinkParcels: RequestHandler = async (req, res) => res.json({ success: true, data: await service.unlinkParcelGroup({ groupId: String(req.params.id), ...req.body }, actor(req)) });
 export const correctDeliveredRider: RequestHandler = async (req, res) =>
   res.json({ success: true, data: await parcelService.correctDeliveredRider(String(req.params.id), req.body, actor(req)) });
 export const reassignParcel: RequestHandler = async (req, res) => res.json({ success: true, data: await service.reassignParcel(String(req.params.id), req.body, actor(req)) });

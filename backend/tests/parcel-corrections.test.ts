@@ -432,6 +432,8 @@ describe("parcel corrections and delivery fee edits", () => {
           label: `Reversal advance batch ${suffix}`,
           pickupDate: new Date("2026-08-18T00:00:00.000Z"),
           advancePaid: 5000,
+          finalizedAt: new Date("2026-08-18T00:00:00.000Z"),
+          finalizedBy: financeUserId,
         },
       });
       await prisma.parcel.create({
@@ -505,7 +507,7 @@ describe("parcel corrections and delivery fee edits", () => {
       expect(liveAdvances).toHaveLength(1);
       expect(liveAdvances[0]!.lines).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ account: "OS_ADVANCE_RECEIVABLE", debit: 5000, credit: 0 }),
+          expect.objectContaining({ account: "OS_COD_PAYABLE", debit: 5000, credit: 0 }),
           expect.objectContaining({ account: "WALLET_KBZ_PAY", debit: 0, credit: 5000 }),
         ]),
       );

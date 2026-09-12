@@ -337,7 +337,7 @@ export function combineRiderOutstandingAggregates(
 export async function summarizeRiderOutstandingThroughDate(date: Date, hubId?: string) {
   const throughDate = new Date(date);
   throughDate.setUTCDate(throughDate.getUTCDate() + 1);
-  const [riders, recognized, paid] = await Promise.all([
+  const [riders, recognized, receipts] = await Promise.all([
     prisma.rider.findMany({
       where: { ...(hubId ? { hubId } : {}), user: { active: true } },
       select: { id: true },
@@ -347,12 +347,14 @@ export async function summarizeRiderOutstandingThroughDate(date: Date, hubId?: s
       where: { ...(hubId ? { hubId } : {}), businessDate: { lt: throughDate }, rider: { user: { active: true } } },
       _sum: { receivableAmount: true },
     }),
-    prisma.settlement.groupBy({
-      by: ["riderId"],
+    prisma.settlement.findMany({
       where: { businessDate: { lt: throughDate }, rider: { ...(hubId ? { hubId } : {}), user: { active: true } } },
-      _sum: { actualAmount: true },
+      select: { riderId: true, lines: { select: { amount: true } } },
     }),
   ]);
+  const paidByRider = new Map<string, number>();
+  for (const receipt of receipts) paidByRider.set(receipt.riderId, (paidByRider.get(receipt.riderId) ?? 0) + receipt.lines.reduce((sum, line) => sum + line.amount, 0));
+  const paid = [...paidByRider].map(([riderId, actualAmount]) => ({ riderId, _sum: { actualAmount } }));
   return combineRiderOutstandingAggregates(riders.map((rider) => rider.id), recognized, paid);
 }
 
@@ -707,6 +709,7 @@ export async function postOsSettlement(input: OsSettlementInput, actor: FinanceA
     if (existing.shopId !== input.shopId || existing.businessDate.getTime() !== businessDay(input.businessDate).getTime() || existing.wallet !== input.wallet || requestedIds.join("|") !== existingIds.join("|") || (input.advanceDeduction ?? existing.advanceDeduction) !== existing.advanceDeduction || (input.returnDeduction ?? existing.returnDeduction) !== existing.returnDeduction || (input.deliveryFeeDeduction ?? existing.deliveryFeeDeduction) !== existing.deliveryFeeDeduction || (input.adjustmentAmount ?? 0) !== existing.adjustmentAmount || (input.adjustmentReason?.trim() || null) !== existing.adjustmentReason) throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key was already used for a different OS settlement");
     return existing;
   }
+  if (await prisma.osBatchObligation.count({ where: { batchId: { in: input.batchIds } } })) throw new ApiError(409, "OS_ACCOUNT_CUTOVER", "Use OS outstanding payments for finalized batches; legacy settlements are read-only");
   const preview = await previewOsSettlement(input, actor);
   const date = businessDay(input.businessDate);
   const maximums = preview.defaults;
@@ -889,6 +892,7 @@ export async function createOsSettlementDraft(input: SaveOsSettlementDraftInput,
       throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key was already used for different draft values");
     return prisma.osSettlementDraft.findUniqueOrThrow({ where: { id: replay.targetId } });
   }
+  if (await prisma.osBatchObligation.count({ where: { batchId: { in: input.batchIds } } })) throw new ApiError(409, "OS_ACCOUNT_CUTOVER", "Use OS outstanding payments for finalized batches; legacy settlement drafts are read-only");
   const preview = await previewOsSettlement(input, actor);
   validateEditableSettlementComponents(input, preview.defaults);
   const batchIds = [...new Set(input.batchIds)].sort();
@@ -940,7 +944,9 @@ export async function updateOsSettlementDraft(
   const draft = await prisma.osSettlementDraft.findUnique({ where: { id: input.id } });
   if (!draft) throw new ApiError(404, "OS_SETTLEMENT_DRAFT_NOT_FOUND", "Saved settlement draft not found");
   if (user.role !== "SUPERADMIN" && draft.hubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Draft is outside your hub scope");
-  const preview = await previewOsSettlement({ shopId: draft.shopId, hubId: draft.hubId, batchIds: JSON.parse(draft.batchIdsJson) as string[] }, actor);
+  const draftBatchIds = JSON.parse(draft.batchIdsJson) as string[];
+  if (await prisma.osBatchObligation.count({ where: { batchId: { in: draftBatchIds } } })) throw new ApiError(409, "OS_ACCOUNT_CUTOVER", "Legacy settlement drafts are read-only after OS account cutover");
+  const preview = await previewOsSettlement({ shopId: draft.shopId, hubId: draft.hubId, batchIds: draftBatchIds }, actor);
   validateEditableSettlementComponents(input, preview.defaults);
   const before = JSON.stringify(draft);
   return prisma.$transaction(async (tx) => {
@@ -1155,9 +1161,34 @@ export async function receiveOsReturn(
 
     await assertCashbookOpen(tx, date, hubId);
 
+    const ensureFullCodReturnCredit = async () => {
+      const existingCredit = await tx.osReturnCredit.findUnique({ where: { parcelId: parcel.id } });
+      if (existingCredit) return existingCredit;
+      const creditId = randomUUID();
+      const journal = parcel.codAmount > 0 ? await tx.journalEntry.create({ data: {
+        sourceType: "OS_FULL_COD_RETURN_CREDIT", sourceId: parcel.id, hubId, businessDate: date,
+        description: `Full COD return credit for ${parcel.trackingNumber}`,
+        lines: { create: [{ account: "OS_COD_PAYABLE", debit: parcel.codAmount, credit: 0 }, { account: "OS_BATCH_COD_CLEARING", debit: 0, credit: parcel.codAmount }] },
+      } }) : null;
+      return tx.osReturnCredit.create({ data: { id: creditId, parcelId: parcel.id, batchId: parcel.batchId, shopId: parcel.batch.shopId, hubId, amount: parcel.codAmount, businessDate: date, idempotencyKey: `return:${idempotencyKey}`, postedBy: actor.id, journalEntryId: journal?.id } });
+    };
+
+    const simplifiedObligation = await tx.osBatchObligation.findUnique({ where: { batchId: parcel.batchId }, select: { id: true } });
+    if (simplifiedObligation) {
+      if (parcel.status !== "RETURNED" && !(OS_PENDING_RETURN_STATUSES as readonly string[]).includes(parcel.status)) throw new ApiError(409, "INVALID_RETURN_STATUS", "OS return receive requires FAILED, REJECTED, PENDING_RETURN, or PARTIAL status");
+      if (parcel.status !== "RETURNED") {
+        const updated = await tx.parcel.updateMany({ where: { id: parcel.id, status: parcel.status }, data: { status: "RETURNED" } });
+        if (updated.count !== 1) throw new ApiError(409, "STATUS_CONFLICT", "Parcel status changed; refresh and retry");
+      }
+      const credit = await ensureFullCodReturnCredit();
+      if (parcel.status !== "RETURNED") await tx.statusHistory.create({ data: { parcelId: parcel.id, fromStatus: parcel.status as never, toStatus: "RETURNED", actorId: actor.id, reasonCode: "FINANCE_OS_RETURN_RECEIVE", note: receiveOsReturnHistoryNote({ idempotencyKey, businessDate: input.businessDate, recoverableAmount: parcel.codAmount }) } });
+      return { parcel: { id: parcel.id, status: "RETURNED", trackingNumber: parcel.trackingNumber, advanceAmount: parcel.advanceAmount }, recoverableAmount: parcel.codAmount, journalEntry: credit.journalEntryId ? await tx.journalEntry.findUnique({ where: { id: credit.journalEntryId }, include: { lines: true } }) : null, alreadyReceived: parcel.status === "RETURNED" };
+    }
+
     const activeDeduction = await getActiveReturnDeduction(tx, parcel.id);
 
     if (parcel.status === "RETURNED") {
+      await ensureFullCodReturnCredit();
       const recoverable = await recoverableAdvance(tx, parcel);
       if (activeDeduction) {
         const credited = activeDeduction.lines
@@ -1232,6 +1263,7 @@ export async function receiveOsReturn(
       data: { status: "RETURNED" },
     });
     if (updated.count !== 1) throw new ApiError(409, "STATUS_CONFLICT", "Parcel status changed; refresh and retry");
+    await ensureFullCodReturnCredit();
 
     await tx.statusHistory.create({
       data: {
@@ -1411,6 +1443,7 @@ export async function reverseOsSettlement(input: { id: string; businessDate: str
   return prisma.$transaction(async (tx) => {
     const settlement = await tx.osSettlement.findUnique({ where: { id: input.id }, include: { journalEntry: { include: { lines: true } } } });
     if (!settlement) throw new ApiError(404, "OS_SETTLEMENT_NOT_FOUND", "OS settlement not found");
+    if (await tx.osSettlementBatch.count({ where: { settlementId: settlement.id, batch: { osObligation: { isNot: null } } } })) throw new ApiError(409, "OS_ACCOUNT_CUTOVER", "Legacy settlements are read-only after OS account cutover");
     if (user.role !== "SUPERADMIN" && settlement.hubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Settlement is outside your hub scope");
     if (settlement.status !== "POSTED") throw new ApiError(409, "SETTLEMENT_ALREADY_REVERSED", "OS settlement is already reversed");
     await assertCashbookOpen(tx, date, settlement.hubId);
@@ -1432,16 +1465,8 @@ export async function declareRiderSettlement(
   assertWallets(input);
   const rider = await resolveSettlementRider(actor);
   const date = businessDay(input.businessDate);
-  const existingSettlement = await prisma.settlement.findFirst({
-    where: { riderId: rider.id, businessDate: date },
-    select: { id: true },
-  });
-  if (existingSettlement)
-    throw new ApiError(
-      409,
-      "SETTLEMENT_ALREADY_POSTED",
-      "This rider settlement is already posted",
-    );
+  // A partial receipt does not close the day. The rider may revise the
+  // remaining declaration until cumulative receipts settle the receivable.
   return prisma.riderSettlementDeclaration.upsert({
     where: { riderId_businessDate: { riderId: rider.id, businessDate: date } },
     update: {

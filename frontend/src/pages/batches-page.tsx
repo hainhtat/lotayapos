@@ -6,6 +6,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { CreateBatchDialog } from "./create-batch-dialog";
 import { OperationsReturnQueue } from "./operations-return-queue";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 
 type BatchSummary = {
   id: string;
@@ -35,13 +36,15 @@ export function BatchesPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({ search: "", dateFrom: "", dateTo: "", shopId: "", hubId: "" });
+  const debouncedSearch = useDebouncedValue(filters.search,350);
+  const queryFilters = { ...filters, search: debouncedSearch };
   const masters = useQuery({ queryKey: ["master-data"], queryFn: () => api<{shops:Array<{id:string;name:string}>;hubs:Array<{id:string;name:string}>}>("/master-data").then((r) => r.data) });
 
   const batches = useQuery({
-    queryKey: ["operations-batches", page, filters],
+    queryKey: ["operations-batches", page, queryFilters],
     queryFn: () => {
       const params = new URLSearchParams({ page: String(page), pageSize: "25" });
-      Object.entries(filters).forEach(([key, value]) => { if (value.trim()) params.set(key, value.trim()); });
+      Object.entries(queryFilters).forEach(([key, value]) => { if (value.trim()) params.set(key, value.trim()); });
       return api<BatchSummary[]>(`/operations/batches?${params}`).then((response) => ({
         items: response.data,
         pagination: response.pagination ?? { page, pageSize: 25, total: response.data.length, totalPages: 1 },

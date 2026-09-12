@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Link2, Pencil, RefreshCw, Search, UserPlus, UserRoundPen } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -8,6 +8,8 @@ import { DeliveryStatusPanel, type ManifestPreviewData } from "@/components/deli
 import { ApiError, api, apiRaw } from "@/lib/api";
 import { resolveManifestPdfFilename } from "@/lib/content-disposition";
 import { isDateChangeReason } from "@/lib/exception-reasons";
+import { hubBusinessDate } from "@/lib/business-date";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { ParcelFieldHistory } from "@/components/parcel-field-history";
 import {
   buildManifestBody,
@@ -142,6 +144,10 @@ export function OperationsPage() {
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<string[]>([]);
   const [riderId, setRiderId] = useState("");
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkReason, setLinkReason] = useState("");
+  const [unlinkingGroupId, setUnlinkingGroupId] = useState<string | null>(null);
+  const [unlinkReason, setUnlinkReason] = useState("");
   const [bulkRiderId, setBulkRiderId] = useState("");
   const [bulkStatus, setBulkStatus] = useState("");
   const [bulkReasonCode, setBulkReasonCode] = useState("");
@@ -174,6 +180,7 @@ export function OperationsPage() {
   const [reasonCode, setReasonCode] = useState("");
   const [reasonNote, setReasonNote] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const selectionScope = useRef("");
 
   useEffect(() => {
     const next = Object.fromEntries(
@@ -184,7 +191,9 @@ export function OperationsPage() {
     );
   }, [searchParams]);
 
-  const query = Object.entries(filters)
+  const debouncedTextFilters=useDebouncedValue({trackingNumber:filters.trackingNumber,orderId:filters.orderId,customerName:filters.customerName,township:filters.township},350);
+  const queryFilters={...filters,...debouncedTextFilters};
+  const query = Object.entries(queryFilters)
     .filter(([, value]) => value)
     .map(([key, value]) => [key === "from" ? "dateFrom" : key === "to" ? "dateTo" : key, value]);
   const queryString = new URLSearchParams([...query, ["page", String(page)], ["pageSize", "100"]]).toString();
@@ -200,6 +209,23 @@ export function OperationsPage() {
       return { items: body.data ?? [], pagination: body.pagination };
     },
   });
+  const overdueUnsent = useQuery({
+    queryKey: ["overdue-unsent", 3],
+    queryFn: () => apiRaw("/operations/parcels/overdue-unsent?days=3&pageSize=100").then(async response => {
+      const body = await response.json() as { data?: Parcel[]; pagination?: { total: number } };
+      return { items: body.data ?? [], total: body.pagination?.total ?? body.data?.length ?? 0 };
+    }),
+  });
+  useEffect(() => {
+    if (!selectionScope.current) {
+      selectionScope.current = queryString;
+      return;
+    }
+    if (selectionScope.current !== queryString) {
+      selectionScope.current = queryString;
+      setSelected([]);
+    }
+  }, [queryString]);
   const masters = useQuery({
     queryKey: ["master-data"],
     queryFn: () => api<MasterData>("/master-data").then((r) => r.data),
@@ -431,25 +457,45 @@ export function OperationsPage() {
   const linkValidation =
     selectedParcels.length < 2
       ? t("selectAtLeastTwoForLink")
-      : selectedParcels.some((parcel) => parcel.linkGroup || parcel.status === "DELIVERED")
+      : selectedParcels.some((parcel) => parcel.linkGroup || ["DELIVERED", "RETURNED"].includes(parcel.status))
         ? t("selectedParcelsNotLinkable")
-        : new Set(selectedParcels.map((parcel) => parcel.address?.trim().toLocaleLowerCase().replace(/\s+/g, " "))).size !== 1
-          ? t("sameAddressRequired")
-          : new Set(selectedParcels.map((parcel) => parcel.deliveryFee)).size !== 1
-            ? t("sameDeliveryFeeRequired")
-            : new Set(selectedParcels.map((parcel) => parcel.rider?.id ?? null)).size !== 1
-              ? t("sameRiderRequired")
-              : null;
+        : null;
+
+  const selectedLinkGroupIds = [...new Set(selectedParcels.map((parcel) => parcel.linkGroup?.id).filter(Boolean))] as string[];
+  const unlinkGroupId = selectedParcels.length > 0 && selectedLinkGroupIds.length === 1 && selectedParcels.every((parcel) => parcel.linkGroup?.id === selectedLinkGroupIds[0])
+    ? selectedLinkGroupIds[0]!
+    : null;
 
   const link = useMutation({
     mutationFn: () =>
       api("/operations/parcels/link", {
         method: "POST",
-        body: JSON.stringify({ parcelIds: selected }),
+        body: JSON.stringify({ parcelIds: selected, responsibleRiderId: riderId, reason: linkReason.trim() }),
       }),
     onSuccess: async () => {
       setSelected([]);
+      setLinkOpen(false);
+      setLinkReason("");
       setMessage(t("parcelsLinked"));
+      await invalidateParcels();
+    },
+    onError: (e) => setMessage(e instanceof Error ? e.message : t("loadError")),
+  });
+
+  const unlink = useMutation({
+    mutationFn: () => api(`/operations/parcel-link-groups/${unlinkingGroupId}/unlink`, {
+      method: "POST",
+      body: JSON.stringify({
+        reason: unlinkReason.trim(),
+        businessDate: hubBusinessDate(),
+        idempotencyKey: `unlink-${crypto.randomUUID()}`,
+      }),
+    }),
+    onSuccess: async () => {
+      setSelected([]);
+      setUnlinkingGroupId(null);
+      setUnlinkReason("");
+      setMessage(t("parcelsUnlinked"));
       await invalidateParcels();
     },
     onError: (e) => setMessage(e instanceof Error ? e.message : t("loadError")),
@@ -616,6 +662,20 @@ export function OperationsPage() {
           {t("refresh")}
         </button>
       </div>
+
+      {(overdueUnsent.data?.total ?? 0) > 0 && (
+        <section className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/30">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-display font-bold text-amber-900 dark:text-amber-100">{t("overdueUnsentTitle")}</h2>
+              <p className="mt-1 text-sm text-amber-800 dark:text-amber-200">{t("overdueUnsentDescription", { count: overdueUnsent.data?.total ?? 0 })}</p>
+            </div>
+            <button type="button" onClick={() => { setPage(1); setSelected([]); setFilters({ ...emptyFilters, assignmentStatus: "UNASSIGNED" }); const next = new URLSearchParams(); next.set("assignmentStatus", "UNASSIGNED"); setSearchParams(next, { replace: true }); }} className="rounded-lg bg-amber-700 px-3 py-2 text-xs font-bold text-white">
+              {t("showOverdueUnsent")}
+            </button>
+          </div>
+        </section>
+      )}
 
       <section className="mt-5 rounded-xl border border-black/5 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -819,12 +879,20 @@ export function OperationsPage() {
           </button>
           <button
             type="button"
-            disabled={Boolean(linkValidation) || link.isPending}
-            onClick={() => link.mutate()}
+            disabled={Boolean(linkValidation) || !riderId || link.isPending}
+            onClick={() => setLinkOpen(true)}
             className="rounded-md border border-[#1598ef] px-3 py-1.5 text-xs font-bold text-[#0787df] disabled:opacity-50"
           >
             <Link2 size={14} className="mr-1 inline" />
             {link.isPending ? t("loading") : `${t("linkParcels")} (${selected.length})`}
+          </button>
+          <button
+            type="button"
+            disabled={!unlinkGroupId || unlink.isPending}
+            onClick={() => setUnlinkingGroupId(unlinkGroupId)}
+            className="rounded-md border border-amber-500 px-3 py-1.5 text-xs font-bold text-amber-700 disabled:opacity-50 dark:text-amber-300"
+          >
+            {t("unlinkParcels")}
           </button>
         </div>
 
@@ -967,7 +1035,7 @@ export function OperationsPage() {
                   const total = p.codAmount + fee;
                   const canEditFields = fieldEditableStatuses.has(p.status) && !p.linkGroup;
                   const canCorrectRider = p.status === "DELIVERED" && Boolean(p.rider?.id) && !p.linkGroup;
-                  return (
+  return (
                     <tr key={p.id} className="border-b border-slate-100 hover:bg-slate-50/80 dark:border-white/5 dark:hover:bg-white/[0.03]">
                       <td className="py-1.5 pr-2">
                         <input
@@ -1615,6 +1683,8 @@ export function OperationsPage() {
           </form>
         </div>
       )}
+      {linkOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4"><form aria-label={t("linkParcels")} onSubmit={e=>{e.preventDefault();link.mutate()}} className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl dark:bg-[#181a1d]"><h2 className="text-xl font-bold">{t("linkParcels")}</h2><p className="mt-2 text-sm text-slate-500">{t("linkParcelsExplanation",{count:selected.length})}</p><label className="mt-4 block text-xs font-bold">{t("responsibleRider")}<select aria-label={t("responsibleRider")} value={riderId} onChange={e=>setRiderId(e.target.value)} className={`${control} mt-1 w-full`}><option value="">{t("selectRider")}</option>{riders.map(r=><option key={r.id} value={r.id}>{r.user.name}</option>)}</select></label><label className="mt-4 block text-xs font-bold">{t("reason")}<textarea aria-label={t("linkReason")} required minLength={3} value={linkReason} onChange={e=>setLinkReason(e.target.value)} className={`${control} mt-1 w-full`}/></label><div className="mt-6 flex justify-end gap-2"><button type="button" onClick={()=>setLinkOpen(false)} className={control}>{t("cancel")}</button><button disabled={link.isPending||!riderId||linkReason.trim().length<3} className="rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{t("confirmLink")}</button></div></form></div>}
+      {unlinkingGroupId && <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4"><form aria-label={t("unlinkParcels")} onSubmit={e=>{e.preventDefault();unlink.mutate()}} className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl dark:bg-[#181a1d]"><h2 className="text-xl font-bold">{t("unlinkParcels")}</h2><p className="mt-2 text-sm text-slate-500">{t("unlinkParcelsExplanation")}</p><label className="mt-4 block text-xs font-bold">{t("reason")}<textarea aria-label={t("unlinkReason")} required minLength={3} value={unlinkReason} onChange={e=>setUnlinkReason(e.target.value)} className={`${control} mt-1 w-full`}/></label><div className="mt-6 flex justify-end gap-2"><button type="button" onClick={()=>setUnlinkingGroupId(null)} className={control}>{t("cancel")}</button><button disabled={unlink.isPending||unlinkReason.trim().length<3} className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{t("confirmUnlink")}</button></div></form></div>}
     </div>
   );
 }

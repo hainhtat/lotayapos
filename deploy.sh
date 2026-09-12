@@ -77,6 +77,7 @@ bash "${REPO}/deploy/publish-rider-app.sh" "${REPO}" "${RELEASE}/app"
 cd "${REPO}/backend"
 MIGRATE_URL="${DIRECT_DATABASE_URL:-$DATABASE_URL}"
 DATABASE_URL="$MIGRATE_URL" npx prisma migrate deploy --schema prisma/schema.postgresql.prisma
+DATABASE_URL="$MIGRATE_URL" node "${RELEASE}/backend/dist/scripts/audit-os-cutover.js"
 
 chown -R www-data:www-data "${RELEASE}"
 chmod 640 "${SHARED}/lotaya.env"

@@ -3,7 +3,10 @@ import { env } from "../config/env.js";
 import type { Prisma } from "@prisma/client";
 import { ApiError } from "../utils/api-error.js";
 import { assertCashbookOpen } from "./finance.service.js";
-import { journalEntryIsUnreversed, nextVersionedJournalSourceId } from "./parcel.service.js";
+import { buildRiderCommissionLines, buildRiderReceivableRecognitionLines, calculateCommissionAmount, journalEntryIsUnreversed, nextVersionedJournalSourceId } from "./parcel.service.js";
+import { postedAdvanceByBatch, syncBatchObligation } from "./os-account.service.js";
+import { resolveCommissionRateBps } from "../utils/commission.js";
+import { buildDeliveryCollectionLines } from "./ledger.service.js";
 
 export type FundingWallet = "CASH" | "KBZ_PAY" | "WAVE_PAY";
 const walletAccounts: Record<FundingWallet, string> = { CASH: "WALLET_CASH", KBZ_PAY: "WALLET_KBZ_PAY", WAVE_PAY: "WALLET_WAVE_PAY" };
@@ -83,7 +86,19 @@ export function walletAccount(wallet: string): string {
 
 export function buildPickupAdvanceJournalLines(advanceAmount: number, fundingWallet: string) {
   if (!Number.isInteger(advanceAmount) || advanceAmount < 0) throw new ApiError(400, "INVALID_ADVANCE", "Advance must be a non-negative integer");
-  return [{ account: "OS_ADVANCE_RECEIVABLE", debit: advanceAmount, credit: 0 }, { account: walletAccount(fundingWallet), debit: 0, credit: advanceAmount }];
+  return [{ account: "OS_COD_PAYABLE", debit: advanceAmount, credit: 0 }, { account: walletAccount(fundingWallet), debit: 0, credit: advanceAmount }];
+}
+
+export function batchMutationLockMode(databaseUrl = process.env.DATABASE_URL ?? "file:./dev.db") {
+  return /^postgres(ql)?:\/\//.test(databaseUrl) ? "POSTGRES_ADVISORY" as const : "SQLITE_WRITE" as const;
+}
+
+async function acquireBatchMutationLock(tx: Prisma.TransactionClient, batchId: string) {
+  if (batchMutationLockMode() === "POSTGRES_ADVISORY") {
+    await tx.$queryRaw<Array<{ locked: number }>>`SELECT 1::integer AS locked FROM pg_advisory_xact_lock(hashtext(${batchId}))`;
+    return;
+  }
+  await tx.batch.updateMany({ where: { id: batchId }, data: { advancePaid: { increment: 0 } } });
 }
 
 async function resolveBatchHub(actor: BatchActor, requestedHubId?: string) {
@@ -269,8 +284,9 @@ export async function getBatchDetail(id:string,actor:BatchActor){
   });
   if(!batch)throw new ApiError(404,"BATCH_NOT_FOUND","Batch not found");
   const totalCod=batch.parcels.reduce((sum,parcel)=>sum+parcel.codAmount,0);
-  const remainingToOs=totalCod-batch.advancePaid;
-  return {...batch,totalCod,remainingToOs,nextTrackingSequence:await nextTrackingSequenceStart()};
+  const advancePostedAmount=(await postedAdvanceByBatch(prisma,[batch.id])).get(batch.id) ?? 0;
+  const remainingToOs=totalCod-advancePostedAmount;
+  return {...batch,totalCod,advancePostedAmount,remainingToOs,nextTrackingSequence:await nextTrackingSequenceStart()};
 }
 
 type NewParcelInput = { trackingNumber?: string; orderId?: string | null; customerName: string; customerPhone?: string; address: string; codAmount: number; townshipId: string; zoneId?: string };
@@ -294,8 +310,9 @@ export async function createBatch(input: { shopId: string; pickupDate: string; b
 export async function bulkCreateParcels(batchId:string,input:{parcels:NewParcelInput[]},actor:BatchActor){
   const user=await prisma.user.findUnique({where:{id:actor.id},select:{active:true,role:true,hubId:true}});
   if(!user?.active||user.role!==actor.role||!["SUPERADMIN","OPERATIONS_MANAGER","DISPATCHER"].includes(user.role)) throw new ApiError(403,"FORBIDDEN","You may not add parcels");
-  const batch=await prisma.batch.findFirst({where:{id:batchId,...(user.role==="SUPERADMIN"?{}:{hubId:user.hubId})},select:{id:true,hubId:true}});
+  const batch=await prisma.batch.findFirst({where:{id:batchId,...(user.role==="SUPERADMIN"?{}:{hubId:user.hubId})},select:{id:true,hubId:true,finalizedAt:true}});
   if(!batch) throw new ApiError(404,"BATCH_NOT_FOUND","Batch not found");
+  if(batch.finalizedAt) throw new ApiError(409,"BATCH_FINALIZED","A finalized batch cannot accept more parcels");
   const townshipIds=[...new Set(input.parcels.map(p=>p.townshipId))];
   const townships=await prisma.township.findMany({where:{id:{in:townshipIds}},select:{id:true,nameEn:true,deliveryFee:true}});
   if(townships.length!==townshipIds.length) throw new ApiError(400,"INVALID_TOWNSHIP","One or more townships are invalid");
@@ -305,6 +322,9 @@ export async function bulkCreateParcels(batchId:string,input:{parcels:NewParcelI
   const zoneById=new Map(zones.map(z=>[z.id,z]));
   if(zones.length!==zoneIds.length||input.parcels.some(p=>p.zoneId&&(zoneById.get(p.zoneId)?.townshipId!==p.townshipId||zoneById.get(p.zoneId)?.hubId!==batch.hubId))) throw new ApiError(400,"INVALID_ZONE","Zone must belong to the selected township and batch hub");
   const createAttempt = () => prisma.$transaction(async tx=>{
+    await acquireBatchMutationLock(tx, batchId);
+    const currentBatch = await tx.batch.findUnique({ where: { id: batchId }, select: { finalizedAt: true } });
+    if (!currentBatch || currentBatch.finalizedAt) throw new ApiError(409,"BATCH_FINALIZED","A finalized batch cannot accept more parcels");
     // Serialize allocation in PostgreSQL. SQLite writes are serialized by the database;
     // the bounded retry below also covers a stale read racing another transaction.
     await acquireTrackingAllocationLock(tx);
@@ -324,6 +344,26 @@ export async function bulkCreateParcels(batchId:string,input:{parcels:NewParcelI
   throw new ApiError(409, "TRACKING_ALLOCATION_CONFLICT", "Could not allocate unique tracking numbers; retry the request");
 }
 
+export async function finalizeBatch(batchId: string, actor: BatchActor) {
+  const user = await prisma.user.findUnique({ where: { id: actor.id }, select: { active: true, role: true, hubId: true } });
+  if (!user?.active || user.role !== actor.role || !["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "You may not finalize batches");
+  return prisma.$transaction(async (tx) => {
+    await acquireBatchMutationLock(tx, batchId);
+    const batch = await tx.batch.findFirst({ where: { id: batchId, ...(user.role === "SUPERADMIN" ? {} : { hubId: user.hubId }) }, include: { osObligation: true, _count: { select: { parcels: true } } } });
+    if (!batch) throw new ApiError(404, "BATCH_NOT_FOUND", "Batch not found");
+    if (batch._count.parcels < 1) throw new ApiError(409, "EMPTY_BATCH", "Add at least one parcel before finalizing the batch");
+    if (batch.finalizedAt) {
+      if (!batch.osObligation) throw new ApiError(409, "FINALIZATION_INCOMPLETE", "The finalized batch is missing its OS obligation");
+      return { batchId, finalizedAt: batch.finalizedAt, finalizedBy: batch.finalizedBy, obligation: batch.osObligation, replay: true };
+    }
+    const finalized = await tx.batch.updateMany({ where: { id: batchId, finalizedAt: null }, data: { finalizedAt: new Date(), finalizedBy: actor.id } });
+    if (finalized.count !== 1) throw new ApiError(409, "BATCH_FINALIZE_CONFLICT", "Batch changed while finalizing; refresh and retry");
+    const obligation = await syncBatchObligation(tx, batchId);
+    const current = await tx.batch.findUniqueOrThrow({ where: { id: batchId }, select: { finalizedAt: true, finalizedBy: true } });
+    return { batchId, finalizedAt: current.finalizedAt, finalizedBy: current.finalizedBy, obligation, replay: false };
+  }, { isolationLevel: "Serializable" });
+}
+
 export function pickupAdvancePostingDisposition(parcelCount: number, postedCount: number) {
   if (!Number.isInteger(parcelCount) || parcelCount < 1 || !Number.isInteger(postedCount) || postedCount < 0 || postedCount > parcelCount) throw new ApiError(500, "INVALID_ADVANCE_POSTING_STATE", "Invalid pickup advance posting state");
   if (postedCount === parcelCount) return "ALREADY_POSTED" as const;
@@ -338,10 +378,11 @@ export async function postPickupAdvances(batchId: string, input: { fundingWallet
   if (user.role !== "SUPERADMIN" && !user.hubId) throw new ApiError(403, "FORBIDDEN", "A hub scope is required for this action");
   const batch = await prisma.batch.findFirst({
     where: { id: batchId, ...(user.role === "SUPERADMIN" ? {} : { hubId: user.hubId }) },
-    select: { id: true, pickupDate: true, hubId: true, label:true, advancePaid:true },
+    select: { id: true, pickupDate: true, hubId: true, label:true, advancePaid:true, finalizedAt:true },
   });
   if (!batch) throw new ApiError(404, "BATCH_NOT_FOUND", "Batch not found");
   if (!batch.hubId) throw new ApiError(409, "BATCH_HUB_REQUIRED", "Batch must belong to a hub before advances can be posted");
+  if (!batch.finalizedAt) throw new ApiError(409, "BATCH_NOT_FINALIZED", "Finalize the batch before posting its advance");
   const batchHubId = batch.hubId;
   if (batch.advancePaid <= 0) throw new ApiError(409, "NO_BATCH_ADVANCE", "Batch advance paid must be greater than zero before posting");
 
@@ -408,25 +449,104 @@ export function normalizeDeliveryAddress(address: string) {
   return address.trim().toLocaleLowerCase("en-US").replace(/\s+/g, " ");
 }
 
-export async function linkParcels(input: { parcelIds: string[] }, actor: BatchActor) {
+export async function linkParcels(input: { parcelIds: string[]; responsibleRiderId: string; reason: string }, actor: BatchActor) {
   const parcelIds = [...new Set(input.parcelIds)];
   if (parcelIds.length < 2 || parcelIds.length !== input.parcelIds.length) throw new ApiError(400, "INVALID_LINK_GROUP", "At least two unique parcels are required");
   const user = await prisma.user.findUnique({ where: { id: actor.id }, select: { role: true, active: true, hubId: true } });
   if (!user || !user.active || user.role !== actor.role || !assignmentRoles.includes(user.role)) throw new ApiError(403, "FORBIDDEN", "You may not link parcels");
   if (user.role !== "SUPERADMIN" && !user.hubId) throw new ApiError(403, "FORBIDDEN", "A hub scope is required for this action");
   if (parcelIds.length > 20) throw new ApiError(400, "LINK_GROUP_TOO_LARGE", "A linked group may contain at most 20 parcels");
-  const parcels = await prisma.parcel.findMany({ where: { id: { in: parcelIds } }, select: { id: true, address: true, deliveryFee: true, riderId: true, linkGroupId: true, status: true, batch: { select: { hubId: true } } } });
+  const rider = await prisma.rider.findUnique({ where: { id: input.responsibleRiderId }, include: { user: { select: { active: true, role: true } } } });
+  if (!rider?.user.active || rider.user.role !== "RIDER" || !rider.hubId || (user.role !== "SUPERADMIN" && rider.hubId !== user.hubId)) throw new ApiError(404, "RIDER_NOT_FOUND", "Active responsible rider was not found in scope");
+  const parcels = await prisma.parcel.findMany({ where: { id: { in: parcelIds } }, select: { id: true, address: true, deliveryFee: true, riderId: true, linkGroupId: true, status: true, updatedAt: true, batch: { select: { hubId: true } } } });
   const first = parcels[0];
-  if (parcels.length !== parcelIds.length || !first || first.deliveryFee === null || parcels.some((parcel) => normalizeDeliveryAddress(parcel.address) !== normalizeDeliveryAddress(first.address) || parcel.deliveryFee !== first.deliveryFee || parcel.riderId !== first.riderId || parcel.linkGroupId || parcel.status === "DELIVERED" || !parcel.batch.hubId || (user.role !== "SUPERADMIN" && parcel.batch.hubId !== user.hubId))) {
-    throw new ApiError(409, "PARCELS_NOT_LINKABLE", "Every parcel must be unlinked, undelivered, in scope, assigned to the same rider, and have the same normalized address and base fee");
+  if (parcels.length !== parcelIds.length || !first || parcels.some((parcel) => parcel.linkGroupId || ["DELIVERED", "RETURNED"].includes(parcel.status) || parcel.batch.hubId !== rider.hubId || (user.role !== "SUPERADMIN" && parcel.batch.hubId !== user.hubId))) {
+    throw new ApiError(409, "PARCELS_NOT_LINKABLE", "Every parcel must be unlinked, not delivered or returned, and in the responsible rider's hub");
   }
-  const baseDeliveryFee = first.deliveryFee;
+  const baseDeliveryFee = Math.max(...parcels.map((parcel) => parcel.deliveryFee ?? 0));
   const totalDeliveryFee = calculateLinkedDeliveryFee(baseDeliveryFee, parcels.length);
   return prisma.$transaction(async (tx) => {
     const group = await tx.parcelLinkGroup.create({ data: { address: first.address, baseDeliveryFee, totalDeliveryFee } });
-    const updated = await tx.parcel.updateMany({ where: { id: { in: parcelIds }, linkGroupId: null }, data: { linkGroupId: group.id } });
-    if (updated.count !== parcelIds.length) throw new ApiError(409, "LINK_CONFLICT", "A parcel was linked by another dispatcher; refresh and retry");
-    return tx.parcelLinkGroup.findUniqueOrThrow({ where: { id: group.id }, include: { parcels: { select: { id: true, trackingNumber: true, deliveryFee: true, linkGroupId: true } } } });
+    for (const parcel of parcels) {
+      const status = ["CREATED", "PICKED_UP"].includes(parcel.status) ? "ASSIGNED" : parcel.status;
+      const updated = await tx.parcel.updateMany({ where: { id: parcel.id, linkGroupId: null, updatedAt: parcel.updatedAt }, data: { linkGroupId: group.id, riderId: rider.id, status } });
+      if (updated.count !== 1) throw new ApiError(409, "LINK_CONFLICT", "A parcel changed while linking; refresh and retry");
+      if (parcel.riderId !== rider.id) {
+        await tx.packageAssignment.updateMany({ where: { parcelId: parcel.id, endedAt: null }, data: { endedAt: new Date(), endedById: actor.id, reason: input.reason.trim() } });
+        await tx.packageAssignment.create({ data: { parcelId: parcel.id, riderId: rider.id, assignedById: actor.id, reason: input.reason.trim() } });
+      }
+      await tx.statusHistory.create({ data: { parcelId: parcel.id, fromStatus: parcel.status, toStatus: status, actorId: actor.id, note: `Linked group ${group.id}: ${input.reason.trim()}` } });
+    }
+    return { ...(await tx.parcelLinkGroup.findUniqueOrThrow({ where: { id: group.id }, include: { parcels: { select: { id: true, trackingNumber: true, deliveryFee: true, linkGroupId: true, riderId: true } } } })), responsibleRiderId: rider.id, reassignedCount: parcels.filter((parcel) => parcel.riderId !== rider.id).length };
+  });
+}
+
+export async function unlinkParcelGroup(input: { groupId: string; reason: string; businessDate: string; idempotencyKey: string }, actor: BatchActor) {
+  const user = await prisma.user.findUnique({ where: { id: actor.id }, select: { role: true, active: true, hubId: true } });
+  if (!user?.active || user.role !== actor.role || ![...assignmentRoles, "FINANCE"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "You may not unlink parcels");
+  const date = new Date(`${input.businessDate.slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) throw new ApiError(400, "INVALID_DATE", "Invalid business date");
+  const marker = await prisma.journalEntry.findUnique({ where: { sourceType_sourceId: { sourceType: "PARCEL_LINK_UNLINK", sourceId: input.idempotencyKey } } });
+  if (marker) return { groupId: input.groupId, replay: true };
+  return prisma.$transaction(async (tx) => {
+    const group = await tx.parcelLinkGroup.findUnique({ where: { id: input.groupId }, include: { parcels: { include: { rider: true, batch: { select: { hubId: true } } } } } });
+    if (!group?.parcels.length) throw new ApiError(404, "LINK_GROUP_NOT_FOUND", "Linked parcel group not found");
+    if (group.parcels.some((parcel) => !parcel.batch.hubId || (user.role !== "SUPERADMIN" && parcel.batch.hubId !== user.hubId))) throw new ApiError(403, "FORBIDDEN", "Linked group is outside your hub scope");
+    const groupTypes = ["LINKED_RIDER_COMMISSION", "LINKED_RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_FEE", "LINKED_DELIVERY_COLLECTION", "LINKED_OS_SHORTFALL"];
+    const parcelIds = group.parcels.map((parcel) => parcel.id);
+    const originals = await tx.journalEntry.findMany({ where: { OR: [{ sourceType: { in: groupTypes }, OR: [{ sourceId: group.id }, { sourceId: { startsWith: `${group.id}:` } }] }, { sourceType: "LINKED_RIDER_RECEIVABLE_COD", OR: parcelIds.flatMap((id) => [{ sourceId: id }, { sourceId: { startsWith: `${id}:` } }]) }] }, include: { lines: true } });
+    const liveOriginals = [] as typeof originals;
+    for (const original of originals) if (await journalEntryIsUnreversed(tx, original.id)) liveOriginals.push(original);
+    if (liveOriginals.length > 0) {
+      if (!["SUPERADMIN", "FINANCE"].includes(user.role)) throw new ApiError(403, "FINANCIAL_CORRECTION_REQUIRED", "Only Finance or Superadmin may unlink a financially posted group");
+      await assertCashbookOpen(tx, date, group.parcels[0]!.batch.hubId!);
+    }
+    const liveCollections: typeof originals = [];
+    let reversedCount = 0;
+    for (const original of liveOriginals) {
+      if (original.sourceType === "LINKED_DELIVERY_COLLECTION") liveCollections.push(original);
+      await tx.journalEntry.create({ data: { sourceType: "LEDGER_REVERSAL", sourceId: original.id, hubId: original.hubId, businessDate: date, description: `Unlink correction: ${input.reason.trim()}`, lines: { create: original.lines.map((line) => ({ account: line.account, debit: line.credit, credit: line.debit })) } } });
+      if (["LINKED_RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_COD", "LINKED_RIDER_RECEIVABLE_FEE"].includes(original.sourceType) && original.sourceId) {
+        const projection = await tx.riderReceivableRecognition.findUnique({ where: { sourceType_sourceId: { sourceType: original.sourceType, sourceId: original.sourceId } } });
+        if (projection) await tx.riderReceivableRecognition.create({ data: { sourceType: "RIDER_RECEIVABLE_CORRECTION", sourceId: `${projection.id}:unlink:${input.idempotencyKey}`, riderId: projection.riderId, hubId: projection.hubId, businessDate: date, codAmount: -projection.codAmount, deliveryFee: -projection.deliveryFee, commissionAmount: -projection.commissionAmount, receivableAmount: -projection.receivableAmount } });
+      }
+      reversedCount += 1;
+    }
+    await tx.parcel.updateMany({ where: { linkGroupId: group.id }, data: { linkGroupId: null } });
+    let recalculatedCount = 0;
+    for (const parcel of group.parcels.filter((item) => item.status === "DELIVERED" && item.riderId && item.batch.hubId)) {
+      const commission = calculateCommissionAmount(parcel.deliveryFee ?? 0, resolveCommissionRateBps(parcel.rider!));
+      const recognition = buildRiderReceivableRecognitionLines(parcel.codAmount, parcel.deliveryFee ?? 0, commission);
+      const sourceId = `${parcel.id}:unlink:${input.idempotencyKey}`;
+      if (commission > 0) await tx.journalEntry.create({ data: { sourceType: "RIDER_COMMISSION", sourceId, hubId: parcel.batch.hubId!, businessDate: date, description: `Individual commission after unlink`, lines: { create: buildRiderCommissionLines(commission) } } });
+      if (recognition.receivableAmount > 0) {
+        await tx.journalEntry.create({ data: { sourceType: "RIDER_RECEIVABLE_RECOGNITION", sourceId, hubId: parcel.batch.hubId!, businessDate: date, description: `Individual fee after unlink`, lines: { create: recognition.lines } } });
+        await tx.riderReceivableRecognition.create({ data: { sourceType: "RIDER_RECEIVABLE_RECOGNITION", sourceId, riderId: parcel.riderId!, hubId: parcel.batch.hubId!, businessDate: date, codAmount: parcel.codAmount, deliveryFee: parcel.deliveryFee ?? 0, commissionAmount: commission, receivableAmount: recognition.receivableAmount } });
+      }
+      const way = await tx.deliveryWay.findFirst({ where: { parcelId: parcel.id, outcome: "DELIVERED" }, orderBy: { completedAt: "desc" }, select: { id: true } });
+      if (way) await tx.deliveryWay.update({ where: { id: way.id }, data: { commissionAmount: commission } });
+      recalculatedCount += 1;
+    }
+    let repostedCollectionCount = 0;
+    for (const collection of liveCollections) {
+      let codRemaining = collection.lines.filter((line) => line.account === "OS_BATCH_COD_CLEARING").reduce((sum, line) => sum + line.credit - line.debit, 0);
+      let feeRemaining = collection.lines.filter((line) => line.account === "DELIVERY_FEE_REVENUE").reduce((sum, line) => sum + line.credit - line.debit, 0);
+      const walletLine = collection.lines.find((line) => line.account.startsWith("WALLET_") && line.debit > line.credit);
+      const wallet = walletLine?.account.replace("WALLET_", "") as FundingWallet | undefined;
+      if (!wallet) throw new ApiError(409, "UNLINK_COLLECTION_INVALID", "Linked collection wallet could not be determined");
+      for (const parcel of group.parcels.filter((item) => item.status === "DELIVERED")) {
+        const collectedCod = Math.min(parcel.codAmount, codRemaining);
+        const collectedDeliveryFee = Math.min(parcel.deliveryFee ?? 0, feeRemaining);
+        codRemaining -= collectedCod; feeRemaining -= collectedDeliveryFee;
+        if (collectedCod + collectedDeliveryFee <= 0) continue;
+        const split = buildDeliveryCollectionLines({ collectedCod, collectedDeliveryFee, advanceAmount: parcel.advanceAmount, wallet });
+        await tx.journalEntry.create({ data: { sourceType: "DELIVERY_COLLECTION", sourceId: `${parcel.id}:unlink:${input.idempotencyKey}`, hubId: parcel.batch.hubId!, businessDate: date, description: `Individual collection after unlink`, lines: { create: split.lines } } });
+        repostedCollectionCount += 1;
+      }
+      if (codRemaining !== 0 || feeRemaining !== 0) throw new ApiError(409, "UNLINK_COLLECTION_ALLOCATION_FAILED", "Linked collection could not be allocated to individual parcels");
+    }
+    await tx.journalEntry.create({ data: { sourceType: "PARCEL_LINK_UNLINK", sourceId: input.idempotencyKey, hubId: group.parcels[0]!.batch.hubId!, businessDate: date, description: `Unlinked ${group.id}: ${input.reason.trim()}` } });
+    return { groupId: group.id, parcelCount: group.parcels.length, reversedCount, recalculatedCount, repostedCollectionCount, replay: false };
   });
 }
 

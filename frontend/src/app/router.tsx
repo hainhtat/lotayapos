@@ -3,6 +3,7 @@ import { createBrowserRouter, Navigate, Outlet, useLocation } from "react-router
 import { AuthPage } from "@/pages/auth-page";
 import { useAuth } from "./auth";
 import { useTranslation } from "react-i18next";
+import { canAccessRoute, roleHome } from "@/lib/role-access";
 
 const AppShell = lazy(() => import("@/components/app-shell").then((module) => ({ default: module.AppShell })));
 const Dashboard = lazy(() => import("@/pages/dashboard").then((module) => ({ default: module.Dashboard })));
@@ -32,6 +33,9 @@ function Protected() {
   if (!user) return <Navigate to="/login" replace />;
   if (user.role === "RIDER" && location.pathname !== "/rider-app") {
     return <Navigate to="/rider-app" replace />;
+  }
+  if (user.role !== "RIDER" && location.pathname !== "/rider-app" && !canAccessRoute(user.role, location.pathname)) {
+    return <Navigate to={roleHome(user.role)} replace />;
   }
   return <Outlet />;
 }

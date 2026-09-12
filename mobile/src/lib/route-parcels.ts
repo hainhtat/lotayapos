@@ -4,9 +4,9 @@ import {hubCalendarDate} from "@/lib/hub-time";
 const terminalStatuses=new Set(["DELIVERED","PARTIAL","FAILED","REJECTED","PENDING_RETURN","RETURNED","CANCELLED"]);
 
 export type DeliveryFilter="all"|"toDeliver"|"delivered";
-export type DatePreset="today"|"thisWeek"|"thisMonth";
+export type DatePreset="all"|"today"|"thisWeek"|"thisMonth";
 export const DELIVERY_FILTERS:DeliveryFilter[]=["all","toDeliver","delivered"];
-export const DATE_PRESETS:DatePreset[]=["today","thisWeek","thisMonth"];
+export const DATE_PRESETS:DatePreset[]=["all","today","thisWeek","thisMonth"];
 
 export function isUndeliveredParcel(parcel:Pick<AssignedParcel,"status">){
   return !terminalStatuses.has(parcel.status);
@@ -33,6 +33,7 @@ function addDays(year:number,month:number,day:number,offset:number){
 }
 
 export function datePresetRange(preset:DatePreset,now=new Date()){
+  if(preset==="all")return {};
   const {year,month,day}=ymdParts(hubCalendarDate(now));
   if(preset==="today")return {dateFrom:isoFromParts(year,month,day),dateTo:isoFromParts(year,month,day)};
   if(preset==="thisWeek"){

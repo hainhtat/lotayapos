@@ -163,6 +163,7 @@ model OnlineShop {
   active    Boolean  @default(true)
   batches   Batch[]
   settlements OsSettlement[]
+  osPayments OsAccountPayment[]
   createdAt DateTime @default(now())
 }
 
@@ -191,9 +192,112 @@ model Batch {
   advancePaid Int        @default(0)
   parcels     Parcel[]
   settlementLinks OsSettlementBatch[]
+  osObligation OsBatchObligation?
+  osPaymentAllocations OsPaymentAllocation[]
+  finalizedAt DateTime?
+  finalizedBy String?
   createdAt   DateTime   @default(now())
 
   @@unique([shopId, pickupDate])
+}
+
+model OsBatchObligation {
+  id          String   @id @default(cuid())
+  batchId     String   @unique
+  batch       Batch    @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  shopId      String
+  hubId       String
+  originalCod Int
+  migrated    Boolean  @default(false)
+  openingAdjustment Int @default(0)
+  adjustmentReason String?
+  adjustmentApprovedBy String?
+  adjustmentApprovedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([shopId, hubId])
+}
+
+model OsAccountPayment {
+  id             String                @id @default(cuid())
+  shopId         String
+  shop           OnlineShop            @relation(fields: [shopId], references: [id])
+  hubId          String
+  businessDate   DateTime
+  note           String
+  reference      String?
+  status         String                @default("POSTED")
+  idempotencyKey String                @unique
+  postedBy       String
+  voidedAt       DateTime?
+  voidedBy       String?
+  voidReason     String?
+  replacesId     String?
+  replacedById   String?               @unique
+  journalEntryId String                @unique
+  creditApplied  Int                   @default(0)
+  requestHash    String?
+  voidIdempotencyKey String?           @unique
+  wallets        OsPaymentWallet[]
+  allocations    OsPaymentAllocation[]
+  creditAllocations OsCreditAllocation[]
+  createdAt      DateTime              @default(now())
+
+  @@index([shopId, hubId, businessDate])
+}
+
+model OsPaymentWallet {
+  id        String           @id @default(cuid())
+  paymentId String
+  payment   OsAccountPayment @relation(fields: [paymentId], references: [id])
+  wallet    String
+  amount    Int
+
+  @@unique([paymentId, wallet])
+}
+
+model OsPaymentAllocation {
+  id        String           @id @default(cuid())
+  paymentId String
+  payment   OsAccountPayment @relation(fields: [paymentId], references: [id])
+  batchId   String
+  batch     Batch            @relation(fields: [batchId], references: [id])
+  amount    Int
+
+  @@unique([paymentId, batchId])
+  @@index([batchId])
+}
+
+model OsReturnCredit {
+  id             String   @id @default(cuid())
+  parcelId       String   @unique
+  batchId        String
+  shopId         String
+  hubId          String
+  amount         Int
+  businessDate   DateTime
+  status         String   @default("POSTED")
+  idempotencyKey String   @unique
+  postedBy       String
+  journalEntryId String?  @unique
+  createdAt      DateTime @default(now())
+  allocations    OsCreditAllocation[]
+
+  @@index([shopId, hubId, businessDate])
+  @@index([batchId])
+}
+
+model OsCreditAllocation {
+  id        String           @id @default(cuid())
+  paymentId String
+  payment   OsAccountPayment @relation(fields: [paymentId], references: [id])
+  creditId  String
+  credit    OsReturnCredit   @relation(fields: [creditId], references: [id])
+  amount    Int
+
+  @@unique([paymentId, creditId])
+  @@index([creditId])
 }
 
 model Parcel {

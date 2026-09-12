@@ -3,13 +3,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "@/i18n";
-import { BatchDetailPage } from "./batch-detail-page";
+import { BatchDetailPage, isParcelRowComplete, parseParcelGrid } from "./batch-detail-page";
 
 const apiMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", () => ({ api: apiMock }));
 
 describe("BatchDetailPage settlement totals", () => {
   beforeEach(() => {
+    localStorage.clear();
     apiMock.mockReset();
     apiMock.mockImplementation((path: string) => {
       if (path === "/operations/batches/batch-1") {
@@ -76,6 +77,18 @@ describe("BatchDetailPage settlement totals", () => {
       }
       return Promise.resolve({ data: [] });
     });
+  });
+
+  it("parses quoted CSV addresses and formatted MMK amounts as saveable parcel rows", () => {
+    const [row] = parseParcelGrid('ORDER-1,Ma Su,"Road, between 30 and 50 feet",Yangon,West Yangon,Hlaing,,091234567,25,000 MMK');
+
+    expect(row).toMatchObject({
+      orderId: "ORDER-1",
+      customerName: "Ma Su",
+      address: "Road, between 30 and 50 feet",
+      codAmount: "25000",
+    });
+    expect(isParcelRowComplete({ ...row!, townshipId: "t-hlaing" })).toBe(true);
   });
 
   it("renders totalCod and remainingToOs from the batch detail response", async () => {
@@ -227,8 +240,40 @@ describe("BatchDetailPage settlement totals", () => {
 
     expect(await screen.findByRole("status")).toHaveTextContent("Zone is outside the batch hub");
     expect(screen.getByLabelText("Customer 1")).toHaveValue("Ma Su");
-    expect(screen.getByLabelText("COD 1")).toHaveValue(25000);
+    expect(screen.getByLabelText("COD 1")).toHaveValue("25000");
     const bulkCall = apiMock.mock.calls.find(([path]) => path === "/operations/batches/batch-1/parcels/bulk");
     expect(JSON.parse(bulkCall?.[1]?.body as string).parcels[0]).not.toHaveProperty("trackingNumber");
+  });
+
+  it("saves complete rows while retaining an incomplete spreadsheet draft", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(
+      <MemoryRouter initialEntries={["/batches/batch-1"]}>
+        <QueryClientProvider client={client}>
+          <Routes><Route path="/batches/:id" element={<BatchDetailPage />} /></Routes>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Customer 1"), { target: { value: "Ma Su" } });
+    fireEvent.change(screen.getByLabelText("Address 1"), { target: { value: "Hlaing" } });
+    fireEvent.change(screen.getByLabelText("Region / State 1"), { target: { value: "r-yangon" } });
+    fireEvent.change(screen.getByLabelText("Township 1"), { target: { value: "t-hlaing" } });
+    fireEvent.change(screen.getByLabelText("COD 1"), { target: { value: "25,000" } });
+    fireEvent.change(screen.getByLabelText("Customer 2"), { target: { value: "unfinished" } });
+
+    const saveButton = screen.getByRole("button", { name: "Save parcels (1)" });
+    expect(saveButton).toBeEnabled();
+    fireEvent.click(saveButton);
+
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith(
+      "/operations/batches/batch-1/parcels/bulk",
+      expect.objectContaining({ method: "POST" }),
+    ));
+    const call = apiMock.mock.calls.find(([path]) => path === "/operations/batches/batch-1/parcels/bulk");
+    expect(JSON.parse(call?.[1]?.body as string).parcels).toEqual([
+      expect.objectContaining({ customerName: "Ma Su", codAmount: 25000 }),
+    ]);
+    await waitFor(() => expect(screen.getByLabelText("Customer 2")).toHaveValue("unfinished"));
   });
 });

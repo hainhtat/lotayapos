@@ -43,7 +43,7 @@ describe("ReportsPage", () => {
       if (path.startsWith("/reports/monthly-operations?")) return Promise.resolve({ data: { totals: { statusTransitions: 4, uniqueParcels: 3 }, transitionCounts: { DELIVERED: 3, FAILED: 1 }, currentStatusCounts: { DELIVERED: 2, FAILED: 1 } } });
       if (path.startsWith("/reports/returns?")) return Promise.resolve({ data: { totals: { events: 1, uniqueParcels: 1, pendingReturnEvents: 1, returnedEvents: 0, advanceAmount: 5000 }, events: [{ id: "event-1", occurredAt: "2026-09-04T01:00:00Z", fromStatus: "FAILED", toStatus: "PENDING_RETURN", reasonCode: "CUSTOMER_REJECTED", overdue: true, parcel: { trackingNumber: "TRK-RETURN", orderId: "OS-1", status: "PENDING_RETURN", advanceAmount: 5000, batch: { label: "September" } } }] } });
       if (path.startsWith("/reports/rider-performance?")) return Promise.resolve({ data: { totals: { riders: 1, completedWays: 5, delivered: 4, commissionAmount: 2000 }, riders: [{ riderId: "rider-1", riderName: "Aung Aung", completedWays: 5, delivered: 4, partial: 0, failed: 1, rejected: 0, superseded: 0, commissionAmount: 2000 }] } });
-      if (path.startsWith("/reports/os-statements?")) return Promise.resolve({ data: { totals: { records: 1, settlements: 1, reversedOrReplaced: 0, grossCollectedCod: 10000, advanceDeduction: 5000, returnDeduction: 0, deliveryFeeDeduction: 1000, adjustmentAmount: 0, netAmount: 4000 }, settlements: [{ id: "os-1", businessDate: "2026-09-04", status: "POSTED", grossCollectedCod: 10000, advanceDeduction: 5000, returnDeduction: 0, deliveryFeeDeduction: 1000, adjustmentAmount: 0, netAmount: 4000, wallet: "CASH", shop: { name: "SNMD" } }] } });
+      if (path.startsWith("/reports/os-statements?")) return Promise.resolve({ data: { source: "OS_ACCOUNT", totals: { records: 1, settlements: 1, reversedOrReplaced: 0, originalCod: 30000, advancesPaid: 10000, paymentsPaid: 5000, returnedCod: 2000, outstanding: 13000, creditAvailable: 0, walletPaid: 5000, creditApplied: 0 }, accountBatches: [{ batchId: "batch-1", label: "Finalized September", pickupDate: "2026-09-04", originalCod: 30000, advancePaid: 10000, paymentPaid: 5000, returnedCod: 2000, creditAvailable: 0, outstanding: 13000 }], settlements: [] } });
       if (path === "/operations/parcels/manifest/preview") {
         const body = init?.body ? JSON.parse(init.body) as { statuses?: string[]; dateFrom?: string } : {};
         return Promise.resolve({
@@ -113,6 +113,16 @@ describe("ReportsPage", () => {
     await waitFor(() => expect(apiRawMock).toHaveBeenCalledWith(expect.stringMatching(/^\/reports\/returns\?.*&format=csv$/)));
     fireEvent.click(screen.getByRole("tab", { name: "Rider performance" }));
     expect((await screen.findAllByText("Aung Aung")).length).toBeGreaterThan(0);
+  });
+
+  it("renders simplified OS account balances without legacy settlement arithmetic", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReportsPage /></QueryClientProvider>);
+    fireEvent.click(screen.getByRole("tab", { name: "OS statements" }));
+    expect(await screen.findByText("Finalized September")).toBeInTheDocument();
+    expect(screen.getAllByText("30,000 MMK").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("13,000 MMK").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Gross collected COD")).not.toBeInTheDocument();
   });
 
   it("loads on-screen daily delivery status with today and all statuses", async () => {

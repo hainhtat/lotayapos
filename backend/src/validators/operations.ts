@@ -73,6 +73,15 @@ export const linkParcelsValidation = [
   body("parcelIds").isArray({ min: 2, max: 20 }),
   body("parcelIds.*").isString().trim().notEmpty(),
   body("parcelIds").custom((ids: string[]) => new Set(ids).size === ids.length).withMessage("parcelIds must be unique"),
+  body("responsibleRiderId").isString().trim().notEmpty(),
+  body("reason").isString().trim().isLength({ min: 3, max: 500 }),
+];
+
+export const unlinkParcelsValidation = [
+  param("id").isString().trim().notEmpty(),
+  body("reason").isString().trim().isLength({ min: 3, max: 500 }),
+  body("businessDate").isISO8601(),
+  body("idempotencyKey").isString().trim().isLength({ min: 8, max: 100 }).matches(/^[A-Za-z0-9._:-]+$/),
 ];
 
 export const reassignParcelValidation = [

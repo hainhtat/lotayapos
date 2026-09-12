@@ -223,7 +223,7 @@ describe("FinancePage",()=>{
     expect(rider.closest("tr")).toHaveTextContent("44,000 MMK");
   });
 
-  it("renders previous batch settlement components and filters by online shop", async () => {
+  it.skip("legacy: renders previous batch settlement components and filters by online shop", async () => {
     apiMock.mockImplementation((path: string) => {
       if (path === "/operations/batches") return Promise.resolve({ data: [] });
       if (path === "/finance/expense-categories") return Promise.resolve({ data: [] });
@@ -249,7 +249,7 @@ describe("FinancePage",()=>{
     expect(screen.getByText("18,000 MMK")).toBeInTheDocument();
   });
 
-  it("previews selected completed batches and posts the reviewed immutable OS settlement", async () => {
+  it.skip("legacy: previews selected completed batches and posts the reviewed immutable OS settlement", async () => {
     apiMock.mockImplementation((path: string, init?: RequestInit) => {
       if (path === "/operations/batches") return Promise.resolve({ data: [] });
       if (path === "/finance/expense-categories" || path.startsWith("/finance/expenses?")) return Promise.resolve({ data: [] });
@@ -284,7 +284,7 @@ describe("FinancePage",()=>{
     expect(JSON.parse(call[1].body)).toMatchObject({ shopId: "shop-1", hubId: "hub-1", batchIds: ["batch-1"], advanceDeduction: 15000, returnDeduction: 1000, deliveryFeeDeduction: 4000, adjustmentAmount: 0 });
   });
 
-  it("marks under-collected batches as not selectable for OS settlement", async () => {
+  it.skip("legacy: marks under-collected batches as not selectable for OS settlement", async () => {
     apiMock.mockImplementation((path: string) => {
       if (path === "/master-data/shops") return Promise.resolve({ data: [{ id: "shop-1", name: "SNMD" }] });
       if (path.startsWith("/finance/os-settlement-drafts")) return Promise.resolve({ data: [{
@@ -513,14 +513,14 @@ describe("FinancePage",()=>{
     expect(screen.queryByRole("button", { name: "Received" })).not.toBeInTheDocument();
   });
 
-  it("saves a reviewed OS statement draft with an idempotency key", async () => {
+  it.skip("legacy: saves a reviewed OS statement draft with an idempotency key", async () => {
     apiMock.mockImplementation((path:string,init?:RequestInit)=>{
       if(path==="/master-data/shops")return Promise.resolve({data:[{id:"shop-1",name:"SNMD"}]});
       if(path==="/master-data")return Promise.resolve({data:{hubs:[{id:"hub-1",name:"Main Hub"}]}});
       if(path.startsWith("/finance/os-settlement-drafts/saved"))return Promise.resolve({data:[]});
       if(path==="/finance/os-settlement-drafts"&&init)return Promise.resolve({data:{id:"draft-1",version:1}});
       if(path.startsWith("/finance/os-settlement-drafts"))return Promise.resolve({data:[{id:"batch-1",label:"June batch",pickupDate:"2026-06-01",shop:{id:"shop-1",name:"SNMD"},hubId:"hub-1",hub:{id:"hub-1",name:"Main Hub"},parcelCount:1,advancePaid:5000,collectedCod:10000,deliveryFees:1000,returnedAdvance:0,unresolvedCount:0,eligible:true}]});
-      if(path==="/finance/os-settlements/preview"&&init)return Promise.resolve({data:{shop:{id:"shop-1",name:"SNMD"},hubId:"hub-1",batches:[{batchId:"batch-1",label:"June batch",collectedCod:10000,deliveryFees:1000,returnedAdvance:0,advanceAmount:5000}],defaults:{grossCollectedCod:10000,advanceDeduction:5000,returnDeduction:0,deliveryFeeDeduction:1000,adjustmentAmount:0,netAmount:4000}}});
+      if(path==="/finance/os-settlements/preview"&&init)return Promise.resolve({data:{shop:{id:"shop-1",name:"SNMD"},hubId:"hub-1",batches:[{batchId:"batch-1",label:"June batch",collectedCod:1000,deliveryFees:1000,returnedAdvance:0,advanceAmount:5000}],defaults:{grossCollectedCod:1000,advanceDeduction:5000,returnDeduction:0,deliveryFeeDeduction:1000,adjustmentAmount:0,netAmount:-5000}}});
       if(path.startsWith("/finance/rider-outstanding")||path.startsWith("/finance/os-settlements")||path.startsWith("/finance/os-pending-returns"))return Promise.resolve({data:path.startsWith("/finance/os-pending-returns")?emptyPendingReturns:[]});
       if(path==="/operations/batches"||path==="/finance/expense-categories"||path.startsWith("/finance/expenses?"))return Promise.resolve({data:[]});
       return Promise.resolve({data:ledgerReport});
@@ -531,6 +531,7 @@ describe("FinancePage",()=>{
     await user.click(await screen.findByRole("checkbox",{name:"Select June batch for settlement"}));
     await user.click(screen.getByRole("button",{name:"Review settlement"}));
     await user.type(await screen.findByLabelText("Reason for saving this draft"),"Awaiting manager review");
+    expect(screen.getByRole("button",{name:"Save draft"})).toBeEnabled();
     await user.click(screen.getByRole("button",{name:"Save draft"}));
     await waitFor(()=>expect(apiMock).toHaveBeenCalledWith("/finance/os-settlement-drafts",expect.objectContaining({method:"POST"})));
     const call=apiMock.mock.calls.find(([path,init])=>path==="/finance/os-settlement-drafts"&&init)!;
@@ -538,7 +539,7 @@ describe("FinancePage",()=>{
     expect(JSON.parse(call[1].body).idempotencyKey).toMatch(/^os-draft-/);
   });
 
-  it("amends a posted settlement through an explicit reversal and replacement warning", async () => {
+  it.skip("legacy: amends a posted settlement through an explicit reversal and replacement warning", async () => {
     const posted={id:"settlement-1",businessDate:"2026-08-10",status:"POSTED",netAmount:4000,wallet:"CASH",version:2,shop:{id:"shop-1",name:"SNMD"},batches:[{batchId:"batch-1"}],advanceDeduction:5000,returnDeduction:0,deliveryFeeDeduction:1000,adjustmentAmount:0,adjustmentReason:null};
     apiMock.mockImplementation((path:string,init?:RequestInit)=>{
       if(path==="/finance/os-settlements/settlement-1"&&!init)return Promise.resolve({data:{...posted,editHistory:[{id:"audit-1",action:"REVERSED_AND_REPLACED",reason:"Correct fee",createdAt:"2026-08-10",beforeJson:"{}",afterJson:"{}"}]}});
@@ -560,5 +561,47 @@ describe("FinancePage",()=>{
     const call=apiMock.mock.calls.find(([path,init])=>path==="/finance/os-settlements/settlement-1"&&init)!;
     expect(JSON.parse(call[1].body)).toEqual(expect.objectContaining({expectedVersion:2,reason:"Correct statement fee",advanceDeduction:5000}));
     expect(JSON.parse(call[1].body).idempotencyKey).toMatch(/^os-amend-/);
+  });
+
+  it("records OS money only through the OS account payment workflow", async () => {
+    apiMock.mockImplementation((path:string,init?:RequestInit)=>{
+      if(path==="/finance/os-accounts")return Promise.resolve({data:{shops:[{
+        shop:{id:"shop-1",name:"SNMD"},hubId:"hub-1",originalCod:30000,advancesPaid:10000,paymentsPaid:0,returnedCod:0,outstanding:20000,creditAvailable:0,
+        batches:[{batchId:"batch-1",label:"Finalized batch",pickupDate:"2026-09-10",hubId:"hub-1",originalCod:30000,advancePaid:10000,paymentPaid:0,returnedCod:0,creditAvailable:0,outstanding:20000}],
+      }]}});
+      if(path==="/finance/os-payments"&&init)return Promise.resolve({data:{id:"payment-1"}});
+      if(path.startsWith("/finance/rider-outstanding")||path.startsWith("/finance/os-settlements")||path.startsWith("/finance/os-pending-returns"))return Promise.resolve({data:path.startsWith("/finance/os-pending-returns")?emptyPendingReturns:[]});
+      if(path==="/master-data/shops"||path==="/operations/batches"||path==="/finance/expense-categories"||path.startsWith("/finance/expenses?"))return Promise.resolve({data:[]});
+      return Promise.resolve({data:ledgerReport});
+    });
+    const user=userEvent.setup();renderPage("/finance?tab=settlements");
+    await user.click(await screen.findByRole("button",{name:"Record payment"}));
+    const form=screen.getByRole("form",{name:"Record OS payment"});
+    expect(within(form).getByLabelText("Cash")).toHaveValue(20000);
+    await user.type(within(form).getByLabelText("note"),"Pay finalized batch");
+    await user.click(within(form).getByRole("button",{name:"Save"}));
+    await waitFor(()=>expect(apiMock).toHaveBeenCalledWith("/finance/os-payments",expect.objectContaining({method:"POST"})));
+    expect(apiMock.mock.calls.some(([path,init])=>typeof path==="string"&&path.startsWith("/finance/os-settlement")&&Boolean(init))).toBe(false);
+  });
+
+  it("keeps legacy settlement history read-only", async () => {
+    const posted={id:"settlement-1",businessDate:"2026-08-10",status:"POSTED",netAmount:4000,wallet:"CASH",version:2,shop:{id:"shop-1",name:"SNMD"},batches:[{batchId:"batch-1"}],advanceDeduction:5000,returnDeduction:0,deliveryFeeDeduction:1000,adjustmentAmount:0,adjustmentReason:null};
+    apiMock.mockImplementation((path:string)=>{
+      if(path==="/finance/os-settlements/settlement-1")return Promise.resolve({data:{...posted,editHistory:[{id:"audit-1",action:"REVERSED_AND_REPLACED",reason:"Historical correction",createdAt:"2026-08-10",beforeJson:"{}",afterJson:"{}"}]}});
+      if(path==="/finance/os-settlements")return Promise.resolve({data:[posted]});
+      if(path==="/finance/os-accounts")return Promise.resolve({data:{shops:[]}});
+      if(path.startsWith("/finance/rider-outstanding")||path.startsWith("/finance/os-pending-returns"))return Promise.resolve({data:path.startsWith("/finance/os-pending-returns")?emptyPendingReturns:[]});
+      if(path==="/master-data/shops"||path==="/operations/batches"||path==="/finance/expense-categories"||path.startsWith("/finance/expenses?"))return Promise.resolve({data:[]});
+      return Promise.resolve({data:ledgerReport});
+    });
+    const user=userEvent.setup();renderPage("/finance?tab=settlements");
+    expect(await screen.findByText("Historical · read only")).toBeInTheDocument();
+    expect(screen.queryByRole("button",{name:"Reverse"})).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("button",{name:"SNMD · version 2 details"}));
+    const detail=screen.getByRole("form",{name:"Amend settlement"});
+    expect(within(detail).getByLabelText("Amend settlement Settlement business date")).toBeDisabled();
+    expect(within(detail).getByText("Historical correction")).toBeInTheDocument();
+    expect(within(detail).queryByLabelText("Reason for amendment")).not.toBeInTheDocument();
+    expect(within(detail).queryByRole("button",{name:"Reverse and post replacement"})).not.toBeInTheDocument();
   });
 });

@@ -28,17 +28,27 @@ const mobileLinks = [
   { to: "/settings", label: "settings", icon: Settings },
   { to: "/profile", label: "profile", icon: ChevronRight },
 ];
+const rolesByPath: Record<string,string[]> = {
+  "/": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER","AUDITOR"],
+  "/operations/batches": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER"],
+  "/operations/dispatch": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER","AUDITOR"],
+  "/finance": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","AUDITOR"],
+  "/reports": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","AUDITOR"],
+  "/settings": ["SUPERADMIN","OPERATIONS_MANAGER"],
+  "/profile": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER","AUDITOR"],
+};
+const linksForRole = <T extends {to:string}>(items:T[],role?:string) => items.filter(item=>rolesByPath[item.to]?.includes(role??""));
 const navClass = ({ isActive }: { isActive: boolean }) =>
   `flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold ${isActive ? "bg-[#eaf6ff] text-[#0787df] dark:bg-[#133044]" : "text-slate-500 hover:bg-slate-50 dark:hover:bg-white/5"}`;
 
-function MobileNav() {
+function MobileNav({ role }: { role?: string }) {
   const { t } = useTranslation();
   return (
     <nav
       aria-label={t("mobileNavigation")}
-      className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-7 border-t bg-white dark:border-white/10 dark:bg-[#181a1d] lg:hidden"
+      className="fixed inset-x-0 bottom-0 z-40 flex justify-around border-t bg-white dark:border-white/10 dark:bg-[#181a1d] lg:hidden"
     >
-      {mobileLinks.map(({ to, label, icon: Icon }) => (
+      {linksForRole(mobileLinks,role).map(({ to, label, icon: Icon }) => (
         <NavLink
           key={to}
           to={to}
@@ -67,18 +77,18 @@ export function AppShell() {
           <span className="font-display text-2xl font-bold tracking-tight">LOTAYA</span>
         </div>
         <nav aria-label={t("primaryNavigation")} className="mt-12 flex flex-1 flex-col gap-2">
-          {links.map(({ to, label, icon: Icon }) => (
+          {linksForRole(links,user?.role).map(({ to, label, icon: Icon }) => (
             <NavLink key={to} to={to} end={to === "/"} className={navClass}>
               <Icon size={19} />
               {t(label)}
             </NavLink>
           ))}
-          <div className="mt-auto">
+          {rolesByPath["/settings"].includes(user?.role??"") && <div className="mt-auto">
             <NavLink to="/settings" className={navClass}>
               <Settings size={19} />
               {t("settings")}
             </NavLink>
-          </div>
+          </div>}
         </nav>
         <div className="mt-5 flex items-center gap-3 border-t border-black/5 pt-5 dark:border-white/10">
           <NavLink to="/profile" className="min-w-0 flex-1 rounded-lg p-1 focus:outline-none focus:ring-2 focus:ring-[#1598ef]">
@@ -90,7 +100,7 @@ export function AppShell() {
           </button>
         </div>
       </aside>
-      <MobileNav />
+      <MobileNav role={user?.role} />
       <main className="lg:pl-64">
         <header className="flex h-20 items-center justify-between border-b border-black/5 bg-white/80 px-6 backdrop-blur dark:border-white/10 dark:bg-[#181a1d]/80 lg:px-10">
           <div>
