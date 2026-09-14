@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "@/i18n";
-import { BatchDetailPage, isParcelRowComplete, parseParcelGrid } from "./batch-detail-page";
+import { BatchDetailPage, isParcelRowComplete, normalizeManifestRow, parseParcelGrid } from "./batch-detail-page";
 
 const apiMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", () => ({ api: apiMock }));
@@ -89,6 +89,12 @@ describe("BatchDetailPage settlement totals", () => {
       codAmount: "25000",
     });
     expect(isParcelRowComplete({ ...row!, townshipId: "t-hlaing" })).toBe(true);
+  });
+
+  it("normalizes numeric PDF COD values before grid validation", () => {
+    const row = normalizeManifestRow({ customerName: "Customer", address: "Road", townshipId: "t-hlaing", codAmount: 125000 });
+    expect(row.codAmount).toBe("125000");
+    expect(isParcelRowComplete(row)).toBe(true);
   });
 
   it("renders totalCod and remainingToOs from the batch detail response", async () => {

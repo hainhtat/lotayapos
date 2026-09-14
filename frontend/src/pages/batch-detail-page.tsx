@@ -115,6 +115,21 @@ export function appendParcelDraft(rows: ParcelRow[], draft: ParcelRow): ParcelRo
   return [...rows, { ...draft }];
 }
 
+/** Normalize extracted/API preview values before placing them in string inputs. */
+export function normalizeManifestRow(row: Partial<Omit<ParcelRow, "codAmount">> & { codAmount?: unknown }): ParcelRow {
+  return {
+    orderId: String(row.orderId ?? ""),
+    customerName: String(row.customerName ?? ""),
+    address: String(row.address ?? ""),
+    regionStateId: String(row.regionStateId ?? ""),
+    districtId: String(row.districtId ?? ""),
+    townshipId: String(row.townshipId ?? ""),
+    zoneId: String(row.zoneId ?? ""),
+    customerPhone: String(row.customerPhone ?? ""),
+    codAmount: String(row.codAmount ?? ""),
+  };
+}
+
 export function formatTrackingNumber(sequence: number) {
   return `LTY-${String(sequence).padStart(3, "0")}`;
 }
@@ -516,7 +531,7 @@ export function BatchDetailPage() {
   });
   const applyManifestPreview = () => {
     if (!preview) return;
-    setRows(preview.rows.map(({ sourcePage: _sourcePage, confidence: _confidence, warnings: _warnings, ...row }) => row));
+    setRows(preview.rows.map(({ sourcePage: _sourcePage, confidence: _confidence, warnings: _warnings, ...row }) => normalizeManifestRow(row)));
     setMessage(t("manifestDraftApplied", { count: preview.rows.length }));
     setPreview(null);
   };
