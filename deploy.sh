@@ -64,8 +64,10 @@ rsync -a node_modules/ "${RELEASE}/backend/node_modules/"
 install -m 600 "${SHARED}/lotaya.env" "${RELEASE}/backend/.env"
 
 cd "${REPO}/frontend"
-export VITE_API_BASE_URL="${VITE_API_BASE_URL:-https://lotaya.mmds.site/api/v1}"
-export VITE_RIDER_ANDROID_DOWNLOAD_URL="${VITE_RIDER_ANDROID_DOWNLOAD_URL:-https://lotaya.mmds.site/app/lotaya-rider.apk}"
+# Use same-origin API/download defaults so every configured Lotaya hostname
+# (lotaya.mmds.site, lt.mmds.site, etc.) authenticates against itself.
+export VITE_API_BASE_URL="${VITE_API_BASE_URL:-/api/v1}"
+export VITE_RIDER_ANDROID_DOWNLOAD_URL="${VITE_RIDER_ANDROID_DOWNLOAD_URL:-/app/lotaya-rider.apk}"
 npm ci --include=dev
 npx vite build
 rsync -a --delete dist/ "${RELEASE}/frontend/dist/"
