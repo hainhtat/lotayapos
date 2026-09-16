@@ -7,9 +7,8 @@ for file in fullchain.pem privkey.pem; do
 done
 command -v openssl >/dev/null || { echo "openssl is required to validate TLS certificates" >&2; exit 1; }
 openssl x509 -in "${CERT_DIR}/fullchain.pem" -checkend 86400 -noout >/dev/null || { echo "TLS certificate is invalid or expires within 24 hours" >&2; exit 1; }
-SAN="$(openssl x509 -in "${CERT_DIR}/fullchain.pem" -noout -ext subjectAltName)"
 for hostname in ${LOTAYA_HOSTNAMES}; do
-  printf '%s\n' "${SAN}" | grep -q "DNS:${hostname}" || { echo "TLS certificate does not cover ${hostname}" >&2; exit 1; }
+  openssl x509 -in "${CERT_DIR}/fullchain.pem" -noout -checkhost "${hostname}" >/dev/null || { echo "TLS certificate does not cover ${hostname}" >&2; exit 1; }
 done
 command -v curl >/dev/null || { echo "curl is required for readiness checks" >&2; exit 1; }
 echo "Deployment prerequisites passed."

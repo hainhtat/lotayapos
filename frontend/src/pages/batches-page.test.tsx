@@ -8,7 +8,7 @@ import { BatchesPage } from "./batches-page";
 const apiMock = vi.hoisted(() => vi.fn());
 const authState = vi.hoisted(() => ({ role: "OPERATIONS_MANAGER" }));
 
-vi.mock("@/lib/api", () => ({ api: apiMock }));
+vi.mock("@/lib/api", () => ({ api: apiMock, ApiError: class ApiError extends Error {} }));
 vi.mock("@/app/auth",()=>({useAuth:()=>({user:{id:"ops-1",name:"Ops",email:"ops@example.com",role:authState.role}})}));
 
 function renderPage() {
@@ -78,6 +78,34 @@ describe("BatchesPage", () => {
     const row = screen.getByText("SNMD 11.08.2026").closest("tr");
     expect(row).toHaveTextContent("3");
     expect(row).toHaveTextContent("2");
+  });
+
+  it("creates an advance once with all three wallet amounts and an idempotency key", async () => {
+    authState.role = "SUPERADMIN";
+    apiMock.mockImplementation((path: string) => path === "/master-data" ? Promise.resolve({data:{shops:[{id:"shop",name:"Shop"}],hubs:[{id:"hub",name:"Hub"}]}}) : path === "/operations/batches" ? Promise.resolve({data:{id:"created"}}) : Promise.resolve({data:[]}));
+    renderPage();
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/master-data"));
+    fireEvent.click(screen.getByRole("button", {name:"Create new batch"}));
+    const dialog = await screen.findByRole("dialog", {name:"Create batch"});
+    fireEvent.change(within(dialog).getByLabelText("Batch label"), {target:{value:"September pickup"}});
+    fireEvent.change(within(dialog).getByLabelText("Cash"), {target:{value:"100"}});
+    fireEvent.change(within(dialog).getByLabelText("KBZ Pay"), {target:{value:"200"}});
+    fireEvent.change(within(dialog).getByLabelText("Wave Pay"), {target:{value:"300"}});
+    fireEvent.click(within(dialog).getByRole("button", {name:"Save and add parcels"}));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/operations/batches", expect.objectContaining({method:"POST"})));
+    const body = JSON.parse(apiMock.mock.calls.find(([path]) => path === "/operations/batches")![1].body);
+    expect(body).toMatchObject({advancePaid:600, wallets:{cash:100,kbzPay:200,wavePay:300}, shopId:"shop",hubId:"hub"});
+    expect(body.idempotencyKey).toMatch(/^batch-/);
+  });
+
+  it("filters History on the server and hides redundant single shop and hub filters", async () => {
+    apiMock.mockImplementation((path:string) => path === "/master-data" ? Promise.resolve({data:{shops:[{id:"shop",name:"Shop"}],hubs:[{id:"hub",name:"Hub"}]}}) : Promise.resolve({data:[]}));
+    renderPage();
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith(expect.stringContaining("view=active")));
+    fireEvent.click(screen.getByRole("button",{name:"History"}));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith(expect.stringContaining("view=history")));
+    expect(screen.queryByLabelText("All batches Online shop")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("All batches Hub")).not.toBeInTheDocument();
   });
 
   it("queries filtered batch pages and navigates the server pagination", async () => {

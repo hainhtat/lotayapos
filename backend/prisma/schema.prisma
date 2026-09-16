@@ -190,15 +190,33 @@ model Batch {
   hub         Hub?       @relation("HubBatches", fields: [hubId], references: [id])
   label       String
   advancePaid Int        @default(0)
+  automaticAccounting Boolean @default(false)
+  creationKey String? @unique
+  creationHash String?
+  createdBy String?
   parcels     Parcel[]
   settlementLinks OsSettlementBatch[]
   osObligation OsBatchObligation?
+  historicalOsSettlement OsHistoricalSettlement?
   osPaymentAllocations OsPaymentAllocation[]
   finalizedAt DateTime?
   finalizedBy String?
   createdAt   DateTime   @default(now())
 
   @@unique([shopId, pickupDate])
+}
+
+model OsHistoricalSettlement {
+  id String @id @default(cuid())
+  batchId String @unique
+  batch Batch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  amount Int
+  businessDate DateTime
+  actorId String
+  reason String
+  adjustmentId String
+  journalEntryId String? @unique
+  createdAt DateTime @default(now())
 }
 
 model OsBatchObligation {
@@ -328,8 +346,10 @@ model Parcel {
   townshipRelation       Township?           @relation(fields: [townshipId], references: [id])
   reasonCode             String?
   returnDueAt            DateTime?
+  plannedDeliveryDate    DateTime?
   statusHistory          StatusHistory[]
   fieldAudits            ParcelFieldAudit[]
+  @@index([status, createdAt])
   ways                   DeliveryWay[]
   alerts                 Alert[]
   createdAt              DateTime            @default(now())

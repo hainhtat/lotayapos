@@ -52,12 +52,19 @@ async function scopedHub(actor: Actor, requestedHubId: string | undefined, mutat
   return user.hubId!;
 }
 
-export async function syncBatchObligation(tx: Prisma.TransactionClient, batchId: string) {
-  const batch = await tx.batch.findUnique({ where: { id: batchId }, select: { id: true, shopId: true, hubId: true, pickupDate: true, finalizedAt: true, parcels: { select: { codAmount: true } }, osObligation: true } });
+export async function syncBatchObligation(tx: Prisma.TransactionClient, batchId: string, actorId?: string) {
+  const batch = await tx.batch.findUnique({ where: { id: batchId }, select: { id: true, shopId: true, hubId: true, pickupDate: true, finalizedAt: true, automaticAccounting: true, parcels: { select: { codAmount: true } }, osObligation: true } });
   if (!batch?.hubId) throw new ApiError(409, "BATCH_HUB_REQUIRED", "Batch must belong to a hub");
-  if (!batch.finalizedAt) throw new ApiError(409, "BATCH_NOT_FINALIZED", "Finalize the batch before creating its OS obligation");
+  if (!batch.finalizedAt && !batch.automaticAccounting) throw new ApiError(409, "BATCH_NOT_FINALIZED", "Finalize the batch before creating its OS obligation");
   const originalCod = batch.parcels.reduce((sum, parcel) => sum + parcel.codAmount, 0);
-  if (batch.osObligation) return batch.osObligation;
+  if (!Number.isSafeInteger(originalCod)) throw new ApiError(400, "INVALID_AMOUNT", "Batch COD exceeds the supported amount");
+  if (batch.osObligation) {
+    if (!batch.automaticAccounting || batch.osObligation.originalCod === originalCod) return batch.osObligation;
+    await assertCashbookOpen(tx, batch.pickupDate, batch.hubId);
+    const delta = originalCod - batch.osObligation.originalCod;
+    await tx.journalEntry.create({ data: { sourceType: "OS_BATCH_COD_CHANGE", sourceId: `${batchId}:${randomUUID()}`, hubId: batch.hubId, businessDate: batch.pickupDate, description: `Saved parcel COD change for ${batchId}: ${batch.osObligation.originalCod} to ${originalCod}; actor ${actorId ?? "system"}`, lines: { create: buildCutoverAdjustmentLines(delta) } } });
+    return tx.osBatchObligation.update({ where: { batchId }, data: { originalCod } });
+  }
   const obligation = await tx.osBatchObligation.create({ data: { batchId, shopId: batch.shopId, hubId: batch.hubId, originalCod, migrated: false } });
   if (originalCod > 0) await tx.journalEntry.create({ data: { sourceType: "OS_BATCH_OBLIGATION", sourceId: batchId, hubId: batch.hubId, businessDate: batch.pickupDate, description: `OS batch COD obligation ${batchId}`, lines: { create: [{ account: "OS_BATCH_COD_CLEARING", debit: originalCod, credit: 0 }, { account: "OS_COD_PAYABLE", debit: 0, credit: originalCod }] } } });
   return obligation;
@@ -82,20 +89,34 @@ export async function postedAdvanceByBatch(db: Db, batchIds: string[]) {
   return result;
 }
 
-async function accountRows(db: Db, input: { shopId?: string; hubId: string }) {
+export async function accountRows(db: Db, input: { shopId?: string; hubId: string }, projectMissingBatchIds: string[] = []) {
   const obligations = await db.osBatchObligation.findMany({
     where: { ...(input.shopId ? { shopId: input.shopId } : {}), hubId: input.hubId },
-    include: { batch: { include: { shop: true } } },
+    include: { batch: { include: { shop: true, historicalOsSettlement: true } } },
     orderBy: [{ batch: { pickupDate: "asc" } }, { batchId: "asc" }],
   });
+  const projected = projectMissingBatchIds.length ? await db.batch.findMany({
+    where: { id: { in: projectMissingBatchIds }, hubId: input.hubId, osObligation: null },
+    include: { shop: true, historicalOsSettlement: true, parcels: { select: { id: true, codAmount: true, status: true } } },
+  }) : [];
+  for (const batch of projected) obligations.push({
+    id: `historical-opening:${batch.id}`, batchId: batch.id, shopId: batch.shopId, hubId: input.hubId,
+    originalCod: batch.parcels.reduce((sum, parcel) => sum + parcel.codAmount, 0), migrated: true,
+    openingAdjustment: 0, adjustmentReason: null, adjustmentApprovedBy: null, adjustmentApprovedAt: null,
+    createdAt: batch.createdAt, updatedAt: batch.createdAt, batch,
+  });
   const batchIds = obligations.map((row) => row.batchId);
-  const [allocations, returnCredits, advances, consumedCredits, legacySettlements] = await Promise.all([
+  const [allocations, returnCreditRecords, advances, consumedCredits, legacySettlements] = await Promise.all([
     db.osPaymentAllocation.findMany({ where: { batchId: { in: batchIds }, payment: { status: "POSTED" } }, select: { batchId: true, amount: true } }),
-    db.osReturnCredit.findMany({ where: { batchId: { in: batchIds }, status: "POSTED" }, select: { id: true, batchId: true, amount: true } }),
+    db.osReturnCredit.findMany({ where: { batchId: { in: batchIds } }, select: { id: true, parcelId: true, batchId: true, amount: true, status: true } }),
     postedAdvanceByBatch(db, batchIds),
     db.osCreditAllocation.findMany({ where: { credit: { ...(input.shopId ? { shopId: input.shopId } : {}), hubId: input.hubId }, payment: { status: "POSTED" } }, select: { creditId: true, amount: true } }),
     db.osSettlement.findMany({ where: { hubId: input.hubId, status: "POSTED", reversedAt: null, batches: { some: { batchId: { in: batchIds } } } }, include: { batches: true }, orderBy: [{ businessDate: "asc" }, { createdAt: "asc" }] }),
   ]);
+  const returnCredits = returnCreditRecords.filter(credit => credit.status === "POSTED");
+  for (const batch of projected) for (const parcel of batch.parcels) {
+    if (parcel.status === "RETURNED" && !returnCreditRecords.some(credit => credit.parcelId === parcel.id)) returnCredits.push({ id: `historical-return:${parcel.id}`, parcelId: parcel.id, batchId: batch.id, amount: parcel.codAmount, status: "POSTED" });
+  }
   const paid = new Map<string, number>();
   for (const allocation of allocations) paid.set(allocation.batchId, (paid.get(allocation.batchId) ?? 0) + allocation.amount);
   const consumedByCredit = new Map<string, number>();
@@ -126,8 +147,10 @@ async function accountRows(db: Db, input: { shopId?: string; hubId: string }) {
     const advancePaid = advances.get(row.batchId) ?? 0;
     const paidAmount = paid.get(row.batchId) ?? 0;
     const adjustedOriginalCod = row.originalCod + row.openingAdjustment;
-    const raw = adjustedOriginalCod - advancePaid - returnedCod - paidAmount;
-    return { batchId: row.batchId, label: row.batch.label, pickupDate: row.batch.pickupDate, shop: { id: row.batch.shop.id, name: row.batch.shop.name }, hubId: row.hubId, originalCod: row.originalCod, openingAdjustment: row.openingAdjustment, adjustedOriginalCod, advancePaid, paymentPaid: paidAmount, returnedCod, creditAvailable: Math.max(0, -raw - consumedCredit), outstanding: Math.max(0, raw), migrated: row.migrated };
+    const historicalSettledAmount = row.batch.historicalOsSettlement?.amount ?? 0;
+    const raw = adjustedOriginalCod - advancePaid - returnedCod - paidAmount - historicalSettledAmount;
+    const creditAvailable = Math.min(Math.max(0, returnedCod - consumedCredit), Math.max(0, -raw - consumedCredit));
+    return { batchId: row.batchId, label: row.batch.label, pickupDate: row.batch.pickupDate, shop: { id: row.batch.shop.id, name: row.batch.shop.name }, hubId: row.hubId, originalCod: row.originalCod, openingAdjustment: row.openingAdjustment, adjustedOriginalCod, advancePaid, paymentPaid: paidAmount, historicalSettledAmount, historicallySettled: Boolean(row.batch.historicalOsSettlement), returnedCod, creditAvailable, outstanding: Math.max(0, raw), migrated: row.migrated };
   });
 }
 
@@ -220,7 +243,14 @@ async function createPayment(tx: Prisma.TransactionClient, input: PaymentInput, 
 
 export async function postOsPayment(input: PaymentInput, actor: Actor) {
   const hubId = await scopedHub(actor, input.hubId, true);
-  return prisma.$transaction((tx) => createPayment(tx, input, actor, hubId), { isolationLevel: "Serializable" });
+  // A serialization loser must reread balances and the idempotency record in a fresh transaction.
+  for (let attempt = 0; ; attempt++) {
+    try { return await prisma.$transaction((tx) => createPayment(tx, input, actor, hubId), { isolationLevel: "Serializable" }); }
+    catch (error) {
+      if (!(typeof error === "object" && error !== null && "code" in error && error.code === "P2034")) throw error;
+      if (attempt >= 2) throw new ApiError(409, "PAYMENT_CONFLICT", "Another payment changed this account; retry with the same payment reference");
+    }
+  }
 }
 
 async function voidPayment(tx: Prisma.TransactionClient, input: { id: string; businessDate: string; reason: string; idempotencyKey: string }, actor: Actor, hubId: string) {
@@ -249,7 +279,13 @@ export async function replaceOsPayment(input: { id: string; hubId?: string; busi
     const original = await tx.osAccountPayment.findFirst({ where: { id: input.id, hubId } });
     if (!original) throw new ApiError(404, "PAYMENT_NOT_FOUND", "OS payment not found");
     const priorReplacement = await tx.osAccountPayment.findFirst({ where: { replacesId: original.id, idempotencyKey: input.replacement.idempotencyKey }, include: { wallets: true, allocations: true, creditAllocations: true } });
-    if (priorReplacement) return priorReplacement;
+    if (priorReplacement) {
+      if (priorReplacement.requestHash !== paymentHash({ ...input.replacement, hubId, replacesId: input.id }, hubId)) {
+        throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key was already used for a different OS payment replacement");
+      }
+      await voidPayment(tx, input, actor, hubId);
+      return priorReplacement;
+    }
     await voidPayment(tx, input, actor, hubId);
     const replacement = await createPayment(tx, { ...input.replacement, hubId, replacesId: input.id }, actor, hubId);
     await tx.osAccountPayment.update({ where: { id: input.id }, data: { replacedById: replacement.id } });
@@ -259,11 +295,12 @@ export async function replaceOsPayment(input: { id: string; hubId?: string; busi
 
 export async function osAccountHistory(shopId: string, input: { hubId?: string }, actor: Actor) {
   const hubId = await scopedHub(actor, input.hubId);
-  const [account, payments, returns, legacySettlements] = await Promise.all([
+  const [account, payments, returns, legacySettlements, historicalSettlements] = await Promise.all([
     listOsAccounts({ shopId, hubId }, actor),
     prisma.osAccountPayment.findMany({ where: { shopId, hubId }, include: { wallets: true, allocations: true, creditAllocations: true }, orderBy: [{ businessDate: "desc" }, { createdAt: "desc" }] }),
     prisma.osReturnCredit.findMany({ where: { shopId, hubId }, include: { allocations: { where: { payment: { status: "POSTED" } } } }, orderBy: { businessDate: "desc" } }),
     prisma.osSettlement.findMany({ where: { shopId, hubId }, include: { batches: true }, orderBy: { businessDate: "desc" } }),
+    prisma.osHistoricalSettlement.findMany({ where: { batch: { shopId, hubId } }, orderBy: { createdAt: "desc" } }),
   ]);
-  return { account: account.shops[0] ?? null, payments, returns, legacySettlements };
+  return { account: account.shops[0] ?? null, payments, returns, legacySettlements, historicalSettlements };
 }

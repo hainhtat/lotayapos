@@ -282,4 +282,26 @@ describe("BatchDetailPage settlement totals", () => {
     ]);
     await waitFor(() => expect(screen.getByLabelText("Customer 2")).toHaveValue("unfinished"));
   });
+
+  it("restores drafts after refresh and preserves edits made while a save is pending", async () => {
+    localStorage.setItem("lotaya-parcel-draft:batch-1", JSON.stringify([
+      { customerName: "Restored", address: "Road", townshipId: "t-hlaing", codAmount: 25000 },
+    ]));
+    const original = apiMock.getMockImplementation()!;
+    let completeSave!: (value: unknown) => void;
+    apiMock.mockImplementation((path: string, options: unknown) => path.endsWith("/parcels/bulk")
+      ? new Promise((resolve) => { completeSave = resolve; })
+      : original(path, options));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<MemoryRouter initialEntries={["/batches/batch-1"]}><QueryClientProvider client={client}><Routes><Route path="/batches/:id" element={<BatchDetailPage />} /></Routes></QueryClientProvider></MemoryRouter>);
+    expect(await screen.findByLabelText("Customer 1")).toHaveValue("Restored");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save parcels (1)" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Save parcels (1)" }));
+    await waitFor(() => expect(completeSave).toBeDefined());
+    fireEvent.change(screen.getByLabelText("Customer 1"), { target: { value: "Edited while saving" } });
+    completeSave({ data: [] });
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/saved/i));
+    expect(screen.getByLabelText("Customer 1")).toHaveValue("Edited while saving");
+    expect(localStorage.getItem("lotaya-parcel-draft:batch-1")).toContain("Edited while saving");
+  });
 });

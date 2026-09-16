@@ -46,8 +46,7 @@ describe("simplified OS account", () => {
 
   afterAll(async () => {
     const payments = await prisma.osAccountPayment.findMany({ where: { shopId }, select: { id: true, journalEntryId: true } });
-    const advanceEntries = await prisma.journalEntry.findMany({ where: { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: oldBatch }, select: { id: true } });
-    const journalIds = [...payments.map(p => p.journalEntryId), ...advanceEntries.map(entry => entry.id)];
+    const journalIds = (await prisma.journalEntry.findMany({ where: { hubId }, select: { id: true } })).map(entry => entry.id);
     await prisma.osCreditAllocation.deleteMany({ where: { paymentId: { in: payments.map(p => p.id) } } });
     await prisma.osPaymentAllocation.deleteMany({ where: { paymentId: { in: payments.map(p => p.id) } } });
     await prisma.osPaymentWallet.deleteMany({ where: { paymentId: { in: payments.map(p => p.id) } } });
@@ -84,5 +83,37 @@ describe("simplified OS account", () => {
       shopId, batchIds: [newBatch, oldBatch], businessDate: "2034-01-03", wallets: { cash: 500_000, kbzPay: 500_000, wavePay: 0 }, note: "Changed retry", idempotencyKey: `pay-${suffix}`,
     });
     expect(response.status).toBe(409); expect(response.body.error.code).toBe("IDEMPOTENCY_CONFLICT");
+  });
+
+  test("retries and void-and-replace corrections preserve exactly one wallet effect", async () => {
+    const payment = { shopId, batchIds: [newBatch], businessDate: "2034-01-03", wallets: { cash: 100, kbzPay: 200, wavePay: 300 }, note: "Correction test", idempotencyKey: `correct-${suffix}` };
+    const post = () => request(app).post("/api/v1/finance/os-payments").set("Authorization", `Bearer ${auth()}`).send(payment);
+    const first = await post(), retry = await post();
+    expect(first.status).toBe(201); expect(retry.body.data.id).toBe(first.body.data.id);
+    const correction = { businessDate: "2034-01-03", reason: "Wrong split", idempotencyKey: `void-${suffix}`, replacement: { ...payment, wallets: { cash: 0, kbzPay: 0, wavePay: 600 }, idempotencyKey: `replacement-${suffix}` } };
+    const replace = () => request(app).post(`/api/v1/finance/os-payments/${first.body.data.id}/replace`).set("Authorization", `Bearer ${auth()}`).send(correction);
+    const replaced = await replace(), replacedRetry = await replace();
+    expect(replaced.status).toBe(201); expect(replacedRetry.body.data.id).toBe(replaced.body.data.id);
+    const changed = await request(app).post(`/api/v1/finance/os-payments/${first.body.data.id}/replace`).set("Authorization", `Bearer ${auth()}`).send({ ...correction, replacement: { ...correction.replacement, note: "Changed intent" } });
+    expect(changed.status).toBe(409); expect(changed.body.error.code).toBe("IDEMPOTENCY_CONFLICT");
+    expect((await prisma.osAccountPayment.findUniqueOrThrow({ where: { id: first.body.data.id } })).status).toBe("VOIDED");
+    const journals = await prisma.journalEntry.findMany({ where: { hubId }, include: { lines: true } });
+    for (const journal of journals) expect(journal.lines.reduce((sum, line) => sum + line.debit - line.credit, 0)).toBe(0);
+    const correctionJournals = journals.filter(journal => [first.body.data.id, replaced.body.data.id, correction.idempotencyKey].includes(journal.sourceId));
+    expect(correctionJournals).toHaveLength(3);
+    for (const [account, balance] of [["WALLET_CASH", 0], ["WALLET_KBZ_PAY", 0], ["WALLET_WAVE_PAY", -600]] as const) {
+      expect(correctionJournals.flatMap(journal => journal.lines).filter(line => line.account === account).reduce((sum, line) => sum + line.debit - line.credit, 0)).toBe(balance);
+    }
+    expect(await prisma.osAccountPayment.count({ where: { replacesId: first.body.data.id } })).toBe(1);
+  });
+
+  const postgresTest = process.env.DATABASE_PROVIDER === "postgresql" ? test : test.skip;
+  postgresTest("concurrent duplicate payments create one payment and one journal", async () => {
+    const payload = { shopId, batchIds: [newBatch], businessDate: "2034-01-03", wallets: { cash: 10, kbzPay: 20, wavePay: 30 }, note: "Concurrent retry", idempotencyKey: `concurrent-${suffix}` };
+    const responses = await Promise.all([1, 2].map(() => request(app).post("/api/v1/finance/os-payments").set("Authorization", `Bearer ${auth()}`).send(payload)));
+    expect(responses.map(response => response.status)).toEqual([201, 201]);
+    expect(responses[0].body.data.id).toBe(responses[1].body.data.id);
+    expect(await prisma.osAccountPayment.count({ where: { idempotencyKey: payload.idempotencyKey } })).toBe(1);
+    expect(await prisma.journalEntry.count({ where: { sourceType: "OS_ACCOUNT_PAYMENT", sourceId: responses[0].body.data.id } })).toBe(1);
   });
 });

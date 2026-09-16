@@ -329,6 +329,7 @@ export async function reverseJournalEntryInTx(
 
 export async function reverseJournalEntry(input: { sourceType: string; sourceId: string; businessDate: string; reason: string }, actor: LedgerActor) {
   if (input.sourceType === "LEDGER_REVERSAL") throw new ApiError(400, "INVALID_REVERSAL", "A reversal cannot reverse another reversal");
+  if (["OS_HISTORICAL_SETTLEMENT", "OS_HISTORICAL_OPENING", "OS_HISTORICAL_RETURN"].includes(input.sourceType)) throw new ApiError(409, "HISTORICAL_RECONCILIATION_LOCKED", "Historical reconciliation must be corrected together with its OS account records");
   const date = businessDay(input.businessDate);
   const original = await prisma.journalEntry.findUnique({ where: sourceKey(input.sourceType, input.sourceId), include: { lines: true } });
   if (!original) throw new ApiError(404, "ENTRY_NOT_FOUND", "Ledger entry not found");
@@ -370,7 +371,7 @@ async function entryInScope(entry: { sourceType: string; sourceId: string | null
   return false;
 }
 
-export async function getLedgerReport(input: { from?: string; to?: string; account?: string }, actor: LedgerActor) {
+async function ledgerWhere(input: { from?: string; to?: string }, actor: LedgerActor): Promise<Prisma.JournalEntryWhereInput> {
   const user = await assertLedgerReadAccess(actor);
   if (user.role !== "SUPERADMIN" && !user.hubId) throw new ApiError(403, "FORBIDDEN", "A hub scope is required");
   const from = input.from ? businessDateUtcBoundary(input.from, env.hubTimezone) : undefined;
@@ -379,8 +380,33 @@ export async function getLedgerReport(input: { from?: string; to?: string; accou
   if (from && to && from > to) throw new ApiError(400, "INVALID_DATE_RANGE", "Ledger start date must be before the end date");
   if (input.from && input.to && (Date.parse(`${input.to}T00:00:00Z`) - Date.parse(`${input.from}T00:00:00Z`)) / 86_400_000 + 1 > 366)
     throw new ApiError(400, "REPORT_RANGE_TOO_LARGE", "Ledger range cannot exceed 366 calendar days");
+  return { ...(user.role === "SUPERADMIN" ? {} : { hubId: user.hubId! }), ...(from || toExclusive ? { businessDate: { ...(from ? { gte: from } : {}), ...(toExclusive ? { lt: toExclusive } : {}) } } : {}) };
+}
+
+export async function getLedgerSummary(input: { from?: string; to?: string; account?: string }, actor: LedgerActor) {
+  const where = await ledgerWhere(input, actor);
+  // Aggregate original and compensating journals together; excluding reversals would overstate balances.
+  const grouped = await prisma.journalLine.groupBy({
+    by: ["account"],
+    where: { entry: where, ...(input.account ? { account: input.account } : {}) },
+    _sum: { debit: true, credit: true },
+    orderBy: { account: "asc" },
+  });
+  const accounts = grouped.map(({ account, _sum }) => {
+    const debit = _sum.debit ?? 0, credit = _sum.credit ?? 0;
+    return { account, debit, credit, balance: debit - credit };
+  });
+  const totalDebit = accounts.reduce((sum, account) => sum + account.debit, 0);
+  const totalCredit = accounts.reduce((sum, account) => sum + account.credit, 0);
+  if (![totalDebit, totalCredit, totalDebit - totalCredit, ...accounts.flatMap(a => [a.debit, a.credit, a.balance])].every(Number.isSafeInteger)) {
+    throw new ApiError(422, "BALANCE_OUT_OF_RANGE", "Balance exceeds the supported amount range");
+  }
+  return { accounts, totalDebit, totalCredit, difference: totalDebit - totalCredit, balanced: totalDebit === totalCredit };
+}
+
+export async function getLedgerReport(input: { from?: string; to?: string; account?: string }, actor: LedgerActor) {
   const entries = await prisma.journalEntry.findMany({
-    where: { ...(user.role === "SUPERADMIN" ? {} : { hubId: user.hubId! }), ...(from || toExclusive ? { businessDate: { ...(from ? { gte: from } : {}), ...(toExclusive ? { lt: toExclusive } : {}) } } : {}) },
+    where: await ledgerWhere(input, actor),
     include: { lines: true },
     orderBy: [{ businessDate: "asc" }, { createdAt: "asc" }],
     take: 501,

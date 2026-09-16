@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploys Lotaya to lotaya.mmds.site only.
+# Deploys only the Lotaya application, on its two configured hostnames.
 # Never edits nginx sites for pos.mmds.site, snmd, delilist, or other vhosts.
 set -euo pipefail
 
@@ -12,6 +12,10 @@ if [[ "$(id -u)" -ne 0 ]]; then
   echo "Run as root: sudo ./deploy.sh" >&2
   exit 1
 fi
+
+# Serialize deployment so two invocations cannot race the release symlink.
+exec 9>/var/lock/lotaya-deploy.lock
+flock -n 9 || { echo "Another Lotaya deployment is running." >&2; exit 1; }
 
 bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/deploy/check-deploy-prerequisites.sh"
 
@@ -40,6 +44,27 @@ if [[ -e "${ROOT}/current" ]] && [[ ! -L "${ROOT}/current" ]]; then
   exit 1
 fi
 mkdir -p "${RELEASE}/backend" "${RELEASE}/frontend/dist" "${RELEASE}/app"
+CONFIG_BACKUP="${RELEASE}/previous-config"
+mkdir -p "${CONFIG_BACKUP}"
+NGINX_SITE=/etc/nginx/sites-available/lotaya.mmds.site.conf
+UNIT_FILE=/etc/systemd/system/lotaya-api.service
+[[ ! -f "${NGINX_SITE}" ]] || cp -p "${NGINX_SITE}" "${CONFIG_BACKUP}/nginx.conf"
+[[ ! -f "${UNIT_FILE}" ]] || cp -p "${UNIT_FILE}" "${CONFIG_BACKUP}/lotaya-api.service"
+if [[ -e /etc/nginx/sites-enabled/lotaya.mmds.site.conf || -L /etc/nginx/sites-enabled/lotaya.mmds.site.conf ]]; then
+  cp -P /etc/nginx/sites-enabled/lotaya.mmds.site.conf "${CONFIG_BACKUP}/nginx-enabled"
+fi
+switched=0
+config_changed=0
+source "${REPO}/deploy/rollback-release.sh"
+rollback() {
+  local status=$?
+  trap - ERR
+  set +e
+  echo "Deployment failed. Restoring previous Lotaya application/configuration; database migrations are forward-only." >&2
+  restore_lotaya_release "${ROOT}" "${PREVIOUS_RELEASE}" "${CONFIG_BACKUP}" "${NGINX_SITE}" "${UNIT_FILE}" "${config_changed}" "${switched}" /etc/nginx/sites-enabled/lotaya.mmds.site.conf || echo "Automatic rollback failed; inspect Lotaya service logs before retrying." >&2
+  exit "${status}"
+}
+trap rollback ERR
 if [[ -n "${PREVIOUS_RELEASE}" && -d "${PREVIOUS_RELEASE}/app" ]]; then rsync -a "${PREVIOUS_RELEASE}/app/" "${RELEASE}/app/"; fi
 
 if [[ ! -f "${SHARED}/lotaya.env" ]]; then
@@ -69,7 +94,7 @@ cd "${REPO}/frontend"
 export VITE_API_BASE_URL="${VITE_API_BASE_URL:-/api/v1}"
 export VITE_RIDER_ANDROID_DOWNLOAD_URL="${VITE_RIDER_ANDROID_DOWNLOAD_URL:-/app/lotaya-rider.apk}"
 npm ci --include=dev
-npx vite build
+npm run build
 rsync -a --delete dist/ "${RELEASE}/frontend/dist/"
 
 bash "${REPO}/deploy/publish-rider-app.sh" "${REPO}" "${RELEASE}/app"
@@ -79,11 +104,12 @@ bash "${REPO}/deploy/publish-rider-app.sh" "${REPO}" "${RELEASE}/app"
 cd "${REPO}/backend"
 MIGRATE_URL="${DIRECT_DATABASE_URL:-$DATABASE_URL}"
 DATABASE_URL="$MIGRATE_URL" npx prisma migrate deploy --schema prisma/schema.postgresql.prisma
+DATABASE_URL="$MIGRATE_URL" npx prisma migrate status --schema prisma/schema.postgresql.prisma
 DATABASE_URL="$MIGRATE_URL" node "${RELEASE}/backend/dist/scripts/audit-os-cutover.js"
 
 chown -R www-data:www-data "${RELEASE}"
 chmod 640 "${SHARED}/lotaya.env"
-NGINX_SITE=/etc/nginx/sites-available/lotaya.mmds.site.conf
+config_changed=1
 install -m 644 "${REPO}/deploy/nginx/lotaya.mmds.site.conf" "${NGINX_SITE}"
 ln -sfn "${NGINX_SITE}" /etc/nginx/sites-enabled/lotaya.mmds.site.conf
 install -m 644 "${REPO}/deploy/systemd/lotaya-api.service" /etc/systemd/system/lotaya-api.service
@@ -92,6 +118,7 @@ systemctl daemon-reload
 systemctl enable lotaya-api
 ln -sfn "${RELEASE}" "${ROOT}/current.next"
 mv -Tf "${ROOT}/current.next" "${ROOT}/current"
+switched=1
 ready=0
 if systemctl restart lotaya-api; then
   for _attempt in {1..30}; do
@@ -106,14 +133,12 @@ if [[ "${ready}" -ne 1 ]]; then
   echo "Release readiness failed; rolling application files back. Database migrations are forward-only and are not automatically reversed." >&2
   systemctl status lotaya-api --no-pager -l >&2 || true
   journalctl -u lotaya-api -n 80 --no-pager >&2 || true
-  if [[ -n "${PREVIOUS_RELEASE}" && -d "${PREVIOUS_RELEASE}" ]]; then
-    ln -sfn "${PREVIOUS_RELEASE}" "${ROOT}/current.next"
-    mv -Tf "${ROOT}/current.next" "${ROOT}/current"
-    systemctl restart lotaya-api
-  else
+  if [[ -z "${PREVIOUS_RELEASE}" ]]; then
     echo "No previous atomic release exists; retaining ${RELEASE} as /opt/lotaya/current so systemd has a valid working directory and startup logs remain actionable." >&2
   fi
-  exit 1
+  false # Invoke the common rollback path, including config restoration.
 fi
 systemctl reload nginx
+bash "${REPO}/deploy/check-release-domains.sh"
+trap - ERR
 echo "Lotaya deploy complete."

@@ -8,6 +8,7 @@ const actor = (req: Parameters<RequestHandler>[0]) => ({ id: req.auth!.sub, role
 
 export const batches: RequestHandler = async (req, res) => {
   const result = await service.listBatches(actor(req), {
+    view: req.query.view === "active" || req.query.view === "history" ? req.query.view : undefined,
     page: req.query.page === undefined ? undefined : Number(req.query.page),
     pageSize: req.query.pageSize === undefined ? undefined : Number(req.query.pageSize),
     shopId: typeof req.query.shopId === "string" ? req.query.shopId : undefined,

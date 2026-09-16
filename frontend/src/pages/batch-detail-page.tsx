@@ -41,14 +41,20 @@ type Batch = {
   hubId: string;
   label: string;
   advancePaid: number;
+  advancePostedAmount?: number;
+  paymentPaid?: number;
+  historicalSettledAmount?: number;
+  openingAdjustment?: number;
   totalCod: number;
   remainingToOs: number;
+  balanceError?: string | null;
   deliveryFeeCredit: number;
   returnedCod: number;
   nextTrackingSequence: number;
   shop: { name: string };
   parcels: SavedParcel[];
   finalizedAt?: string | null;
+  automaticAccounting?: boolean;
 };
 
 export type ParcelRow = {
@@ -115,9 +121,13 @@ export function appendParcelDraft(rows: ParcelRow[], draft: ParcelRow): ParcelRo
   return [...rows, { ...draft }];
 }
 
+export function prependParcelDrafts(current: ParcelRow[], incoming: ParcelRow[]): ParcelRow[] {
+  return [...incoming, ...current.filter((row) => !isParcelRowBlank(row))];
+}
+
 /** Normalize extracted/API preview values before placing them in string inputs. */
 export function normalizeManifestRow(row: Partial<Omit<ParcelRow, "codAmount">> & { codAmount?: unknown }): ParcelRow {
-  return {
+  const normalized = {
     orderId: String(row.orderId ?? ""),
     customerName: String(row.customerName ?? ""),
     address: String(row.address ?? ""),
@@ -128,6 +138,33 @@ export function normalizeManifestRow(row: Partial<Omit<ParcelRow, "codAmount">> 
     customerPhone: String(row.customerPhone ?? ""),
     codAmount: String(row.codAmount ?? ""),
   };
+  // JSON objects/arrays must never become plausible-looking input values.
+  for (const key of Object.keys(normalized) as Array<keyof ParcelRow>) {
+    const value = row[key];
+    if (value != null && typeof value !== "string" && !(typeof value === "number" && Number.isFinite(value))) normalized[key] = "";
+  }
+  return normalized;
+}
+
+export function restoreParcelDraft(saved: string | null): ParcelRow[] {
+  try {
+    const parsed: unknown = saved ? JSON.parse(saved) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((row) => row && typeof row === "object" && !Array.isArray(row)).map(normalizeManifestRow).filter((row) => !isParcelRowBlank(row));
+  } catch { return []; }
+}
+
+export function manifestReviewSummary(rows: ManifestPreviewRow[]) {
+  let totalCod = 0;
+  let needsReview = 0;
+  for (const row of rows) {
+    const normalized = normalizeManifestRow(row);
+    const amount = normalizeCodAmount(normalized.codAmount);
+    const valid = /^\d+$/.test(amount) && Number.isSafeInteger(Number(amount));
+    if (valid) totalCod += Number(amount);
+    if (!valid || !normalized.customerName.trim() || !normalized.address.trim() || !normalized.townshipId || row.confidence < 0.8 || row.warnings.length) needsReview++;
+  }
+  return { totalCod, needsReview };
 }
 
 export function formatTrackingNumber(sequence: number) {
@@ -415,6 +452,11 @@ const fieldEditableStatuses = new Set(["CREATED", "PICKED_UP", "ASSIGNED"]);
 
 export function BatchDetailPage() {
   const { id = "" } = useParams();
+  return <BatchDetailContent key={id} />;
+}
+
+function BatchDetailContent() {
+  const { id = "" } = useParams();
   const { t, i18n } = useTranslation();
   const user = useAuth()?.user;
   const preferMyanmar = i18n.resolvedLanguage === "my";
@@ -424,8 +466,8 @@ export function BatchDetailPage() {
   const [rows, setRows] = useState<ParcelRow[]>(() => {
     try {
       const saved = localStorage.getItem(draftStorageKey);
-      const parsed = saved ? JSON.parse(saved) : [];
-      if (Array.isArray(parsed) && parsed.length) return [...parsed.slice(0, 500), ...Array.from({ length: Math.max(0, 10 - parsed.length) }, blank)];
+      const parsed = restoreParcelDraft(saved);
+      if (parsed.length) return [...parsed, ...Array.from({ length: Math.max(0, 10 - parsed.length) }, blank)];
     } catch { /* Ignore an obsolete or malformed local draft. */ }
     return Array.from({ length: 10 }, blank);
   });
@@ -433,6 +475,7 @@ export function BatchDetailPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [formDraft, setFormDraft] = useState<ParcelRow>(blank);
   const [message, setMessage] = useState("");
+  const [storageFailed, setStorageFailed] = useState(false);
   const [preview, setPreview] = useState<ManifestPreview | null>(null);
   const [editing, setEditing] = useState<SavedParcel | null>(null);
   const [historyParcel,setHistoryParcel]=useState<{id:string;trackingNumber:string}|null>(null);
@@ -487,7 +530,6 @@ export function BatchDetailPage() {
     if (savedPage > savedPageCount) setSavedPage(savedPageCount);
   }, [savedPage, savedPageCount]);
   const remainingToOs = batch.data?.remainingToOs ?? 0;
-  const deliveryFeeCredit = batch.data?.deliveryFeeCredit ?? 0;
   const returnedCod = batch.data?.returnedCod ?? 0;
   const canFinalize=["SUPERADMIN","OPERATIONS_MANAGER","DISPATCHER"].includes(user?.role??"");
   const finalize=useMutation({mutationFn:()=>api(`/operations/batches/${id}/finalize`,{method:"POST"}),onSuccess:async()=>{setConfirmFinalize(false);setMessage(t("batchFinalized"));await queryClient.invalidateQueries({queryKey:["batch",id]})},onError:error=>setMessage(error instanceof Error?error.message:t("loadError"))});
@@ -524,14 +566,20 @@ export function BatchDetailPage() {
       if (file.type !== "application/pdf" && !file.name.toLocaleLowerCase().endsWith(".pdf")) throw new Error(t("pdfOnly"));
       const response = await apiRaw(`/operations/batches/${id}/manifest-preview`, { method: "POST", headers: { "content-type": "application/pdf" }, body: file });
       const payload = await response.json() as { success: true; data: ManifestPreview };
-      return payload.data;
+      if (!Array.isArray(payload.data?.rows)) throw new Error(t("loadError"));
+      return { ...payload.data, rows: payload.data.rows.map((row) => ({
+        ...normalizeManifestRow(row ?? {}),
+        sourcePage: Number.isSafeInteger(row?.sourcePage) ? row.sourcePage : 0,
+        confidence: typeof row?.confidence === "number" && Number.isFinite(row.confidence) ? row.confidence : 0,
+        warnings: Array.isArray(row?.warnings) ? row.warnings.filter((warning) => typeof warning === "string") : [],
+      })) };
     },
     onSuccess: (data) => { setPreview(data); setMessage(""); },
     onError: (error) => { setPreview(null); setMessage(error instanceof Error ? error.message : t("loadError")); },
   });
   const applyManifestPreview = () => {
     if (!preview) return;
-    setRows(preview.rows.map(({ sourcePage: _sourcePage, confidence: _confidence, warnings: _warnings, ...row }) => normalizeManifestRow(row)));
+    setRows((current) => [...current.filter((row) => !isParcelRowBlank(row)), ...preview.rows.map(normalizeManifestRow)]);
     setMessage(t("manifestDraftApplied", { count: preview.rows.length }));
     setPreview(null);
   };
@@ -545,14 +593,18 @@ export function BatchDetailPage() {
     [rows],
   );
   useEffect(() => {
-    const drafts = rows.filter((row) => !isParcelRowBlank(row));
-    if (drafts.length) localStorage.setItem(draftStorageKey, JSON.stringify(drafts));
-    else localStorage.removeItem(draftStorageKey);
+    try {
+      const drafts = rows.filter((row) => !isParcelRowBlank(row));
+      if (drafts.length) localStorage.setItem(draftStorageKey, JSON.stringify(drafts));
+      else localStorage.removeItem(draftStorageKey);
+      setStorageFailed(false);
+    } catch { setStorageFailed(true); }
   }, [draftStorageKey, rows]);
   const saveable = populated.filter(
     ({ row }) => isParcelRowComplete(row) && isParcelRowLocationConsistent(row, allTownships.data ?? []),
   );
   const invalid = saveable.length !== populated.length;
+  const nextSave = saveable.slice(0, 500);
   useEffect(() => {
     const catalogTownships = allTownships.data;
     const catalogRegions = regions.data;
@@ -644,7 +696,7 @@ export function BatchDetailPage() {
           <h1 className="font-display text-3xl font-bold">{batch.data?.label ?? t("batchDetail")}</h1>
           <p className="mt-2 max-w-2xl text-sm text-slate-500">{t("batchEntryDescription")}</p>
         </div>
-        <div className="text-right">{batch.data?.finalizedAt?<span className="rounded-full bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{t("finalized")}</span>:canFinalize&&<button type="button" disabled={!savedParcels.length} onClick={()=>setConfirmFinalize(true)} className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{t("finalizeBatch")}</button>}</div>
+        <div className="text-right">{!batch.data?.automaticAccounting && (batch.data?.finalizedAt?<span className="rounded-full bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{t("finalized")}</span>:canFinalize&&<button type="button" disabled={!savedParcels.length} onClick={()=>setConfirmFinalize(true)} className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{t("finalizeBatch")}</button>)}</div>
       </div>
       <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-2xl border border-black/5 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
@@ -672,12 +724,12 @@ export function BatchDetailPage() {
               remainingToOs < 0 ? "text-amber-700 dark:text-amber-300" : ""
             }`}
           >
-            {remainingToOs.toLocaleString()} MMK
+            {batch.data?.balanceError ? "—" : `${remainingToOs.toLocaleString()} MMK`}
           </p>
           <p className="mt-2 text-xs text-slate-500">{t("remainingToOsHint")}</p>
-          <p className="mt-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
-            {(batch.data?.totalCod ?? 0).toLocaleString()} − {(batch.data?.advancePaid ?? 0).toLocaleString()} − {deliveryFeeCredit.toLocaleString()} − {returnedCod.toLocaleString()} = {remainingToOs.toLocaleString()} MMK
-          </p>
+          {batch.data?.balanceError ? <p role="alert" className="mt-2 text-sm text-amber-700">{batch.data.balanceError}</p> : <p className="mt-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
+            {t("batchAccountBreakdown", { cod: (batch.data?.totalCod ?? 0).toLocaleString(), advance: (batch.data?.advancePostedAmount ?? batch.data?.advancePaid ?? 0).toLocaleString(), paid: (batch.data?.paymentPaid ?? 0).toLocaleString(), returns: returnedCod.toLocaleString(), historical: (batch.data?.historicalSettledAmount ?? 0).toLocaleString(), adjustment: (batch.data?.openingAdjustment ?? 0).toLocaleString() })}
+          </p>}
         </div>
       </div>
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
@@ -726,9 +778,9 @@ export function BatchDetailPage() {
               {t("addParcelModal")}
             </button>
           )}
-          <button disabled={!saveable.length || save.isPending} onClick={() => save.mutate(saveable)} className="rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+          <button disabled={!nextSave.length || save.isPending} onClick={() => save.mutate(nextSave)} className="rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
             <Save className="mr-1 inline" size={16} />
-            {t("saveParcels", { count: saveable.length })}
+            {t("saveParcels", { count: nextSave.length })}
           </button>
         </div>
       </div>
@@ -749,7 +801,7 @@ export function BatchDetailPage() {
       {preview && (
         <section className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-400/25 dark:bg-amber-400/10">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div><h2 className="font-display font-bold">{t("manifestPreview")}</h2><p className="text-sm text-slate-600 dark:text-slate-300">{t("manifestPreviewSummary", { rows: preview.rows.length, pages: preview.pageCount })}</p><p className="mt-1 text-xs text-amber-700 dark:text-amber-300">{t("manifestNotSaved")}</p></div>
+            <div><h2 className="font-display font-bold">{t("manifestPreview")}</h2><p className="text-sm text-slate-600 dark:text-slate-300">{t("manifestPreviewSummary", { rows: preview.rows.length, pages: preview.pageCount })}</p><p className="mt-1 font-bold">{t("manifestCodReview", { total: manifestReviewSummary(preview.rows).totalCod.toLocaleString(), count: manifestReviewSummary(preview.rows).needsReview })}</p>{preview.truncated && <p role="alert">{t("manifestTruncated")}</p>}<p className="mt-1 text-xs text-amber-700 dark:text-amber-300">{t("manifestNotSaved")}</p></div>
             <div className="flex gap-2"><button type="button" onClick={() => setPreview(null)} className="rounded-lg border px-3 py-2 text-sm font-bold">{t("cancel")}</button><button type="button" onClick={applyManifestPreview} className="rounded-lg bg-[#1598ef] px-3 py-2 text-sm font-bold text-white">{t("useEditableDraft")}</button></div>
           </div>
           <div className="mt-3 max-h-72 overflow-auto rounded-xl border border-amber-200 bg-white dark:border-white/10 dark:bg-[#181a1d]"><table className="w-full min-w-[780px] text-left text-xs"><thead className="sticky top-0 bg-slate-50 dark:bg-[#222529]"><tr><th className="p-2">{t("sourcePage")}</th><th>{t("orderId")}</th><th>{t("customer")}</th><th>{t("address")}</th><th>{t("customerPhone")}</th><th className="text-right">{t("cod")}</th><th className="px-2">{t("confidence")}</th></tr></thead><tbody>{preview.rows.map((row,index)=><tr key={`${row.sourcePage}-${index}`} className="border-t dark:border-white/10"><td className="p-2">{row.sourcePage}</td><td>{row.orderId}</td><td>{row.customerName}</td><td className="max-w-xs p-2">{row.address}{row.warnings.length>0&&<span className="mt-1 flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-300"><AlertTriangle size={11}/>{row.warnings.map(code=>t(`manifestWarning.${code}`)).join(" · ")}</span>}</td><td>{row.customerPhone||"—"}</td><td className="text-right font-bold">{row.codAmount.toLocaleString()}</td><td className="px-2">{Math.round(row.confidence*100)}%</td></tr>)}</tbody></table></div>
@@ -760,7 +812,8 @@ export function BatchDetailPage() {
           {t("parcelGridValidation")}
         </p>
       )}
-      {populated.length > 0 && <p className="mt-2 text-xs font-medium text-slate-500">{t("draftSavedLocally")}</p>}
+      {saveable.length > nextSave.length && <p role="status" className="mt-2 text-sm text-amber-700 dark:text-amber-300">{t("parcelSaveChunk", { count: saveable.length - nextSave.length })}</p>}
+      {populated.length > 0 && <p role={storageFailed ? "alert" : undefined} className="mt-2 text-xs font-medium text-slate-500">{t(storageFailed ? "draftStorageUnavailable" : "draftSavedLocally")}</p>}
       {entryMode === "form" && (
         <section className="mt-4 rounded-2xl border bg-white p-4 dark:border-white/10 dark:bg-[#181a1d]">
           <h2 className="font-display font-bold">{t("draftParcels")}</h2>
@@ -809,7 +862,7 @@ export function BatchDetailPage() {
           );
           if (parsed.length) {
             event.preventDefault();
-            setRows((current) => [...parsed, ...current].slice(0, 500));
+            setRows((current) => prependParcelDrafts(current, parsed));
           }
         }}
         className="mt-4 overflow-auto rounded-2xl border bg-white dark:border-white/10 dark:bg-[#181a1d]"

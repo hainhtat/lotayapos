@@ -44,7 +44,7 @@ describe("protected API contracts", () => {
     ],
   };
 
-  test("accepts duplicate order IDs through validation as non-unique references", async () => {
+  test("requires an explicit balanced wallet split when Finance records an advance", async () => {
     const response = await request(app)
       .post("/api/v1/operations/batches")
       .set("Authorization", `Bearer ${token("FINANCE")}`)
@@ -56,8 +56,8 @@ describe("protected API contracts", () => {
         fundingWallet: "CASH",
       });
 
-    expect(response.status).toBe(403);
-    expect(response.body.error.code).toBe("FORBIDDEN");
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("INVALID_WALLET_SPLIT");
   });
 
   test("rejects protected requests without a token", async () => {
@@ -386,7 +386,7 @@ describe("protected API contracts", () => {
   test("enforces the batch creation role matrix before persistence", async () => {
     const response = await request(app)
       .post("/api/v1/operations/batches")
-      .set("Authorization", `Bearer ${token("FINANCE")}`)
+      .set("Authorization", `Bearer ${token("AUDITOR")}`)
       .send(batchPayload);
 
     expect(response.status).toBe(403);

@@ -201,6 +201,40 @@ separate database backup/restore plan. A Rider APK is published only when `aapt`
 or `apkanalyzer` confirms package/version metadata and `apksigner` confirms a
 non-debug signature.
 
+Both `lotaya.mmds.site` and `lt.mmds.site` must be covered by the certificate.
+Deployment now validates migration status, prevents overlapping deploys, and
+checks `/`, `/app/`, and the database-backed readiness endpoint through each
+local nginx HTTPS vhost. These checks verify TLS and routing without depending
+on ISP/DNS availability; they do not establish public reachability. A failure
+restores the previous Lotaya service/nginx files and application symlink. Other
+websites and bots are not restarted. Database migrations remain forward-only.
+
+Before a production migration, retain an encrypted PostgreSQL backup using the
+database provider's backup system or your encrypted backup storage. A custom
+format `pg_dump` archive can be tested on an isolated PostgreSQL host with:
+
+```sh
+# PGHOST, PGPORT, PGUSER and .pgpass point to the isolated restore host.
+bash deploy/restore-drill.sh /secure/path/lotaya-backup.dump
+```
+
+The drill creates a new uniquely named database, restores atomically, checks
+migration completion and journal balance, and prints wallet totals. Compare
+those totals with the snapshot taken when the backup was made. The database
+is retained for inspection; the tool does not overwrite or drop any database.
+Use restricted storage for the decrypted archive and remove it under your
+normal backup-retention policy after the drill. A restore drill is not an
+automatic production database rollback.
+
+Deployment checks: `bash deploy/test-deploy-contract.sh` and
+`bash deploy/test-release-domains.sh`; exercise previous-release and first-install
+rollback with `bash deploy/test-rollback-release.sh`.
+
+Run the financial regression suite against an isolated local PostgreSQL database
+before release using [the PostgreSQL test guide](backend/scripts/POSTGRES_TESTS.md).
+The test runner applies migrations and restores the SQLite Prisma client after
+testing; do not run it concurrently with other backend tests or builds.
+
 After PostgreSQL migrations, deployment runs the read-only OS cutover audit.
 It stops the release when any migrated shop/hub balance needs reconciliation.
 A Superadmin must review and post the exact opening adjustment with a reason,

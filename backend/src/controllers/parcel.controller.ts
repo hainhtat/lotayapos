@@ -3,6 +3,7 @@ import * as service from "../services/parcel.service.js";
 
 export const list: RequestHandler = async (req, res) => {
   const result = await service.listParcels({ id: req.auth!.sub, role: req.auth!.role }, req.query.assignedToMe === "true", {
+  queue: req.query.queue as service.ParcelListFilters["queue"],
   batchId: typeof req.query.batchId === "string" ? req.query.batchId : undefined,
   riderId: typeof req.query.riderId === "string" ? req.query.riderId : undefined,
   assignmentStatus: typeof req.query.assignmentStatus === "string" ? req.query.assignmentStatus as "ASSIGNED" | "UNASSIGNED" : undefined,
@@ -25,6 +26,7 @@ export const list: RequestHandler = async (req, res) => {
   res.json({ success: true, data: result.items, pagination: { page: result.page, pageSize: result.pageSize, total: result.total, totalPages: Math.ceil(result.total / result.pageSize) } });
 };
 export const updateStatus: RequestHandler = async (req, res) => res.json({ success: true, data: await service.updateStatus(String(req.params.id), req.body.status, { id: req.auth!.sub, role: req.auth!.role }, req.body.reasonCode, req.body.note, req.body.actualCodCollected, req.body.collectionWallet) });
+export const reschedule: RequestHandler = async (req, res) => res.json({ success: true, data: await service.rescheduleParcels(req.body, { id: req.auth!.sub, role: req.auth!.role }) });
 export const bulkUpdateStatus: RequestHandler = async (req, res) => {
   const parcels = await service.bulkUpdateStatus(
     req.body.parcelIds.map((parcelId: string) => ({

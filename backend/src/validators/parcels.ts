@@ -1,6 +1,7 @@
 import { body, param, query } from "express-validator";
 
 export const parcelListValidation = [
+  query("queue").optional().isIn(["to-assign", "with-riders", "rescheduled", "return-to-os", "overdue"]),
   query("assignedToMe").optional().isBoolean(),
   query("batchId").optional().isString().trim().notEmpty(),
   query("riderId").optional().isString().trim().notEmpty(),
@@ -29,6 +30,13 @@ export const parcelStatusValidation = [
   body("note").optional().isString().trim(),
   body("actualCodCollected").optional().isInt({ min: 0 }).toInt(),
   body("collectionWallet").if(body("status").equals("PARTIAL")).isIn(["CASH", "KBZ_PAY", "WAVE_PAY"]),
+];
+
+export const parcelRescheduleValidation = [
+  body("parcelIds").isArray({ min: 1, max: 50 }),
+  body("parcelIds.*").isString().trim().notEmpty(),
+  body("plannedDeliveryDate").matches(/^\d{4}-\d{2}-\d{2}$/).isISO8601({ strict: true }),
+  body("reason").isString().trim().isLength({ min: 3, max: 500 }),
 ];
 
 export const parcelBulkStatusValidation = [

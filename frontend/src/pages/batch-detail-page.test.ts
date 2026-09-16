@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   appendParcelDraft,
+  prependParcelDrafts,
   applyTownshipToParcelRow,
   formatTrackingNumber,
   hydrateParcelRowLocations,
@@ -8,6 +9,9 @@ import {
   isParcelRowLocationConsistent,
   isResolvedTownshipId,
   parseParcelGrid,
+  restoreParcelDraft,
+  normalizeManifestRow,
+  manifestReviewSummary,
   townshipsForRegion,
   type ParcelRow,
 } from "./batch-detail-page";
@@ -22,6 +26,35 @@ const blankRow = (): ParcelRow => ({
   zoneId: "",
   customerPhone: "",
   codAmount: "",
+});
+
+describe("draft and PDF recovery", () => {
+  it("preserves the existing tail when a paste exceeds 500 drafts", () => {
+    const existing = { ...blankRow(), customerName: "Existing tail" };
+    const incoming = Array.from({ length: 500 }, () => ({ ...blankRow(), customerName: "Pasted" }));
+    const result = prependParcelDrafts([existing, blankRow()], incoming);
+    expect(result).toHaveLength(501);
+    expect(result[500]).toBe(existing);
+    expect(result.slice(0, 500)).toEqual(incoming);
+  });
+  it("restores numeric amounts while ignoring corrupt rows and rejecting object fields", () => {
+    expect(restoreParcelDraft("invalid JSON")).toEqual([]);
+    expect(restoreParcelDraft(JSON.stringify([null, [], { customerName: "A", codAmount: 2000, address: { wrong: true } }]))).toEqual([
+      { ...blankRow(), customerName: "A", codAmount: "2000" },
+    ]);
+  });
+
+  it("does not silently truncate stored drafts beyond 500 rows", () => {
+    expect(restoreParcelDraft(JSON.stringify(Array.from({ length: 501 }, () => ({ customerName: "A" }))))).toHaveLength(501);
+  });
+
+  it("counts uncertain PDF rows and excludes malformed amounts from the review total", () => {
+    const row = normalizeManifestRow({ customerName: "A", address: "Road", townshipId: "t1", codAmount: 2000 });
+    expect(manifestReviewSummary([
+      { ...row, sourcePage: 1, confidence: 1, warnings: [] },
+      { ...row, codAmount: "wrong column", sourcePage: 1, confidence: 0.4, warnings: [] },
+    ])).toEqual({ totalCod: 2000, needsReview: 1 });
+  });
 });
 
 const townships = [

@@ -2,11 +2,12 @@ import { Router } from "express";
 import { requireAuth, requireRoles } from "../../middleware/auth.js";
 import { validation } from "../../middleware/error.js";
 import { asyncHandler } from "../../utils/async-handler.js";
-import { bulkUpdateStatus, detail, fieldHistory, history, list, updateParcel, updateStatus } from "../../controllers/parcel.controller.js";
-import { parcelBulkStatusValidation, parcelListValidation, parcelStatusValidation, parcelUpdateValidation } from "../../validators/parcels.js";
+import { bulkUpdateStatus, detail, fieldHistory, history, list, reschedule, updateParcel, updateStatus } from "../../controllers/parcel.controller.js";
+import { parcelBulkStatusValidation, parcelListValidation, parcelRescheduleValidation, parcelStatusValidation, parcelUpdateValidation } from "../../validators/parcels.js";
 
 export const parcelRouter = Router();
 parcelRouter.get("/", requireAuth, parcelListValidation, validation, asyncHandler(list));
+parcelRouter.post("/reschedule", requireAuth, requireRoles("SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"), parcelRescheduleValidation, validation, asyncHandler(reschedule));
 parcelRouter.post(
   "/bulk-status",
   requireAuth,

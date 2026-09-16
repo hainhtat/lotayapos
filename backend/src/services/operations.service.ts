@@ -1,10 +1,11 @@
 import { prisma } from "../config/database.js";
+import { createHash } from "node:crypto";
 import { env } from "../config/env.js";
 import type { Prisma } from "@prisma/client";
 import { ApiError } from "../utils/api-error.js";
 import { assertCashbookOpen } from "./finance.service.js";
 import { buildRiderCommissionLines, buildRiderReceivableRecognitionLines, calculateCommissionAmount, journalEntryIsUnreversed, nextVersionedJournalSourceId } from "./parcel.service.js";
-import { postedAdvanceByBatch, syncBatchObligation } from "./os-account.service.js";
+import { accountRows, postedAdvanceByBatch, syncBatchObligation } from "./os-account.service.js";
 import { resolveCommissionRateBps } from "../utils/commission.js";
 import { buildDeliveryCollectionLines } from "./ledger.service.js";
 
@@ -93,7 +94,7 @@ export function batchMutationLockMode(databaseUrl = process.env.DATABASE_URL ?? 
   return /^postgres(ql)?:\/\//.test(databaseUrl) ? "POSTGRES_ADVISORY" as const : "SQLITE_WRITE" as const;
 }
 
-async function acquireBatchMutationLock(tx: Prisma.TransactionClient, batchId: string) {
+export async function acquireBatchMutationLock(tx: Prisma.TransactionClient, batchId: string) {
   if (batchMutationLockMode() === "POSTGRES_ADVISORY") {
     await tx.$queryRaw<Array<{ locked: number }>>`SELECT 1::integer AS locked FROM pg_advisory_xact_lock(hashtext(${batchId}))`;
     return;
@@ -104,7 +105,7 @@ async function acquireBatchMutationLock(tx: Prisma.TransactionClient, batchId: s
 async function resolveBatchHub(actor: BatchActor, requestedHubId?: string) {
   const user = await prisma.user.findUnique({ where: { id: actor.id }, select: { role: true, active: true, hubId: true } });
   if (!user || !user.active) throw new ApiError(403, "FORBIDDEN", "Active user scope required");
-  if (user.role !== actor.role || !["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "You may not create batches");
+  if (user.role !== actor.role || !["SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER", "DISPATCHER"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "You may not create batches");
   if (user.role !== "SUPERADMIN" && requestedHubId && requestedHubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Batch hub is outside your hub scope");
   const hubId = requestedHubId ?? user.hubId;
   if (!hubId) throw new ApiError(400, "HUB_REQUIRED", "A hub is required when creating a batch");
@@ -121,6 +122,7 @@ async function assertOperationsReader(actor: BatchActor) {
 }
 
 export type BatchListFilters = {
+  view?: "active" | "history";
   page?: number;
   pageSize?: number;
   shopId?: string;
@@ -160,12 +162,12 @@ export async function listOverdueUnsentParcels(
   if (user.role !== "SUPERADMIN" && input.hubId && input.hubId !== user.hubId)
     throw new ApiError(403, "FORBIDDEN", "Overdue parcels are outside your hub scope");
   const hubId = user.role === "SUPERADMIN" ? input.hubId : user.hubId ?? undefined;
-  const cutoffDate = overdueUnsentCutoffDate(new Date(), days);
-  // Batch pickup dates are stored as normalized calendar dates at UTC midnight.
-  const cutoff = new Date(`${cutoffDate}T00:00:00.000Z`);
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const cutoffDate = cutoff.toISOString();
   const where: Prisma.ParcelWhereInput = {
-    status: { in: [...OVERDUE_UNSENT_STATUSES] },
-    batch: { pickupDate: { lte: cutoff }, ...(hubId ? { hubId } : {}) },
+    status: { notIn: ["DELIVERED", "RETURNED"] },
+    createdAt: { lte: cutoff },
+    ...(hubId ? { batch: { hubId } } : {}),
   };
   const [items, total] = await Promise.all([
     prisma.parcel.findMany({
@@ -174,7 +176,7 @@ export async function listOverdueUnsentParcels(
         batch: { select: { id: true, label: true, pickupDate: true, shop: { select: { id: true, name: true } } } },
         rider: { select: { id: true, user: { select: { name: true } } } },
       },
-      orderBy: [{ batch: { pickupDate: "asc" } }, { trackingNumber: "asc" }],
+      orderBy: [{ createdAt: "asc" }, { trackingNumber: "asc" }],
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),
@@ -204,13 +206,15 @@ export async function listBatches(actor: BatchActor, filters: BatchListFilters =
     user.role === "SUPERADMIN" ? (filters.hubId ? { hubId: filters.hubId } : {}) : { hubId: user.hubId },
   ];
   if (filters.shopId) conditions.push({ shopId: filters.shopId });
+  if (filters.view === "active") conditions.push({ historicalOsSettlement: { is: null } });
+  if (filters.view === "history") conditions.push({ historicalOsSettlement: { isNot: null } });
   if (dateFrom || dateTo) conditions.push({ pickupDate: { ...(dateFrom ? { gte: dateFrom } : {}), ...(dateTo ? { lte: dateTo } : {}) } });
   if (filters.search?.trim()) conditions.push(batchSearchWhere(filters.search));
   const where: Prisma.BatchWhereInput = conditions.length === 1 ? conditions[0]! : { AND: conditions };
   const [batches, total] = await Promise.all([
     prisma.batch.findMany({
       where,
-      include: { shop: true, parcels: { select: { status: true } } },
+      include: { shop: true, historicalOsSettlement: true, parcels: { select: { status: true, createdAt: true } } },
       orderBy: [{ pickupDate: "desc" }, { id: "asc" }],
       skip: (page - 1) * pageSize,
       take: pageSize,
@@ -231,7 +235,12 @@ export async function listBatches(actor: BatchActor, filters: BatchListFilters =
     if (!entry.sourceId || !(await journalEntryIsUnreversed(prisma, entry.id))) continue;
     postedBatchIds.add(entry.sourceId.split(":")[0]!);
   }
-  return { items: batches.map((batch) => ({ ...batch, advancePosted: postedBatchIds.has(batch.id) })), total, page, pageSize };
+  const balanceErrors = new Map<string, string>();
+  const accountBalances = ["SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER"].includes(user.role)
+    ? (await Promise.all([...new Set(batches.flatMap(batch => batch.hubId ? [batch.hubId] : []))].map(async hubId => { try { return await accountRows(prisma, { hubId }); } catch (error) { if (!(error instanceof ApiError) || error.code !== "OS_CUTOVER_RECONCILIATION_REQUIRED") throw error; balanceErrors.set(hubId, error.message); return []; } }))).flat()
+    : [];
+  const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000;
+  return { items: batches.map((batch) => ({ ...batch, balanceError: balanceErrors.get(batch.hubId ?? "") ?? null, advancePosted: postedBatchIds.has(batch.id), historicallySettled: Boolean(batch.historicalOsSettlement), outstanding: accountBalances.find(row => row.batchId === batch.id)?.outstanding ?? null, overdueCount: batch.parcels.filter(parcel => !["DELIVERED", "RETURNED"].includes(parcel.status) && parcel.createdAt.getTime() <= cutoff).length })), total, page, pageSize };
 }
 export function formatTrackingNumber(sequence: number) {
   return `LTY-${String(sequence).padStart(3, "0")}`;
@@ -285,26 +294,56 @@ export async function getBatchDetail(id:string,actor:BatchActor){
   if(!batch)throw new ApiError(404,"BATCH_NOT_FOUND","Batch not found");
   const totalCod=batch.parcels.reduce((sum,parcel)=>sum+parcel.codAmount,0);
   const advancePostedAmount=(await postedAdvanceByBatch(prisma,[batch.id])).get(batch.id) ?? 0;
-  const deliveryFeeCredit=batch.parcels.reduce((sum,parcel)=>sum+(parcel.deliveryFee ?? 0),0);
-  const returnedCod=batch.parcels.reduce((sum,parcel)=>sum+(parcel.status === "RETURNED" ? parcel.codAmount : 0),0);
-  const remainingToOs=totalCod-advancePostedAmount-deliveryFeeCredit-returnedCod;
-  return {...batch,totalCod,advancePostedAmount,deliveryFeeCredit,returnedCod,remainingToOs,nextTrackingSequence:await nextTrackingSequenceStart()};
+  let balanceError: string | null = null;
+  const account = batch.hubId ? (await accountRows(prisma,{hubId:batch.hubId,shopId:batch.shopId}).catch(error=>{ if (!(error instanceof ApiError) || error.code !== "OS_CUTOVER_RECONCILIATION_REQUIRED") throw error; balanceError=error.message; return []; })).find(row=>row.batchId===batch.id) : undefined;
+  const deliveryFeeCredit=0;
+  const returnedCod=account?.returnedCod ?? batch.parcels.reduce((sum,parcel)=>sum+(parcel.status === "RETURNED" ? parcel.codAmount : 0),0);
+  const remainingToOs=account?.outstanding ?? Math.max(0,totalCod-advancePostedAmount-returnedCod);
+  return {...batch,totalCod,advancePostedAmount,deliveryFeeCredit,returnedCod,remainingToOs:balanceError?null:remainingToOs,balanceError,paymentPaid:account?.paymentPaid??0,historicalSettledAmount:account?.historicalSettledAmount??0,openingAdjustment:account?.openingAdjustment??0,nextTrackingSequence:await nextTrackingSequenceStart()};
 }
 
 type NewParcelInput = { trackingNumber?: string; orderId?: string | null; customerName: string; customerPhone?: string; address: string; codAmount: number; townshipId: string; zoneId?: string };
 
-export async function createBatch(input: { shopId: string; pickupDate: string; batchName: string; advancePaid: number; hubId?: string }, actor: BatchActor) {
+export async function createBatch(input: { shopId: string; pickupDate: string; batchName: string; advancePaid: number; hubId?: string; wallets?: { cash: number; kbzPay: number; wavePay: number }; idempotencyKey?: string }, actor: BatchActor) {
   const pickupDate = new Date(input.pickupDate);
   if (Number.isNaN(pickupDate.getTime())) throw new ApiError(400, "INVALID_DATE", "Invalid business date");
   pickupDate.setUTCHours(0, 0, 0, 0);
   const hubId = await resolveBatchHub(actor, input.hubId);
   if (!Number.isInteger(input.advancePaid) || input.advancePaid < 0) throw new ApiError(400,"INVALID_ADVANCE","Batch advance paid must be a non-negative integer");
+  const wallets = input.wallets ?? { cash: 0, kbzPay: 0, wavePay: 0 };
+  if (Object.values(wallets).some(amount => !Number.isSafeInteger(amount) || amount < 0) || wallets.cash + wallets.kbzPay + wallets.wavePay !== input.advancePaid) throw new ApiError(400, "INVALID_WALLET_SPLIT", "Wallet amounts must equal the advance paid");
+  if (input.advancePaid > 0 && !["SUPERADMIN", "FINANCE"].includes(actor.role)) throw new ApiError(403, "FORBIDDEN", "Only Finance or Superadmin may record an advance payment");
+  if (input.advancePaid > 0 && !input.idempotencyKey) throw new ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "An idempotency key is required for an advance payment");
+  const creationKey = input.idempotencyKey ? `${actor.id}:${input.idempotencyKey}` : null;
+  const creationHash = createHash("sha256").update(JSON.stringify({ shopId: input.shopId, hubId, pickupDate: pickupDate.toISOString(), label: input.batchName, advancePaid: input.advancePaid, wallets })).digest("hex");
+  const replay = async () => {
+    if (!creationKey) return null;
+    const existing = await prisma.batch.findUnique({ where: { creationKey }, include: { shop: true, parcels: true } });
+    if (existing && existing.creationHash !== creationHash) throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "This request key was used for a different batch");
+    return existing;
+  };
+  const existing = await replay();
+  if (existing) return existing;
   const shop = await prisma.onlineShop.findUnique({where:{id:input.shopId},select:{id:true,active:true}});
   if(!shop?.active) throw new ApiError(404,"SHOP_NOT_FOUND","Active online shop not found");
   try {
-    return await prisma.batch.create({ data: { shopId: shop.id, hubId, pickupDate, label: input.batchName, advancePaid:input.advancePaid }, include:{shop:true,parcels:true} });
+    return await prisma.$transaction(async tx => {
+      if (input.advancePaid > 0) await assertCashbookOpen(tx, pickupDate, hubId);
+      const batch = await tx.batch.create({ data: { shopId: shop.id, hubId, pickupDate, label: input.batchName, advancePaid: input.advancePaid, automaticAccounting: true, creationKey, creationHash, createdBy: actor.id }, include: { shop: true, parcels: true } });
+      await syncBatchObligation(tx, batch.id, actor.id);
+      if (input.advancePaid > 0) await tx.journalEntry.create({ data: {
+        sourceType: "BATCH_PICKUP_ADVANCE", sourceId: batch.id, hubId, businessDate: pickupDate,
+        description: `Advance paid for ${batch.label} by ${actor.id}`,
+        lines: { create: [{ account: "OS_COD_PAYABLE", debit: input.advancePaid, credit: 0 }, ...Object.entries(wallets).filter(([, amount]) => amount > 0).map(([wallet, amount]) => ({ account: { cash: "WALLET_CASH", kbzPay: "WALLET_KBZ_PAY", wavePay: "WALLET_WAVE_PAY" }[wallet]!, debit: 0, credit: amount }))] },
+      } });
+      return batch;
+    });
   } catch (error) {
-    if ((error as { code?: string }).code === "P2002") throw new ApiError(409, "BATCH_EXISTS", "A batch already exists for this online shop and pickup date");
+    if ((error as { code?: string }).code === "P2002") {
+      const existing = await replay();
+      if (existing) return existing;
+      throw new ApiError(409, "BATCH_EXISTS", "A batch already exists for this online shop and pickup date");
+    }
     throw error;
   }
 }
@@ -312,9 +351,9 @@ export async function createBatch(input: { shopId: string; pickupDate: string; b
 export async function bulkCreateParcels(batchId:string,input:{parcels:NewParcelInput[]},actor:BatchActor){
   const user=await prisma.user.findUnique({where:{id:actor.id},select:{active:true,role:true,hubId:true}});
   if(!user?.active||user.role!==actor.role||!["SUPERADMIN","OPERATIONS_MANAGER","DISPATCHER"].includes(user.role)) throw new ApiError(403,"FORBIDDEN","You may not add parcels");
-  const batch=await prisma.batch.findFirst({where:{id:batchId,...(user.role==="SUPERADMIN"?{}:{hubId:user.hubId})},select:{id:true,hubId:true,finalizedAt:true}});
+  const batch=await prisma.batch.findFirst({where:{id:batchId,...(user.role==="SUPERADMIN"?{}:{hubId:user.hubId})},select:{id:true,hubId:true,finalizedAt:true,automaticAccounting:true}});
   if(!batch) throw new ApiError(404,"BATCH_NOT_FOUND","Batch not found");
-  if(batch.finalizedAt) throw new ApiError(409,"BATCH_FINALIZED","A finalized batch cannot accept more parcels");
+  if(batch.finalizedAt && !batch.automaticAccounting) throw new ApiError(409,"BATCH_FINALIZED","A finalized batch cannot accept more parcels");
   const townshipIds=[...new Set(input.parcels.map(p=>p.townshipId))];
   const townships=await prisma.township.findMany({where:{id:{in:townshipIds}},select:{id:true,nameEn:true,deliveryFee:true}});
   if(townships.length!==townshipIds.length) throw new ApiError(400,"INVALID_TOWNSHIP","One or more townships are invalid");
@@ -325,14 +364,16 @@ export async function bulkCreateParcels(batchId:string,input:{parcels:NewParcelI
   if(zones.length!==zoneIds.length||input.parcels.some(p=>p.zoneId&&(zoneById.get(p.zoneId)?.townshipId!==p.townshipId||zoneById.get(p.zoneId)?.hubId!==batch.hubId))) throw new ApiError(400,"INVALID_ZONE","Zone must belong to the selected township and batch hub");
   const createAttempt = () => prisma.$transaction(async tx=>{
     await acquireBatchMutationLock(tx, batchId);
-    const currentBatch = await tx.batch.findUnique({ where: { id: batchId }, select: { finalizedAt: true } });
-    if (!currentBatch || currentBatch.finalizedAt) throw new ApiError(409,"BATCH_FINALIZED","A finalized batch cannot accept more parcels");
+    const currentBatch = await tx.batch.findUnique({ where: { id: batchId }, select: { finalizedAt: true, automaticAccounting: true, historicalOsSettlement: { select: { id: true } } } });
+    if (currentBatch?.historicalOsSettlement) throw new ApiError(409, "HISTORICAL_BATCH", "Historically settled batches cannot accept more parcels");
+    if (!currentBatch || (currentBatch.finalizedAt && !currentBatch.automaticAccounting)) throw new ApiError(409,"BATCH_FINALIZED","A finalized batch cannot accept more parcels");
     // Serialize allocation in PostgreSQL. SQLite writes are serialized by the database;
     // the bounded retry below also covers a stale read racing another transaction.
     await acquireTrackingAllocationLock(tx);
     const sequenceStart = await nextTrackingSequenceStartWith(tx);
     const trackingNumbers = input.parcels.map((_, index) => formatTrackingNumber(sequenceStart + index));
     await tx.parcel.createMany({data:input.parcels.map((p,index)=>{const township=townshipById.get(p.townshipId)!;const zone=p.zoneId?zoneById.get(p.zoneId):undefined;return {orderId:p.orderId,customerName:p.customerName,customerPhone:p.customerPhone,address:p.address,codAmount:p.codAmount,townshipId:p.townshipId,zoneId:p.zoneId,zone:zone?.name,township:township.nameEn,deliveryFee:township.deliveryFee,advanceAmount:0,batchId,trackingNumber:trackingNumbers[index]!};})});
+    if (currentBatch.automaticAccounting) await syncBatchObligation(tx, batchId, actor.id);
     return tx.parcel.findMany({where:{batchId,trackingNumber:{in:trackingNumbers}},include:{townshipRelation:{include:{district:{include:{regionState:true}}}},zoneRelation:true}});
   });
 
@@ -360,7 +401,7 @@ export async function finalizeBatch(batchId: string, actor: BatchActor) {
     }
     const finalized = await tx.batch.updateMany({ where: { id: batchId, finalizedAt: null }, data: { finalizedAt: new Date(), finalizedBy: actor.id } });
     if (finalized.count !== 1) throw new ApiError(409, "BATCH_FINALIZE_CONFLICT", "Batch changed while finalizing; refresh and retry");
-    const obligation = await syncBatchObligation(tx, batchId);
+    const obligation = await syncBatchObligation(tx, batchId, actor.id);
     const current = await tx.batch.findUniqueOrThrow({ where: { id: batchId }, select: { finalizedAt: true, finalizedBy: true } });
     return { batchId, finalizedAt: current.finalizedAt, finalizedBy: current.finalizedBy, obligation, replay: false };
   }, { isolationLevel: "Serializable" });
@@ -391,6 +432,8 @@ export async function postPickupAdvances(batchId: string, input: { fundingWallet
   const attemptPost = async (retriesLeft = 1): Promise<{ batchId: string; postedCount: number; alreadyPosted: boolean }> => {
     try {
       return await prisma.$transaction(async (tx) => {
+        await acquireBatchMutationLock(tx, batch.id);
+        if (await tx.osHistoricalSettlement.findUnique({ where: { batchId: batch.id } })) throw new ApiError(409, "HISTORICAL_BATCH", "Historically settled batches cannot record new advance payments");
         await assertCashbookOpen(tx, batch.pickupDate, batchHubId);
         const sourceId = await nextVersionedJournalSourceId(tx, "BATCH_PICKUP_ADVANCE", batch.id);
         if (!sourceId) return { batchId: batch.id, postedCount: 1, alreadyPosted: true };
@@ -559,7 +602,7 @@ type AssignmentParcel = {
   batch: { hubId: string | null; pickupDate: Date; label: string; shop: { name: string } };
 };
 
-export async function bulkAssignParcels(input: { parcelIds: string[]; riderId: string }, actor: BatchActor) {
+export async function bulkAssignParcels(input: { parcelIds: string[]; riderId: string; dispatch?: boolean }, actor: BatchActor) {
   const uniqueParcelIds = [...new Set(input.parcelIds)];
   if (uniqueParcelIds.length === 0 || uniqueParcelIds.length !== input.parcelIds.length) throw new ApiError(400, "INVALID_PARCEL_IDS", "parcelIds must contain unique parcel IDs");
   if (uniqueParcelIds.length > 500) throw new ApiError(400, "BATCH_TOO_LARGE", "A dispatch action may contain at most 500 parcels");
@@ -567,7 +610,7 @@ export async function bulkAssignParcels(input: { parcelIds: string[]; riderId: s
   if (!user || !user.active || user.role !== actor.role || !assignmentRoles.includes(user.role)) throw new ApiError(403, "FORBIDDEN", "You may not assign parcels");
   if (user.role !== "SUPERADMIN" && !user.hubId) throw new ApiError(403, "FORBIDDEN", "A hub scope is required for dispatch");
 
-  const rider = await prisma.rider.findUnique({ where: { id: input.riderId }, select: { id: true, hubId: true, user: { select: { name: true, active: true, role: true } } } });
+  const rider = await prisma.rider.findUnique({ where: { id: input.riderId }, select: { id: true, hubId: true, payModel: true, commissionRateBps: true, user: { select: { name: true, active: true, role: true } } } });
   if (!rider || !rider.user.active || rider.user.role !== "RIDER") throw new ApiError(404, "RIDER_NOT_FOUND", "Active rider not found");
   if (!rider.hubId || (user.role !== "SUPERADMIN" && rider.hubId !== user.hubId)) throw new ApiError(403, "FORBIDDEN", "Rider is outside your hub scope");
 
@@ -582,10 +625,15 @@ export async function bulkAssignParcels(input: { parcelIds: string[]; riderId: s
 
   const assigned = await prisma.$transaction(async (tx) => {
     for (const parcel of parcels as AssignmentParcel[]) {
-      const result = await tx.parcel.updateMany({ where: { id: parcel.id, riderId: null, status: parcel.status }, data: { riderId: rider.id, status: "ASSIGNED" } });
+      const result = await tx.parcel.updateMany({ where: { id: parcel.id, riderId: null, status: parcel.status }, data: { riderId: rider.id, status: input.dispatch ? "OUT_FOR_DELIVERY" : "ASSIGNED", reasonCode: null, plannedDeliveryDate: null } });
       if (result.count !== 1) throw new ApiError(409, "ASSIGNMENT_CONFLICT", "One or more parcels were assigned by another dispatcher; refresh and retry");
       await tx.packageAssignment.create({ data: { parcelId: parcel.id, riderId: rider.id, assignedById: actor.id } });
       await tx.statusHistory.create({ data: { parcelId: parcel.id, fromStatus: parcel.status, toStatus: "ASSIGNED", actorId: actor.id, note: `Bulk assigned to rider ${rider.id}` } });
+      if (input.dispatch) {
+        await tx.deliveryWay.updateMany({ where: { parcelId: parcel.id, completedAt: null }, data: { completedAt: new Date(), outcome: "SUPERSEDED" } });
+        await tx.deliveryWay.create({ data: { parcelId: parcel.id, riderId: rider.id, commissionRate: resolveCommissionRateBps(rider) } });
+        await tx.statusHistory.create({ data: { parcelId: parcel.id, fromStatus: "ASSIGNED", toStatus: "OUT_FOR_DELIVERY", actorId: actor.id, note: "Assigned and dispatched" } });
+      }
     }
     return tx.parcel.findMany({ where: { id: { in: uniqueParcelIds } }, select: { id: true, trackingNumber: true, customerName: true, customerPhone: true, address: true, codAmount: true, deliveryFee: true, zone: true, township: true, batch: { select: { label: true, pickupDate: true, shop: { select: { name: true } } } } }, orderBy: { trackingNumber: "asc" } });
   });

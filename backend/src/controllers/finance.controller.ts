@@ -36,6 +36,7 @@ export const createExpenseCategory: RequestHandler = async (req, res) => res.sta
 export const expenses: RequestHandler = async (req, res) => res.json({ success: true, data: await service.listExpenses({ businessDate: typeof req.query.businessDate === "string" ? req.query.businessDate : undefined, hubId: typeof req.query.hubId === "string" ? req.query.hubId : undefined }, actor(req)) });
 export const createExpense: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await service.postExpense(req.body, actor(req)) });
 export const ledger: RequestHandler = async (req, res) => res.json({ success: true, data: await ledgerService.getLedgerReport(req.query, actor(req)) });
+export const ledgerSummary: RequestHandler = async (req, res) => res.json({ success: true, data: await ledgerService.getLedgerSummary(req.query, actor(req)) });
 export const deliveryCollection: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await ledgerService.postDeliveryCollection(req.body, actor(req)) });
 export const returnDeduction: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await ledgerService.postReturnDeduction(req.body, actor(req)) });
 export const reversal: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await ledgerService.reverseJournalEntry(req.body, actor(req)) });
@@ -45,3 +46,5 @@ export const approveOsCutoverAdjustment: RequestHandler = async (req, res) => re
 export const createOsPayment: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await osAccountService.postOsPayment(req.body, actor(req)) });
 export const voidOsPayment: RequestHandler = async (req, res) => res.json({ success: true, data: await osAccountService.voidOsPayment({ id: String(req.params.id), ...req.body }, actor(req)) });
 export const replaceOsPayment: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await osAccountService.replaceOsPayment({ id: String(req.params.id), ...req.body }, actor(req)) });
+import { receiveOsReturnsBulk as receiveManyReturns } from "../services/finance.service.js";
+export const receiveOsReturnsBulk: import("express").RequestHandler = async (req, res) => res.json({ success: true, data: await receiveManyReturns(req.body, { id: req.auth!.sub, role: req.auth!.role }) });

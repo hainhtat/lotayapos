@@ -6,7 +6,7 @@ import { ArrowUpRight, WalletCards } from "lucide-react";
 import { OsCashbookOverview } from "@/components/os-cashbook-overview";
 import { PostPickupAdvancesPanel } from "@/components/post-pickup-advances-panel";
 import { api } from "@/lib/api";
-import { ledgerAccounts, type LedgerReport } from "@/lib/ledger";
+import { ledgerAccounts, type LedgerSummary } from "@/lib/ledger";
 import { CashbookExpenses } from "./cashbook-expenses";
 import { SettlementWorkspaces } from "./settlement-workspaces";
 
@@ -43,8 +43,14 @@ export function FinancePage() {
   const queryString = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString();
   const ledger = useQuery({
     queryKey: ["ledger", queryString],
-    queryFn: () => api<LedgerReport>(`/finance/ledger${queryString ? `?${queryString}` : ""}`).then((r) => ledgerAccounts(r.data)),
+    queryFn: () => api<LedgerSummary>(`/finance/ledger/summary${queryString ? `?${queryString}` : ""}`).then((r) => ledgerAccounts(r.data)),
   });
+  const walletSummary = useQuery({
+    queryKey: ["ledger", "wallet-summary"],
+    queryFn: () => api<LedgerSummary>("/finance/ledger/summary").then((r) => ledgerAccounts(r.data)),
+    enabled: Boolean(queryString),
+  });
+  const currentBalances = queryString ? walletSummary : ledger;
   const batches = useQuery({
     queryKey: ["operations-batches"],
     queryFn: () => api<Batch[]>("/operations/batches").then((r) => r.data),
@@ -66,8 +72,9 @@ export function FinancePage() {
     }
   };
 
-  const walletBalance = (name: string) => ledger.data?.find((line) => line.account === name)?.balance ?? 0;
+  const walletBalance = (name: string) => currentBalances.data?.find((line) => line.account === name)?.balance ?? 0;
   const formatBalance = (name: string) => {
+    if (!currentBalances.data) return currentBalances.isError ? t("loadError") : "…";
     const balance = walletBalance(name);
     return balance === 0 ? t("noBalance") : `${balance.toLocaleString()} MMK`;
   };
@@ -95,7 +102,7 @@ export function FinancePage() {
 
       {tab === "overview" ? (
         <>
-          <OsCashbookOverview ledger={ledger.data ?? []} />
+          <OsCashbookOverview ledger={currentBalances.data ?? []} />
           <PostPickupAdvancesPanel
             batches={batches.data ?? []}
             loading={batches.isLoading}
@@ -155,7 +162,7 @@ export function FinancePage() {
                 <p className="py-10 text-center text-sm text-slate-400">{t("loading")}</p>
               ) : ledger.isError ? (
                 <div className="py-10 text-center">
-                  <p className="text-sm text-rose-500">{t("loadError")}</p>
+                  <p className="text-sm text-rose-500">{ledger.error instanceof Error && ledger.error.message ? ledger.error.message : t("loadError")}</p>
                   <button onClick={() => void ledger.refetch()} className="mt-3 text-sm font-bold text-[#0787df]">
                     {t("retry")}
                   </button>

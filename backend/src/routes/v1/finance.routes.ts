@@ -3,16 +3,22 @@ import { body, param, query } from "express-validator";
 import { requireAuth, requireRoles } from "../../middleware/auth.js";
 import { validation } from "../../middleware/error.js";
 import { asyncHandler } from "../../utils/async-handler.js";
+import { ledgerSummary } from "../../controllers/finance.controller.js";
+import { osHistoryRouter } from "./os-history.routes.js";
+import { receiveOsReturnsBulk } from "../../controllers/finance.controller.js";
 import { adjustment, amendOsSettlement, approveOsCutoverAdjustment, approveVariance, close, createExpense, createExpenseCategory, createOsPayment, createOsSettlement, declareSettlement, deliveryCollection, editOsSettlementDraft, expenseCategories, expenses, ledger, openingBalance, osAccountHistory, osAccounts, osPendingReturns, osSettlementDetail, osSettlementDrafts, osSettlementPreview, osSettlements, receiveOsReturn, reopen, replaceOsPayment, reversal, reverseOsSettlement, returnDeduction, riderOutstanding, savedOsSettlementDrafts, saveOsSettlementDraft, settlement, settlementPreview, voidOsPayment, walletTransfer } from "../../controllers/finance.controller.js";
 
 export const financeRouter = Router();
+financeRouter.use("/os-history", osHistoryRouter);
 const wallet = body("wallet").isIn(["CASH", "KBZ_PAY", "WAVE_PAY"]);
 const amount = (field: string) => body(field).isInt({ min: 0 });
 const optionalHub = body("hubId").optional().isString().trim().notEmpty();
 const idempotencyKey = body("idempotencyKey").isString().trim().isLength({ min: 8, max: 100 }).matches(/^[A-Za-z0-9._:-]+$/);
 const walletSplit = [body("wallets").isObject(), body("wallets.cash").isInt({ min: 0 }), body("wallets.kbzPay").isInt({ min: 0 }), body("wallets.wavePay").isInt({ min: 0 })];
+financeRouter.post("/os-returns/receive-bulk", requireAuth, requireRoles("SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER"), [body("parcelIds").isArray({ min: 1, max: 50 }), body("parcelIds.*").isString().trim().notEmpty(), body("businessDate").isISO8601({ strict: true }), idempotencyKey], validation, asyncHandler(receiveOsReturnsBulk));
 
 financeRouter.get("/ledger", requireAuth, requireRoles("SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER", "AUDITOR"), [query("from").optional().isISO8601(), query("to").optional().isISO8601(), query("account").optional().isString().trim().notEmpty()], validation, asyncHandler(ledger));
+financeRouter.get("/ledger/summary", requireAuth, requireRoles("SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER", "AUDITOR"), [query("from").optional().isISO8601(), query("to").optional().isISO8601(), query("account").optional().isString().trim().notEmpty()], validation, asyncHandler(ledgerSummary));
 financeRouter.post("/ledger/delivery-collections", requireAuth, requireRoles("SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER"), [body("parcelId").isString().trim().notEmpty(), body("businessDate").isISO8601(), wallet, amount("collectedCod"), amount("collectedDeliveryFee")], validation, asyncHandler(deliveryCollection));
 financeRouter.post("/ledger/return-deductions", requireAuth, requireRoles("SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER"), [body("parcelId").isString().trim().notEmpty(), body("businessDate").isISO8601(), body("amount").optional().isInt({ min: 1 })], validation, asyncHandler(returnDeduction));
 financeRouter.post("/ledger/reversals", requireAuth, requireRoles("SUPERADMIN", "FINANCE"), [body("sourceType").isString().trim().notEmpty(), body("sourceId").isString().trim().notEmpty(), body("businessDate").isISO8601(), body("reason").isString().trim().isLength({ min: 3, max: 500 })], validation, asyncHandler(reversal));

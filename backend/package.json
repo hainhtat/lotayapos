@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "jest --runInBand",
+    "test:postgresql": "node scripts/test-postgresql.mjs",
     "test:integration": "jest --runInBand tests/health.test.ts tests/api-contract.test.ts tests/linked-parcels.test.ts tests/migration-upgrade.test.ts",
     "test:watch": "jest --watch",
     "db:generate": "prisma generate",

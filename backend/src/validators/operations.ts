@@ -5,6 +5,7 @@ export const alertIdValidation = [param("id").isString().trim().notEmpty()];
 export const batchIdValidation = [param("id").isString().trim().notEmpty()];
 
 export const batchListValidation = [
+  query("view").optional().isIn(["active", "history"]),
   query("page").optional().isInt({ min: 1, max: 100000 }).toInt(),
   query("pageSize").optional().isInt({ min: 1, max: 200 }).toInt(),
   query("shopId").optional().isString().trim().notEmpty(),
@@ -26,8 +27,12 @@ export const createBatchValidation = [
   body("pickupDate").isISO8601(),
   body("batchName").isString().trim().isLength({min:2,max:150}),
   body("advancePaid").isInt({min:0}).toInt(),
-  // Accepted temporarily for backwards compatibility, but operational creation never posts money.
   body("fundingWallet").optional().isIn(["CASH", "KBZ_PAY", "WAVE_PAY"]),
+  body("wallets").optional().isObject(),
+  body("wallets.cash").if(body("wallets").exists()).isInt({ min: 0 }).toInt(),
+  body("wallets.kbzPay").if(body("wallets").exists()).isInt({ min: 0 }).toInt(),
+  body("wallets.wavePay").if(body("wallets").exists()).isInt({ min: 0 }).toInt(),
+  body("idempotencyKey").optional().isString().trim().isLength({ min: 8, max: 150 }),
   body("hubId").optional().isString().trim().notEmpty(),
   body("parcels").not().exists().withMessage("Create the batch first, then use the bulk parcel endpoint"),
 ];
@@ -51,6 +56,7 @@ export const pickupAdvanceValidation = [
 ];
 
 export const bulkAssignmentValidation = [
+  body("dispatch").optional().isBoolean().toBoolean(),
   body("parcelIds").isArray({ min: 1, max: 500 }),
   body("parcelIds.*").isString().trim().notEmpty(),
   body("riderId").isString().trim().notEmpty(),

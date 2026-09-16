@@ -7,11 +7,19 @@ import { api } from "@/lib/api";
 import { CreateBatchDialog } from "./create-batch-dialog";
 import { OperationsReturnQueue } from "./operations-return-queue";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
+import { useAuth } from "@/app/auth";
+import { OsAccountsPanel } from "@/components/os-accounts-panel";
+import { HistoricalSettlementPanel } from "@/components/historical-settlement-panel";
 
 type BatchSummary = {
   id: string;
   label: string;
   pickupDate: string;
+  hubId?: string;
+  outstanding?: number;
+  balanceError?: string | null;
+  historicallySettled?: boolean;
+  overdueCount?: number;
   shop: { name: string };
   parcels: Array<{ status: string }>;
 };
@@ -30,14 +38,17 @@ function batchStats(parcels: Array<{ status: string }>) {
 
 export function BatchesPage() {
   const { t } = useTranslation();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [page, setPage] = useState(1);
+  const [view, setView] = useState("active");
+  const [settling, setSettling] = useState<BatchSummary | null>(null);
   const [filters, setFilters] = useState({ search: "", dateFrom: "", dateTo: "", shopId: "", hubId: "" });
   const debouncedSearch = useDebouncedValue(filters.search,350);
-  const queryFilters = { ...filters, search: debouncedSearch };
+  const queryFilters = { ...filters, search: debouncedSearch, view };
   const masters = useQuery({ queryKey: ["master-data"], queryFn: () => api<{shops:Array<{id:string;name:string}>;hubs:Array<{id:string;name:string}>}>("/master-data").then((r) => r.data) });
 
   const batches = useQuery({
@@ -84,10 +95,7 @@ export function BatchesPage() {
 
       <section className="mt-5 rounded-xl border border-black/5 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="font-display text-base font-bold">{t("allBatches")}</h2>
-            <p className="text-xs text-slate-500">{t("allBatchesDescription")}</p>
-          </div>
+          <nav aria-label={t("batchViews")} className="flex gap-2">{["active", "history", "all"].map(value => <button type="button" key={value} aria-pressed={view === value} onClick={() => { setView(value); setPage(1); }} className={`rounded-lg px-3 py-2 text-sm font-bold ${view === value ? "bg-sky-600 text-white" : "text-slate-500 dark:text-slate-300"}`}>{t(value === "active" ? "activeBatches" : value === "history" ? "history" : "all")}</button>)}</nav>
           <span className="rounded-full bg-[#eaf6ff] px-2.5 py-0.5 text-[11px] font-bold text-[#0787df] dark:bg-[#1598ef]/15">
             {(batches.data?.pagination.total ?? 0)} {t("batches")}
           </span>
@@ -96,8 +104,8 @@ export function BatchesPage() {
           <label className="text-xs font-bold text-slate-500">{t("searchBatches")}<input aria-label={t("searchBatches")} type="search" value={filters.search} onChange={(event) => { setFilters((value) => ({ ...value, search: event.target.value })); setPage(1); }} className={`${control} mt-1 w-full`} /></label>
           <label className="text-xs font-bold text-slate-500">{t("dateFrom")}<input aria-label={`${t("allBatches")} ${t("dateFrom")}`} type="date" value={filters.dateFrom} onChange={(event) => { setFilters((value) => ({ ...value, dateFrom: event.target.value })); setPage(1); }} className={`${control} mt-1 w-full`} /></label>
           <label className="text-xs font-bold text-slate-500">{t("dateTo")}<input aria-label={`${t("allBatches")} ${t("dateTo")}`} type="date" value={filters.dateTo} onChange={(event) => { setFilters((value) => ({ ...value, dateTo: event.target.value })); setPage(1); }} className={`${control} mt-1 w-full`} /></label>
-          <label className="text-xs font-bold text-slate-500">{t("onlineShop")}<select aria-label={`${t("allBatches")} ${t("onlineShop")}`} value={filters.shopId} onChange={(event) => { setFilters((value) => ({ ...value, shopId: event.target.value })); setPage(1); }} className={`${control} mt-1 w-full`}><option value="">{t("all")}</option>{(masters.data?.shops ?? []).map((shop) => <option key={shop.id} value={shop.id}>{shop.name}</option>)}</select></label>
-          <label className="text-xs font-bold text-slate-500">{t("hub")}<select aria-label={`${t("allBatches")} ${t("hub")}`} value={filters.hubId} onChange={(event) => { setFilters((value) => ({ ...value, hubId: event.target.value })); setPage(1); }} className={`${control} mt-1 w-full`}><option value="">{t("all")}</option>{(masters.data?.hubs ?? []).map((hub) => <option key={hub.id} value={hub.id}>{hub.name}</option>)}</select></label>
+          {(masters.data?.shops?.length ?? 0) > 1 && <label className="text-xs font-bold text-slate-500">{t("onlineShop")}<select aria-label={`${t("allBatches")} ${t("onlineShop")}`} value={filters.shopId} onChange={(event) => { setFilters((value) => ({ ...value, shopId: event.target.value })); setPage(1); }} className={`${control} mt-1 w-full`}><option value="">{t("all")}</option>{(masters.data?.shops ?? []).map((shop) => <option key={shop.id} value={shop.id}>{shop.name}</option>)}</select></label>}
+          {(masters.data?.hubs?.length ?? 0) > 1 && <label className="text-xs font-bold text-slate-500">{t("hub")}<select aria-label={`${t("allBatches")} ${t("hub")}`} value={filters.hubId} onChange={(event) => { setFilters((value) => ({ ...value, hubId: event.target.value })); setPage(1); }} className={`${control} mt-1 w-full`}><option value="">{t("all")}</option>{(masters.data?.hubs ?? []).map((hub) => <option key={hub.id} value={hub.id}>{hub.name}</option>)}</select></label>}
         </div>
         {batches.isLoading ? (
           <p className="py-6 text-center text-sm text-slate-400">{t("loading")}</p>
@@ -122,6 +130,7 @@ export function BatchesPage() {
                   <th className="py-2 pr-2 text-right">{t("remaining")}</th>
                   <th className="py-2 pr-2 text-right">{t("delivered")}</th>
                   <th className="py-2 pr-2 text-right">{t("pendingReturn")}</th>
+                  <th className="py-2 pr-2 text-right">{t("remainingToOs")}</th>
                   <th className="py-2 text-right">{t("open")}</th>
                 </tr>
               </thead>
@@ -134,15 +143,17 @@ export function BatchesPage() {
                       key={batch.id}
                       className={`border-b border-slate-100 dark:border-white/5 ${active ? "bg-[#eaf6ff]/70 dark:bg-[#1598ef]/10" : "hover:bg-slate-50/80 dark:hover:bg-white/[0.03]"}`}
                     >
-                      <td className="py-2 pr-2 font-bold">{batch.label}</td>
+                      <td className="py-2 pr-2 font-bold">{batch.label}{batch.historicallySettled && <span className="mt-1 block text-xs font-normal text-slate-500">{t("settledHistorically")}</span>}{Boolean(batch.overdueCount) && <button type="button" className="mt-1 block text-xs text-amber-700 dark:text-amber-300" onClick={() => navigate(`/operations/dispatch?batchId=${batch.id}&queue=overdue`)}>{t("batchOverdueCount", { count: batch.overdueCount })}</button>}</td>
                       <td className="py-2 pr-2">{batch.shop.name}</td>
                       <td className="py-2 pr-2 whitespace-nowrap text-slate-500">{new Date(batch.pickupDate).toLocaleDateString()}</td>
                       <td className="py-2 pr-2 text-right tabular-nums">{stats.total}</td>
                       <td className="py-2 pr-2 text-right font-bold tabular-nums text-[#0787df]">{stats.remaining}</td>
                       <td className="py-2 pr-2 text-right tabular-nums text-[#12a66a]">{stats.delivered}</td>
                       <td className="py-2 pr-2 text-right tabular-nums text-amber-600">{stats.pendingReturn}</td>
+                      <td className="py-2 pr-2 text-right font-bold tabular-nums">{batch.outstanding == null ? "—" : batch.outstanding.toLocaleString()}{batch.balanceError && <p className="max-w-xs text-xs font-normal text-amber-700">{batch.balanceError}</p>}</td>
                       <td className="py-2 text-right">
                         <div className="flex justify-end gap-1">
+                          {["SUPERADMIN", "FINANCE"].includes(user?.role ?? "") && (batch.outstanding ?? 0) > 0 && <button type="button" onClick={() => setSettling(batch)} className="rounded-md border border-sky-500 px-2 py-1 text-xs font-bold text-sky-600">{t("settle")}</button>}
                           <button
                             type="button"
                             className="rounded-md border border-[#1598ef] px-2 py-1 text-[11px] font-bold text-[#0787df]"
@@ -150,7 +161,7 @@ export function BatchesPage() {
                               navigate(active ? "/operations/dispatch" : `/operations/dispatch?batchId=${batch.id}`)
                             }
                           >
-                            {active ? t("clearFilters") : t("filterBatch")}
+                            {t("viewParcels")}
                           </button>
                           <button
                             type="button"
@@ -178,6 +189,8 @@ export function BatchesPage() {
       </section>
 
       <OperationsReturnQueue />
+      {view === "history" && user?.role === "SUPERADMIN" && <HistoricalSettlementPanel />}
+      {settling && <OsAccountsPanel initialBatchId={settling.id} initialHubId={settling.hubId} onPaymentClose={() => setSettling(null)} />}
 
       <section
         id="alerts"

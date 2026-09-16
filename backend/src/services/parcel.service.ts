@@ -5,6 +5,8 @@ import { resolveCommissionRateBps } from "../utils/commission.js";
 import { caseInsensitiveTextCondition } from "../utils/string-filters.js";
 import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { syncBatchObligation } from "./os-account.service.js";
+import { acquireBatchMutationLock } from "./operations.service.js";
 import { assertCashbookOpen } from "./finance.service.js";
 import { assertBalancedLines, buildPartialReturnAdjustmentLines, buildPartialReturnCollectionLines, calculateLinkedDeliveryAmounts, calculatePartialReturnAmounts, reverseJournalEntryInTx } from "./ledger.service.js";
 
@@ -185,6 +187,7 @@ type Actor = { id: string; role: string };
 type ActorScope = { id: string; role: string; hubId: string | null; riderId: string | null };
 type ParcelResource = { batchHubId: string | null; riderUserId: string | null };
 export type ParcelListFilters = {
+  queue?: "to-assign" | "with-riders" | "rescheduled" | "return-to-os" | "overdue";
   batchId?: string;
   riderId?: string;
   assignmentStatus?: "ASSIGNED" | "UNASSIGNED";
@@ -267,6 +270,15 @@ export function buildParcelListWhere(scope: ActorScope, assignedToMe = false, fi
   if (dateFrom && dateTo && dateFrom >= dateTo) throw new ApiError(400, "INVALID_DATE_RANGE", "dateFrom must be before dateTo");
   const conditions: Prisma.ParcelWhereInput[] = [];
   if (base) conditions.push(base);
+  if (filters.queue) {
+    const rescheduleCodes = ["DATE_CHANGE", "DELIVERY_DATE_CHANGE", "RESCHEDULE"];
+    const notRescheduled = { OR: [{ reasonCode: null }, { reasonCode: { notIn: rescheduleCodes } }] };
+    if (filters.queue === "to-assign") conditions.push({ status: { in: ["CREATED", "PICKED_UP", "FAILED", "PARTIAL"] }, ...notRescheduled });
+    if (filters.queue === "with-riders") conditions.push({ status: { in: ["ASSIGNED", "OUT_FOR_DELIVERY"] } });
+    if (filters.queue === "rescheduled") conditions.push({ status: { notIn: ["DELIVERED", "RETURNED", "PENDING_RETURN"] }, reasonCode: { in: rescheduleCodes } });
+    if (filters.queue === "return-to-os") conditions.push({ status: { in: ["PENDING_RETURN", "REJECTED"] } });
+    if (filters.queue === "overdue") conditions.push({ status: { notIn: ["DELIVERED", "RETURNED"] }, createdAt: { lte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) } });
+  }
   if (filters.batchId) conditions.push({ batchId: filters.batchId });
   if (filters.riderId) conditions.push({ riderId: filters.riderId });
   if (filters.assignmentStatus === "ASSIGNED") conditions.push({ riderId: { not: null } });
@@ -306,6 +318,29 @@ export async function getParcelHistory(id: string, actor: Actor) {
   const parcel = await prisma.parcel.findFirst({ where: { id, ...(accessScope ?? {}) }, select: { id: true } });
   if (!parcel) throw new ApiError(404, "PARCEL_NOT_FOUND", "Parcel not found");
   return prisma.statusHistory.findMany({ where: { parcelId: parcel.id }, orderBy: { createdAt: "asc" } });
+}
+
+export async function rescheduleParcels(input: { parcelIds: string[]; plannedDeliveryDate: string; reason: string }, actor: Actor) {
+  const scope = await actorScope(actor);
+  if (!["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"].includes(scope.role)) throw new ApiError(403, "FORBIDDEN", "You may not reschedule parcels");
+  const ids = [...new Set(input.parcelIds)].sort();
+  if (!ids.length || ids.length > 50 || ids.length !== input.parcelIds.length) throw new ApiError(400, "INVALID_PARCEL_SELECTION", "Select between 1 and 50 distinct parcels");
+  const date = new Date(`${input.plannedDeliveryDate}T00:00:00.000Z`);
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== input.plannedDeliveryDate || input.reason.trim().length < 3) throw new ApiError(400, "INVALID_RESCHEDULE", "A valid delivery date and reason are required");
+  return serializableTransaction(async tx => {
+    const parcels = await tx.parcel.findMany({ where: { id: { in: ids }, ...(buildParcelScope(scope) ?? {}) } });
+    if (parcels.length !== ids.length) throw new ApiError(404, "PARCEL_NOT_FOUND", "Some parcels are unavailable in your hub");
+    for (const parcel of parcels) {
+      if (["DELIVERED", "RETURNED", "PENDING_RETURN", "PARTIAL"].includes(parcel.status) || parcel.linkGroupId) throw new ApiError(409, "PARCEL_NOT_RESCHEDULABLE", "Resolve financial outcomes, OS returns, or unlink the group before rescheduling");
+      if (parcel.status === "PICKED_UP" && parcel.reasonCode === "RESCHEDULE" && parcel.plannedDeliveryDate?.getTime() === date.getTime()) continue;
+      const updated = await tx.parcel.updateMany({ where: { id: parcel.id, updatedAt: parcel.updatedAt, status: parcel.status }, data: { status: "PICKED_UP", riderId: null, reasonCode: "RESCHEDULE", plannedDeliveryDate: date } });
+      if (updated.count !== 1) throw new ApiError(409, "STATUS_CONFLICT", "Parcel changed; refresh and retry");
+      await tx.deliveryWay.updateMany({ where: { parcelId: parcel.id, completedAt: null }, data: { completedAt: new Date(), outcome: "RESCHEDULED" } });
+      await tx.packageAssignment.updateMany({ where: { parcelId: parcel.id, endedAt: null }, data: { endedAt: new Date(), endedById: actor.id, reason: input.reason.trim() } });
+      await tx.statusHistory.create({ data: { parcelId: parcel.id, actorId: actor.id, fromStatus: parcel.status, toStatus: "PICKED_UP", reasonCode: "RESCHEDULE", note: `${input.plannedDeliveryDate}: ${input.reason.trim()}` } });
+    }
+    return { updatedCount: ids.length, parcels: await tx.parcel.findMany({ where: { id: { in: ids } } }) };
+  });
 }
 
 export async function getParcelFieldHistory(id: string, actor: Actor) {
@@ -518,13 +553,13 @@ export async function updateParcel(
   const accessScope = buildParcelScope(scope);
   const parcel = await prisma.parcel.findFirst({
     where: { id, ...(accessScope ?? {}) },
-    include: { batch: { select: { id: true, hubId: true } } },
+    include: { batch: { select: { id: true, hubId: true, automaticAccounting: true } } },
   });
   if (!parcel) throw new ApiError(404, "PARCEL_NOT_FOUND", "Parcel not found");
   const changesDeliveryAttributes = input.codAmount !== undefined || input.deliveryFee !== undefined || input.townshipId !== undefined || input.zoneId !== undefined;
   if (changesDeliveryAttributes && !editableStatuses.has(parcel.status)) throw new ApiError(409, "PARCEL_NOT_EDITABLE", "COD, delivery fee, township, and zone may only be edited for Created, Picked up, or Assigned parcels");
   if (changesDeliveryAttributes && parcel.linkGroupId) throw new ApiError(409, "PARCEL_LINKED", "Unlink the parcel before editing delivery attributes");
-  if (input.codAmount !== undefined || input.townshipId !== undefined || input.deliveryFee !== undefined) {
+  if (!parcel.batch.automaticAccounting && (input.codAmount !== undefined || input.townshipId !== undefined || input.deliveryFee !== undefined)) {
     const advanceEntries = await prisma.journalEntry.findMany({
       where: {
         sourceType: "BATCH_PICKUP_ADVANCE",
@@ -596,6 +631,8 @@ export async function updateParcel(
   const changedFields = Object.keys(afterValues).filter((key) => beforeValues[key] !== afterValues[key]);
 
   return serializableTransaction(async (tx) => {
+    await acquireBatchMutationLock(tx, parcel.batchId);
+    if (input.codAmount !== undefined && await tx.osHistoricalSettlement.findUnique({ where: { batchId: parcel.batchId } })) throw new ApiError(409, "HISTORICAL_BATCH_LOCKED", "Historically settled batch COD cannot be changed");
     if (changedFields.length > 0) {
       const result = await tx.parcel.updateMany({ where: { id, updatedAt: parcel.updatedAt, ...(changesDeliveryAttributes ? {status: { in: [...editableStatuses] }} : {}) }, data });
       if (result.count !== 1) throw new ApiError(409, "PARCEL_EDIT_CONFLICT", "Parcel changed; refresh and retry");
@@ -607,6 +644,7 @@ export async function updateParcel(
           afterJson: JSON.stringify(Object.fromEntries(changedFields.map((key) => [key, afterValues[key]]))),
         },
       });
+      if (parcel.batch.automaticAccounting && changedFields.includes("codAmount")) await syncBatchObligation(tx, parcel.batchId, actor.id);
     }
     return tx.parcel.findUniqueOrThrow({
       where: { id },

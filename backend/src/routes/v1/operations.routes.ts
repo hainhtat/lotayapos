@@ -10,7 +10,7 @@ import { alertIdValidation, batchIdValidation, batchListValidation, bulkAssignme
 export const operationsRouter = Router();
 operationsRouter.get("/batches", requireAuth, requireRoles("SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "DISPATCHER"), batchListValidation, validation, asyncHandler(batches));
 operationsRouter.get("/parcels/overdue-unsent", requireAuth, requireRoles("SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "DISPATCHER"), overdueUnsentValidation, validation, asyncHandler(overdueUnsent));
-operationsRouter.post("/batches", requireAuth, requireRoles("SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"), createBatchValidation, validation, asyncHandler(createBatch));
+operationsRouter.post("/batches", requireAuth, requireRoles("SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER", "DISPATCHER"), createBatchValidation, validation, asyncHandler(createBatch));
 operationsRouter.get("/batches/:id", requireAuth, requireRoles("SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER"), batchIdValidation, validation, asyncHandler(batchDetail));
 operationsRouter.post("/batches/:id/parcels/bulk", requireAuth, requireRoles("SUPERADMIN","OPERATIONS_MANAGER","DISPATCHER"), bulkParcelCreateValidation, validation, asyncHandler(bulkCreateParcels));
 operationsRouter.post("/batches/:id/finalize", requireAuth, requireRoles("SUPERADMIN","OPERATIONS_MANAGER","DISPATCHER"), batchIdValidation, validation, asyncHandler(finalizeBatch));

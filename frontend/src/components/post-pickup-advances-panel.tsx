@@ -52,7 +52,7 @@ export function PostPickupAdvancesPanel({
   const money = (value: number) => `${value.toLocaleString(locale)} MMK`;
 
   const rows = useMemo(() => {
-    return [...batches].sort((a, b) => {
+    return batches.filter(batch => batch.advancePaid > 0 && !batch.advancePosted).sort((a, b) => {
       const rank = (batch: Batch) => {
         if (batch.advancePaid <= 0) return 2;
         if (batch.advancePosted) return 1;
@@ -100,6 +100,8 @@ export function PostPickupAdvancesPanel({
     setBatchId(id);
     setConfirming(true);
   };
+
+  if (!loading && !error && rows.length === 0) return null;
 
   return (
     <section className="mt-7 rounded-2xl border border-black/5 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
@@ -227,13 +229,10 @@ export function PostPickupAdvancesPanel({
               </select>
             </label>
             <div className="mt-4 rounded-xl border border-slate-200 p-4 text-sm dark:border-white/10">
-              <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{t("journalPreview")}</p>
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{t("walletDeduction")}</p>
               <div className="mt-2 space-y-1">
                 <p>
-                  <span className="text-slate-500">{t("debit")}:</span> {t("osAdvanceReceivable")} · {money(selectedBatch.advancePaid)}
-                </p>
-                <p>
-                  <span className="text-slate-500">{t("credit")}:</span> {walletLabel(wallet, t)} · {money(selectedBatch.advancePaid)}
+                  {walletLabel(wallet, t)} · {money(selectedBatch.advancePaid)}
                 </p>
               </div>
             </div>

@@ -50,9 +50,9 @@ describe("FinancePage",()=>{
       return Promise.resolve({ data: ledgerReport });
     });
     renderPage();
-    expect(await screen.findByText("Posted")).toBeInTheDocument();
-    expect(screen.getByText("All batch advances posted")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Review posting" })).not.toBeInTheDocument();
+    await screen.findByText("Finance overview");
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Earlier advances needing wallet details" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Record wallet details" })).not.toBeInTheDocument();
   });
 
   it("requires review and confirmation before posting pickup advances",async()=>{
@@ -65,13 +65,13 @@ describe("FinancePage",()=>{
     });
     const user=userEvent.setup();
     renderPage();
-    await screen.findByText("Needs posting");
-    await user.click(screen.getByRole("button",{name:"Review posting"}));
+    await screen.findByText("Wallet details needed");
+    await user.click(screen.getByRole("button",{name:"Record wallet details"}));
     const dialog=screen.getByRole("dialog");
     expect(within(dialog).getByText("Shop 11.08.2026")).toBeInTheDocument();
-    expect(within(dialog).getByText(/OS advance receivable/i)).toBeInTheDocument();
+    expect(within(dialog).getByText("Wallet deduction")).toBeInTheDocument();
     await user.selectOptions(within(dialog).getByLabelText("Funding wallet"),"KBZ_PAY");
-    await user.click(within(dialog).getByRole("button",{name:"Confirm and post"}));
+    await user.click(within(dialog).getByRole("button",{name:"Confirm payment"}));
     await waitFor(()=>expect(apiMock).toHaveBeenCalledWith("/operations/batches/batch-1/pickup-advances",{method:"POST",body:JSON.stringify({fundingWallet:"KBZ_PAY"})}));
     expect(await screen.findByRole("status")).toHaveTextContent("50,000 MMK");
   });
@@ -82,7 +82,7 @@ describe("FinancePage",()=>{
     fireEvent.change(screen.getByLabelText("From date"),{target:{value:"2026-08-01"}});
     fireEvent.change(screen.getByLabelText("Account"),{target:{value:"WALLET_CASH"}});
     fireEvent.click(screen.getByRole("button",{name:"Apply filters"}));
-    await waitFor(()=>expect(apiMock).toHaveBeenCalledWith("/finance/ledger?from=2026-08-01&account=WALLET_CASH"));
+    await waitFor(()=>expect(apiMock).toHaveBeenCalledWith("/finance/ledger/summary?from=2026-08-01&account=WALLET_CASH"));
   });
 
   it("records a categorized wallet expense with integer MMK",async()=>{
@@ -317,7 +317,7 @@ describe("FinancePage",()=>{
     renderPage("/finance#os-pending-returns");
     expect(await screen.findByRole("tab", { name: "OS & riders" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("heading", { name: "OS pending returns" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Post pickup advances" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Earlier advances needing wallet details" })).not.toBeInTheDocument();
   });
 
   it("opens the settlements tab from the os-settlements deep-link hash", async () => {
@@ -330,7 +330,7 @@ describe("FinancePage",()=>{
     renderPage("/finance#os-settlements");
     expect(await screen.findByRole("tab", { name: "OS & riders" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("heading", { name: "Online-shop settlements" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Post pickup advances" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Earlier advances needing wallet details" })).not.toBeInTheDocument();
   });
 
   it("returns to Finance overview after a settlements deep-link hash", async () => {
@@ -345,7 +345,7 @@ describe("FinancePage",()=>{
     expect(await screen.findByRole("tab", { name: "OS & riders" })).toHaveAttribute("aria-selected", "true");
     await user.click(screen.getByRole("tab", { name: "Finance overview" }));
     expect(await screen.findByRole("tab", { name: "Finance overview" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("heading", { name: "Post pickup advances" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Journal balances" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Online-shop settlements" })).not.toBeInTheDocument();
   });
 
@@ -575,8 +575,8 @@ describe("FinancePage",()=>{
       return Promise.resolve({data:ledgerReport});
     });
     const user=userEvent.setup();renderPage("/finance?tab=settlements");
-    await user.click(await screen.findByRole("button",{name:"Record payment"}));
-    const form=screen.getByRole("form",{name:"Record OS payment"});
+    await user.click(await screen.findByRole("button",{name:"Settle"}));
+    const form=screen.getByRole("dialog",{name:"Settle"});
     expect(within(form).getByLabelText("Cash")).toHaveValue(20000);
     await user.type(within(form).getByLabelText("note"),"Pay finalized batch");
     await user.click(within(form).getByRole("button",{name:"Save"}));

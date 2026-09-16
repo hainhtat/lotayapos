@@ -2,7 +2,7 @@ import { prisma } from "../config/database.js";
 import { ApiError } from "../utils/api-error.js";
 import { resolveCommissionRateBps } from "../utils/commission.js";
 import type { Prisma } from "@prisma/client";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   buildOsSettlementReturnDeductionLines,
   getActiveReturnDeduction,
@@ -1127,12 +1127,13 @@ export async function listOsPendingReturns(
 export async function receiveOsReturn(
   input: { parcelId: string; businessDate: string; idempotencyKey: string },
   actor: FinanceActor,
+  transaction?: Prisma.TransactionClient,
 ) {
   const user = await assertFinanceActor(actor);
   const date = businessDay(input.businessDate);
   const idempotencyKey = input.idempotencyKey.trim();
 
-  return prisma.$transaction(async (tx) => {
+  const receive = async (tx: Prisma.TransactionClient) => {
     const priorReceive = await tx.statusHistory.findFirst({
       where: {
         parcelId: input.parcelId,
@@ -1301,7 +1302,29 @@ export async function receiveOsReturn(
       journalEntry,
       alreadyReceived: false,
     };
-  }, { isolationLevel: "Serializable" });
+  };
+  return transaction ? receive(transaction) : prisma.$transaction(receive, { isolationLevel: "Serializable" });
+}
+
+export async function receiveOsReturnsBulk(input: { parcelIds: string[]; businessDate: string; idempotencyKey: string }, actor: FinanceActor) {
+  const user = await assertFinanceActor(actor);
+  const ids = [...new Set(input.parcelIds)].sort();
+  if (!ids.length || ids.length > 50 || ids.length !== input.parcelIds.length) throw new ApiError(400, "INVALID_PARCEL_SELECTION", "Select between 1 and 50 distinct parcels");
+  const hash = createHash("sha256").update(JSON.stringify({ ids, businessDate: input.businessDate, actorId: actor.id })).digest("hex");
+  return prisma.$transaction(async tx => {
+    const count = await tx.parcel.count({ where: { id: { in: ids }, ...(user.role === "SUPERADMIN" ? {} : { batch: { hubId: user.hubId } }) } });
+    if (count !== ids.length) throw new ApiError(404, "PARCEL_NOT_FOUND", "Some parcels are outside your hub");
+    const previous = await tx.osSettlementEditAudit.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+    if (previous) {
+      if (previous.targetType !== "BULK_OS_RETURN" || previous.beforeJson !== hash) throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "This request reference was used for different returns");
+      return JSON.parse(previous.afterJson) as { updatedCount: number; results: unknown[] };
+    }
+    const results = [];
+    for (const parcelId of ids) results.push(await receiveOsReturn({ parcelId, businessDate: input.businessDate, idempotencyKey: createHash("sha256").update(`${input.idempotencyKey}:${parcelId}`).digest("hex") }, actor, tx));
+    const result = { updatedCount: results.length, results };
+    await tx.osSettlementEditAudit.create({ data: { targetType: "BULK_OS_RETURN", targetId: input.idempotencyKey, action: "RECEIVE", actorId: actor.id, reason: "Confirmed physical handover to OS", beforeJson: hash, afterJson: JSON.stringify(result), idempotencyKey: input.idempotencyKey } });
+    return result;
+  }, { isolationLevel: "Serializable", timeout: 30_000 });
 }
 
 export async function getOsSettlement(id: string, actor: FinanceActor) {

@@ -57,7 +57,7 @@ describe("bulk parcel tracking allocation", () => {
   afterAll(async () => {
     await prisma.parcel.deleteMany({ where: { batchId } });
     await prisma.osBatchObligation.deleteMany({ where: { batchId } });
-    const obligationEntries = await prisma.journalEntry.findMany({ where: { sourceType: "OS_BATCH_OBLIGATION", sourceId: { startsWith: `${batchId}:` } }, select: { id: true } });
+    const obligationEntries = await prisma.journalEntry.findMany({ where: { hubId }, select: { id: true } });
     await prisma.journalLine.deleteMany({ where: { entryId: { in: obligationEntries.map((entry) => entry.id) } } });
     await prisma.journalEntry.deleteMany({ where: { id: { in: obligationEntries.map((entry) => entry.id) } } });
     await prisma.batch.deleteMany({ where: { id: batchId } });
@@ -66,6 +66,7 @@ describe("bulk parcel tracking allocation", () => {
     await prisma.regionState.deleteMany({ where: { id: regionId } });
     await prisma.user.deleteMany({ where: { id: dispatcherId } });
     await prisma.onlineShop.deleteMany({ where: { id: shopId } });
+    await prisma.cashbookDay.deleteMany({ where: { hubId } });
     await prisma.hub.deleteMany({ where: { id: hubId } });
   });
 
@@ -96,6 +97,28 @@ describe("bulk parcel tracking allocation", () => {
 
     expect(response.status).toBe(201);
     expect(response.body.data[0].trackingNumber).toMatch(/^LTY-\d+$/);
+  });
+
+  const postgresTest = process.env.DATABASE_PROVIDER === "postgresql" ? test : test.skip;
+  postgresTest("concurrent saves allocate distinct tracking numbers and finalize the full obligation", async () => {
+    const responses = await Promise.all([1, 2].map(i => request(app)
+      .post(`/api/v1/operations/batches/${batchId}/parcels/bulk`)
+      .set("Authorization", `Bearer ${authToken()}`)
+      .send({ parcels: [{ orderId: `CONCURRENT-${i}`, customerName: "Concurrent", address: "Address", codAmount: 500, townshipId }] })));
+    expect(responses.map(response => response.status)).toEqual([201, 201]);
+    expect(new Set(responses.map(response => response.body.data[0].trackingNumber)).size).toBe(2);
+    const [racingSave, finalized] = await Promise.all([
+      request(app).post(`/api/v1/operations/batches/${batchId}/parcels/bulk`)
+        .set("Authorization", `Bearer ${authToken()}`)
+        .send({ parcels: [{ orderId: "RACING-FINALIZE", customerName: "Race", address: "Address", codAmount: 750, townshipId }] }),
+      request(app).post(`/api/v1/operations/batches/${batchId}/finalize`).set("Authorization", `Bearer ${authToken()}`),
+    ]);
+    expect([201, 409]).toContain(racingSave.status);
+    if (racingSave.status === 409) expect(racingSave.body.error.code).toBe("BATCH_FINALIZED");
+    expect(finalized.status).toBe(200);
+    const cod = await prisma.parcel.aggregate({ where: { batchId }, _sum: { codAmount: true } });
+    const obligation = await prisma.osBatchObligation.findUniqueOrThrow({ where: { batchId } });
+    expect(obligation.originalCod).toBe(cod._sum.codAmount);
   });
 });
 

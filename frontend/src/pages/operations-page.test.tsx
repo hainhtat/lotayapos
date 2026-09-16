@@ -50,6 +50,16 @@ describe("OperationsPage", () => {
     apiRawMock.mockReset();
   });
 
+  it("uses server queues for rescheduled and overdue parcels without hiding assigned overdue work", async () => {
+    mockParcelList([]); apiMock.mockResolvedValue({data:[]}); renderPage();
+    fireEvent.click(screen.getByRole("button", {name:"Rescheduled"}));
+    await waitFor(() => expect(apiRawMock).toHaveBeenCalledWith(expect.stringMatching(/^\/parcels\?queue=rescheduled/)));
+    fireEvent.click(screen.getByRole("button", {name:"3+ days in hand"}));
+    await waitFor(() => expect(apiRawMock).toHaveBeenCalledWith(expect.stringMatching(/^\/parcels\?queue=overdue/)));
+    const last = apiRawMock.mock.calls.filter(([path]) => path.startsWith("/parcels?")).at(-1)![0];
+    expect(last).not.toContain("assignmentStatus");
+  });
+
   it("submits the backend status field with actual COD collected", async () => {
     const parcel = {
       id: "parcel-1",
@@ -504,7 +514,7 @@ describe("OperationsPage", () => {
     renderPage();
 
     await screen.findByText("TRK-1");
-    expect(screen.queryByRole("button", { name: /assign/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Assign & dispatch/i })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Assign to rider")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("checkbox", { name: /select TRK-1/i }));

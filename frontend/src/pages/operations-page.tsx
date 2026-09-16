@@ -39,6 +39,8 @@ type Parcel = {
   township?: string | null;
   linkGroup?: { id: string; address: string; baseDeliveryFee: number; totalDeliveryFee: number } | null;
   reasonCode?: string | null;
+  plannedDeliveryDate?: string | null;
+  createdAt?: string;
 };
 type Township = {
   id: string;
@@ -56,6 +58,7 @@ type BatchSummary = {
   parcels: Array<{ status: string }>;
 };
 type Filters = {
+  queue: string;
   shopId: string;
   batchId: string;
   riderId: string;
@@ -83,6 +86,7 @@ type ReasonCode = {
 };
 
 const emptyFilters: Filters = {
+  queue: "",
   shopId: "",
   batchId: "",
   riderId: "",
@@ -180,6 +184,12 @@ export function OperationsPage() {
   const [reasonCode, setReasonCode] = useState("");
   const [reasonNote, setReasonNote] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  const [rescheduleDate, setRescheduleDate] = useState(hubBusinessDate());
+  const [rescheduleReason, setRescheduleReason] = useState("");
+  const [returnOpen, setReturnOpen] = useState(false);
+  const [returnDate, setReturnDate] = useState(hubBusinessDate());
+  const returnRequest = useRef<string | null>(null);
   const selectionScope = useRef("");
 
   useEffect(() => {
@@ -278,11 +288,20 @@ export function OperationsPage() {
   );
 
   const invalidateParcels = async () => {
-    await queryClient.invalidateQueries({ queryKey: ["parcels"] });
+    await Promise.all(["parcels", "operations-batches", "overdue-unsent", "dashboard"].map(key => queryClient.invalidateQueries({ queryKey: [key] })));
   };
+  const reschedule = useMutation({
+    mutationFn: () => api("/parcels/reschedule", { method: "POST", body: JSON.stringify({ parcelIds: selected, plannedDeliveryDate: rescheduleDate, reason: rescheduleReason.trim() }) }),
+    onSuccess: async () => { setRescheduleOpen(false); setSelected([]); setMessage(t("rescheduleComplete")); await invalidateParcels(); },
+  });
+  const confirmReturns = useMutation({
+    mutationFn: () => { returnRequest.current ??= JSON.stringify({ parcelIds: selected, businessDate: returnDate, idempotencyKey: `bulk-return-${crypto.randomUUID()}` }); return api("/finance/os-returns/receive-bulk", { method: "POST", body: returnRequest.current }); },
+    onSuccess: async () => { returnRequest.current = null; setReturnOpen(false); setSelected([]); setMessage(t("osReturnReceived")); await invalidateParcels(); await Promise.all(["os-accounts", "ledger", "operations-return-queue"].map(key => queryClient.invalidateQueries({ queryKey: [key] }))); },
+    onError: error => { if (error instanceof ApiError && error.status && error.status >= 400 && error.status < 500) returnRequest.current = null; },
+  });
 
   const assign = useMutation({
-    mutationFn: (input: { parcelIds: string[]; riderId: string }) =>
+    mutationFn: (input: { parcelIds: string[]; riderId: string; dispatch?: boolean }) =>
       api<{ assignedCount: number }>("/operations/parcels/bulk-assign", {
         method: "POST",
         body: JSON.stringify(input),
@@ -664,6 +683,11 @@ export function OperationsPage() {
         </button>
       </div>
 
+      <nav aria-label={t("dispatchWorkQueues")} className="mt-5 flex flex-wrap gap-2">
+        {[["", "all"], ["to-assign", "queueToAssign"], ["with-riders", "queueWithRiders"], ["rescheduled", "queueRescheduled"], ["return-to-os", "queueReturnToOs"], ["overdue", "queueOverdue"]].map(([value, label]) => <button key={value} type="button" aria-pressed={filters.queue === value} onClick={() => { setPage(1); setSelected([]); const next = { ...emptyFilters, batchId: filters.batchId, queue: value }; setFilters(next); setSearchParams(Object.fromEntries(Object.entries(next).filter(([, entry]) => entry)), { replace: true }); }} className={`rounded-lg px-3 py-2 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${filters.queue === value ? "bg-sky-600 text-white" : "bg-white text-slate-600 dark:bg-white/5 dark:text-slate-200"}`}>{t(label)}</button>)}
+      </nav>
+      {["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE"].includes(user?.role ?? "") && <button type="button" disabled={!selected.length || selected.length > 50} onClick={() => { confirmReturns.reset(); setReturnOpen(true); }} className={`${control} mt-3 font-bold disabled:opacity-40`}>{t("confirmReturnedToOs")}</button>}
+
       {(overdueUnsent.data?.total ?? 0) > 0 && (
         <section className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/30">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -671,7 +695,7 @@ export function OperationsPage() {
               <h2 className="font-display font-bold text-amber-900 dark:text-amber-100">{t("overdueUnsentTitle")}</h2>
               <p className="mt-1 text-sm text-amber-800 dark:text-amber-200">{t("overdueUnsentDescription", { count: overdueUnsent.data?.total ?? 0 })}</p>
             </div>
-            <button type="button" onClick={() => { setPage(1); setSelected([]); setFilters({ ...emptyFilters, assignmentStatus: "UNASSIGNED" }); const next = new URLSearchParams(); next.set("assignmentStatus", "UNASSIGNED"); setSearchParams(next, { replace: true }); }} className="rounded-lg bg-amber-700 px-3 py-2 text-xs font-bold text-white">
+            <button type="button" onClick={() => { setPage(1); setSelected([]); setFilters({ ...emptyFilters, queue: "overdue" }); setSearchParams({ queue: "overdue" }, { replace: true }); }} className="rounded-lg bg-amber-700 px-3 py-2 text-xs font-bold text-white">
               {t("showOverdueUnsent")}
             </button>
           </div>
@@ -844,6 +868,7 @@ export function OperationsPage() {
         {canDispatchEdit && (
           <>
         <div className="mt-3 flex flex-wrap items-end gap-2 rounded-lg bg-slate-50 p-2 dark:bg-white/5">
+          <button type="button" disabled={!selected.length || selected.length > 50} onClick={() => { reschedule.reset(); setRescheduleOpen(true); }} className={`${control} font-bold disabled:opacity-40`}>{t("rescheduleParcels")}</button>
           <label className="min-w-[200px] flex-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
             {t("targetRiderId")}
             <select
@@ -864,11 +889,11 @@ export function OperationsPage() {
           <button
             type="button"
             disabled={!selectedAssignmentEligible || !riderId || assign.isPending}
-            onClick={() => assign.mutate({ parcelIds: selected, riderId })}
+            onClick={() => assign.mutate({ parcelIds: selected, riderId, dispatch: true })}
             className="rounded-md bg-[#1598ef] px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50"
           >
             <UserPlus size={14} className="mr-1 inline" />
-            {assign.isPending ? t("loading") : `${t("assignParcels")} (${selected.length})`}
+            {assign.isPending ? t("loading") : `${t("assignAndDispatch")} (${selected.length})`}
           </button>
           <button
             type="button"
@@ -1055,6 +1080,7 @@ export function OperationsPage() {
                         {isDateChangeReason(p.reasonCode) ? (
                           <p role="alert" className="mt-1 rounded-md bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
                             {t("dateChangeAlert")}
+                            {p.plannedDeliveryDate && <span className="block">{t("plannedDeliveryDate")}: {p.plannedDeliveryDate.slice(0, 10)}</span>}
                           </p>
                         ) : null}
                       </td>
@@ -1686,6 +1712,8 @@ export function OperationsPage() {
       )}
       {linkOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4"><form aria-label={t("linkParcels")} onSubmit={e=>{e.preventDefault();link.mutate()}} className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl dark:bg-[#181a1d]"><h2 className="text-xl font-bold">{t("linkParcels")}</h2><p className="mt-2 text-sm text-slate-500">{t("linkParcelsExplanation",{count:selected.length})}</p><label className="mt-4 block text-xs font-bold">{t("responsibleRider")}<select aria-label={t("responsibleRider")} value={riderId} onChange={e=>setRiderId(e.target.value)} className={`${control} mt-1 w-full`}><option value="">{t("selectRider")}</option>{riders.map(r=><option key={r.id} value={r.id}>{r.user.name}</option>)}</select></label><label className="mt-4 block text-xs font-bold">{t("reason")}<textarea aria-label={t("linkReason")} required minLength={3} value={linkReason} onChange={e=>setLinkReason(e.target.value)} className={`${control} mt-1 w-full`}/></label><div className="mt-6 flex justify-end gap-2"><button type="button" onClick={()=>setLinkOpen(false)} className={control}>{t("cancel")}</button><button disabled={link.isPending||!riderId||linkReason.trim().length<3} className="rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{t("confirmLink")}</button></div></form></div>}
       {unlinkingGroupId && <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4"><form aria-label={t("unlinkParcels")} onSubmit={e=>{e.preventDefault();unlink.mutate()}} className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl dark:bg-[#181a1d]"><h2 className="text-xl font-bold">{t("unlinkParcels")}</h2><p className="mt-2 text-sm text-slate-500">{t("unlinkParcelsExplanation")}</p><label className="mt-4 block text-xs font-bold">{t("reason")}<textarea aria-label={t("unlinkReason")} required minLength={3} value={unlinkReason} onChange={e=>setUnlinkReason(e.target.value)} className={`${control} mt-1 w-full`}/></label><div className="mt-6 flex justify-end gap-2"><button type="button" onClick={()=>setUnlinkingGroupId(null)} className={control}>{t("cancel")}</button><button disabled={unlink.isPending||unlinkReason.trim().length<3} className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{t("confirmUnlink")}</button></div></form></div>}
+      {returnOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4"><form role="dialog" aria-modal="true" aria-labelledby="return-bulk-title" onSubmit={event => { event.preventDefault(); if (!confirmReturns.isPending) confirmReturns.mutate(); }} className="w-full max-w-lg rounded-2xl bg-white p-6 dark:bg-[#181a1d]"><h2 id="return-bulk-title" className="text-xl font-bold">{t("confirmReturnedToOs")}</h2><p className="mt-3 text-sm text-slate-500">{t("confirmReturnedToOsHelp", { count: selected.length })}</p><label className="mt-4 block text-sm font-bold">{t("businessDate")}<input autoFocus required type="date" disabled={Boolean(returnRequest.current)} value={returnDate} onChange={event => setReturnDate(event.target.value)} className={`${control} mt-1 w-full`} /></label>{confirmReturns.isError && <p role="alert" className="mt-3 text-sm text-rose-600">{confirmReturns.error instanceof Error ? confirmReturns.error.message : t("loadError")}</p>}{returnRequest.current && confirmReturns.isError && <p role="alert">{t("paymentRetryUnchanged")}</p>}<div className="mt-5 flex justify-end gap-2"><button type="button" disabled={confirmReturns.isPending || Boolean(returnRequest.current)} onClick={() => setReturnOpen(false)} className={control}>{t("cancel")}</button><button disabled={confirmReturns.isPending} className="rounded-lg bg-sky-600 px-4 py-2 text-white disabled:opacity-40">{t(confirmReturns.isPending ? "loading" : "confirmReturnedToOs")}</button></div></form></div>}
+      {rescheduleOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4"><form role="dialog" aria-modal="true" aria-labelledby="reschedule-title" onSubmit={event => { event.preventDefault(); if (!reschedule.isPending) reschedule.mutate(); }} className="w-full max-w-lg rounded-2xl bg-white p-6 dark:bg-[#181a1d]"><h2 id="reschedule-title" className="text-xl font-bold">{t("rescheduleParcels")}</h2><p className="mt-2 text-sm text-slate-500">{t("rescheduleHelp")}</p><label className="mt-4 block text-sm font-bold">{t("plannedDeliveryDate")}<input autoFocus required type="date" value={rescheduleDate} onChange={event => setRescheduleDate(event.target.value)} className={`${control} mt-1 w-full`} /></label><label className="mt-4 block text-sm font-bold">{t("reason")}<textarea required minLength={3} value={rescheduleReason} onChange={event => setRescheduleReason(event.target.value)} className={`${control} mt-1 w-full`} /></label>{reschedule.isError && <p role="alert" className="mt-3 text-sm text-rose-600">{reschedule.error instanceof Error ? reschedule.error.message : t("loadError")}</p>}<div className="mt-5 flex justify-end gap-2"><button type="button" disabled={reschedule.isPending} onClick={() => setRescheduleOpen(false)} className={control}>{t("cancel")}</button><button disabled={reschedule.isPending} className="rounded-lg bg-sky-600 px-4 py-2 text-white disabled:opacity-40">{t(reschedule.isPending ? "loading" : "save")}</button></div></form></div>}
     </div>
   );
 }
