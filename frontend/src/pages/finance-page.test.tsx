@@ -43,6 +43,28 @@ describe("FinancePage",()=>{
     expect(screen.getAllByText("60,000 MMK")).toHaveLength(2);
   });
 
+  it("lets a Superadmin set an actual wallet balance through an auditable adjustment", async () => {
+    authState.role = "SUPERADMIN";
+    apiMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/master-data") return Promise.resolve({ data: { hubs: [{ id: "hub-1", name: "Yangon" }] } });
+      if (path === "/operations/batches" || path === "/finance/expense-categories" || path.startsWith("/finance/expenses?")) return Promise.resolve({ data: [] });
+      if (path === "/finance/cashbook/adjustments" && init) return Promise.resolve({ data: { id: "adjustment-1" } });
+      return Promise.resolve({ data: ledgerReport });
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click((await screen.findAllByRole("button", { name: "Adjust wallet balance" }))[0]);
+    const dialog = screen.getByRole("dialog");
+    await user.selectOptions(within(dialog).getByLabelText("Hub"), "hub-1");
+    await user.clear(within(dialog).getByLabelText("Actual balance in hand"));
+    await user.type(within(dialog).getByLabelText("Actual balance in hand"), "125000");
+    await user.type(within(dialog).getByLabelText("Reason / paper-record reference"), "Counted cash after pending returns");
+    await user.click(within(dialog).getByRole("button", { name: "Record adjustment" }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/finance/cashbook/adjustments", expect.objectContaining({ method: "POST" })));
+    const call = apiMock.mock.calls.find(([path]) => path === "/finance/cashbook/adjustments")!;
+    expect(JSON.parse(call[1].body)).toMatchObject({ hubId: "hub-1", wallet: "CASH", amount: 25000, direction: "INCREASE", reason: "Counted cash after pending returns" });
+  });
+
   it("hides posting actions when batch advances are already posted", async () => {
     apiMock.mockImplementation((path: string) => {
       if (path === "/operations/batches") return Promise.resolve({ data: [{ ...batch, advancePosted: true }] });

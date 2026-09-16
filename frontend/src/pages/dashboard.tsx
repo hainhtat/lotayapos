@@ -30,6 +30,7 @@ type Overview = {
   riderOutstanding?: number;
   unsettledRiderCount?: number;
   unsettledOnlineShopBatches?: number;
+  osOutstanding?: number;
   codCollectedToday?: number;
   deliveryFeesToday?: number;
   walletBalances?: { cash: number; kbzPay: number; wavePay: number };
@@ -91,6 +92,14 @@ export function Dashboard() {
       tone: (data?.riderOutstanding ?? 0) > 0 ? "warning" : "default",
     },
     { key: "unsettledOsBatches", value: data?.unsettledOnlineShopBatches ?? 0, icon: Store, to: data?.deepLinks?.onlineShopSettlements ?? "/finance#os-settlements" },
+    {
+      key: "outstandingToOs",
+      value: money(data?.osOutstanding ?? 0),
+      detail: t("unsettledOsBatches", { count: data?.unsettledOnlineShopBatches ?? 0 }),
+      icon: Store,
+      to: data?.deepLinks?.onlineShopSettlements ?? "/finance?tab=settlements#os-settlements",
+      tone: (data?.osOutstanding ?? 0) > 0 ? "warning" : "default",
+    },
     {
       key: "codCollectedToday",
       value: money(data?.codCollectedToday ?? data?.cashCollected ?? 0),
