@@ -14,4 +14,10 @@ describe("OS payment modal",()=>{
   fireEvent.submit(screen.getByRole("dialog"));
   expect(submit).not.toHaveBeenCalled();
  });
+ it("has a top close button that dismisses the modal",()=>{
+  const close=vi.fn();
+  render(<OsPaymentModal correct={false} shop="Shop" rows={[]} form={{date:"2026-09-16",cash:"0",kbzPay:"0",wavePay:"0",note:"",reference:""}} change={vi.fn()} reason="" changeReason={vi.fn()} credit={0} outstanding={0} pending={false} locked={false} error="" blockers={[]} submit={vi.fn()} close={close}/>);
+  fireEvent.click(screen.getByRole("button",{name:"Close"}));
+  expect(close).toHaveBeenCalledOnce();
+ });
 });

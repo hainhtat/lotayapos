@@ -19,7 +19,7 @@ export function OsPaymentModal(p:Props) {
     return ()=>previous?.focus();
   },[]);
   const money=(value:number)=>t("paymentMoney",{amount:(Number.isFinite(value)?value:0).toLocaleString()});
-  return <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4">
+  return <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-black/55 p-4">
     <form ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="os-payment-title" noValidate onKeyDown={e=>{
       if(e.key==="Escape"&&!p.pending&&!p.locked){e.preventDefault();p.close();}
       if(e.key!=="Tab")return;
@@ -28,8 +28,8 @@ export function OsPaymentModal(p:Props) {
       if(!first){e.preventDefault();return;}
       if(e.shiftKey&&(document.activeElement===first||document.activeElement===dialog.current)){e.preventDefault();last?.focus();}
       else if(!e.shiftKey&&(document.activeElement===last||document.activeElement===dialog.current)){e.preventDefault();first.focus();}
-    }} onSubmit={e=>{e.preventDefault();if(!p.pending&&!p.blockers.length)p.submit()}} className="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 dark:bg-[#181a1d]">
-      <h2 id="os-payment-title" className="text-xl font-bold">{t(p.correct?"correctPayment":"settle")}</h2>
+    }} onSubmit={e=>{e.preventDefault();if(!p.pending&&!p.blockers.length)p.submit()}} className="relative my-6 max-h-[calc(100dvh-2rem)] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 dark:bg-[#181a1d]">
+      <div className="sticky top-0 z-10 -mx-6 -mt-6 flex items-start justify-between bg-white px-6 pt-6 dark:bg-[#181a1d]"><h2 id="os-payment-title" className="text-xl font-bold">{t(p.correct?"correctPayment":"settle")}</h2><button type="button" aria-label={t("close")} disabled={p.pending||p.locked} onClick={p.close} className="rounded-lg p-2 text-xl leading-none hover:bg-slate-100 disabled:opacity-40 dark:hover:bg-white/10">×</button></div>
       <p className="mt-1 text-sm text-slate-500">{p.shop}</p>
       <div className="mt-4 space-y-2">{p.rows.map(row=><div key={row.batchId} className="flex justify-between rounded-lg border p-3 text-sm"><span>{row.label}</span><strong>{money(row.outstanding)}</strong></div>)}</div>
       {!p.correct&&<div className="mt-4 rounded-xl bg-sky-50 p-4 text-sm dark:bg-sky-950"><p>{t("creditApplied")}: {money(p.credit)}</p><p className="mt-1 font-bold">{t("paymentAmountToSettle")}: {money(Math.max(0,p.outstanding-p.credit))}</p></div>}
