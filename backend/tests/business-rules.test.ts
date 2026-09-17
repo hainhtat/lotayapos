@@ -2,7 +2,7 @@ import { addWalletAmounts, assertCashbookOpen, buildCashbookAdjustmentLines, bui
 import { buildRiderReceivableRecognitionLines } from "../src/services/parcel.service.js";
 import { ApiError } from "../src/utils/api-error.js";
 import { batchMutationLockMode, buildManifestFilenameSuffix, buildPickupAdvanceJournalLines, bulkAssignParcels, calculateReturnExtension, isAssignmentEligible, manifestStatusesLabel, pickupAdvancePostingDisposition, sanitizeManifestFilenamePart, summarizeManifestParcels, yangonBusinessDate } from "../src/services/operations.service.js";
-import { businessDateFor } from "../src/services/master-data.service.js";
+import { businessDateFor, countUnsettledOsAccountBatches } from "../src/services/master-data.service.js";
 import { assertParcelAccess, buildParcelListWhere, buildParcelScope, buildRiderCommissionLines, calculateCommissionAmount, canOverrideStatus, isAllowedTransition, LINKED_MONEY_POSTED_SOURCE_TYPES, MONEY_POSTED_SOURCE_TYPES, overrideLeavesMoneyBearingStatus, requiresOverrideNote, resolveCommissionRateBps, validateConfiguredReason } from "../src/services/parcel.service.js";
 import { normalizeReasonCode, normalizeRiderPayFields } from "../src/services/master-data.service.js";
 import { assertBalancedLines, buildDeliveryCollectionLines, buildPartialReturnAdjustmentLines, buildPartialReturnCollectionLines, buildReturnDeductionLines, calculatePartialReturnAmounts } from "../src/services/ledger.service.js";
@@ -793,6 +793,15 @@ describe("configured exception reasons", () => {
 });
 
 describe("hub business dates and pending returns", () => {
+  test("counts only OS account balances that remain payable", () => {
+    expect(countUnsettledOsAccountBatches([
+      { outstanding: 0 }, // historically settled or already paid
+      { outstanding: 348_500 },
+      { outstanding: 0 },
+      { outstanding: 1 },
+    ])).toBe(2);
+  });
+
   test("uses the configured hub timezone to select the dashboard business date", () => {
     expect(businessDateFor(new Date("2026-08-10T18:30:00.000Z"), "Asia/Yangon").toISOString()).toBe("2026-08-11T00:00:00.000Z");
   });

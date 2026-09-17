@@ -3,8 +3,14 @@ import { prisma } from "../config/database.js";
 import { env } from "../config/env.js";
 import { ApiError } from "../utils/api-error.js";
 import { summarizeRiderOutstandingThroughDate } from "./finance.service.js";
+import { accountRows } from "./os-account.service.js";
 
 type Actor = { id: string; role: string };
+
+/** Keep dashboard batch counts on the same OS-account basis as the payable total. */
+export function countUnsettledOsAccountBatches(rows: Array<{ outstanding: number }>) {
+  return rows.filter((row) => row.outstanding > 0).length;
+}
 
 async function actorScope(actor: Actor) {
   const user = await prisma.user.findUnique({ where: { id: actor.id }, select: { role: true, active: true, hubId: true } });
@@ -230,20 +236,23 @@ export async function dashboardOverview(actor: Actor) {
   const nextBusinessDate = new Date(businessDate.getTime() + 24 * 60 * 60 * 1000);
   const hubId = user.role === "SUPERADMIN" ? undefined : user.hubId!;
   const financialAccess = ["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "AUDITOR"].includes(user.role);
-  const [allParcels, batches, financialLines, allProfitLines, returnMetrics, alertCount, unsettledBatches, walletLines, osPayableLines, expenseTotal, allExpenseTotal, riderOutstandingSummary] = await Promise.all([
+  const [allParcels, batches, financialLines, allProfitLines, returnMetrics, alertCount, walletLines, osPayableLines, expenseTotal, allExpenseTotal, riderOutstandingSummary, osAccountHubs] = await Promise.all([
     prisma.parcel.groupBy({ by: ["status"], where: hubId ? { batch: { hubId } } : {}, _count: { _all: true } }),
     prisma.batch.findMany({ where: { ...(hubId ? { hubId } : {}), pickupDate: { gte: businessDate, lt: nextBusinessDate } }, include: { shop: true, parcels: { select: { status: true } } }, orderBy: { pickupDate: "desc" }, take: 5 }),
     financialAccess ? prisma.journalLine.groupBy({ by:["account"], where: { account: { in: ["WALLET_CASH", "WALLET_KBZ_PAY", "WALLET_WAVE_PAY", "CUSTOMER_COD_RECEIVABLE", "OS_COD_PAYABLE", "DELIVERY_FEE_REVENUE", "RIDER_COMMISSION_EXPENSE"] }, entry: { ...(hubId ? { hubId } : {}), businessDate: { gte: businessDate, lt: nextBusinessDate } } }, _sum:{debit:true,credit:true} }) : Promise.resolve([]),
     financialAccess ? prisma.journalLine.groupBy({ by:["account"], where: { account: { in: ["DELIVERY_FEE_REVENUE", "RIDER_COMMISSION_EXPENSE"] }, entry: { ...(hubId ? { hubId } : {}) } }, _sum:{debit:true,credit:true} }) : Promise.resolve([]),
     Promise.all([prisma.parcel.count({ where: { ...(hubId ? { batch: { hubId } } : {}), status: "PENDING_RETURN", OR:[{returnDueAt:null},{returnDueAt:{gte:new Date()}}] } }),prisma.parcel.count({ where: { ...(hubId ? { batch: { hubId } } : {}), status: "PENDING_RETURN", returnDueAt:{lt:new Date()} } })]),
     prisma.alert.count({ where: { acknowledgedAt: null, ...(hubId ? { parcel: { batch: { hubId } } } : {}) } }),
-    financialAccess ? prisma.batch.findMany({ where: { ...(hubId ? { hubId } : {}), parcels: { every: { status: { in: ["DELIVERED", "PARTIAL", "RETURNED", "CANCELLED"] } } }, settlementLinks: { none: { settlement: { status: "POSTED" } } } }, select: { id: true } }) : Promise.resolve([]),
     financialAccess ? prisma.journalLine.groupBy({ by:["account"], where: { account: { in: ["WALLET_CASH", "WALLET_KBZ_PAY", "WALLET_WAVE_PAY"] }, entry: { ...(hubId ? { hubId } : {}) } }, _sum:{debit:true,credit:true} }) : Promise.resolve([]),
     financialAccess ? prisma.journalLine.groupBy({ by:["account"], where: { account: "OS_COD_PAYABLE", entry: { ...(hubId ? { hubId } : {}) } }, _sum:{debit:true,credit:true} }) : Promise.resolve([]),
     financialAccess ? prisma.expenseEntry.aggregate({ where: { ...(hubId ? { hubId } : {}), businessDate: { gte: businessDate, lt: nextBusinessDate } }, _sum: { amount: true } }) : Promise.resolve({ _sum: { amount: null } }),
     financialAccess ? prisma.expenseEntry.aggregate({ where: { ...(hubId ? { hubId } : {}) }, _sum: { amount: true } }) : Promise.resolve({ _sum: { amount: null } }),
     financialAccess ? summarizeRiderOutstandingThroughDate(businessDate, hubId) : Promise.resolve({ outstandingAmount: 0, unsettledRiderCount: 0, rows: [] }),
+    financialAccess ? prisma.osBatchObligation.findMany({ where: hubId ? { hubId } : {}, distinct: ["hubId"], select: { hubId: true } }) : Promise.resolve([]),
   ]);
+  const osAccountRows = financialAccess
+    ? (await Promise.all(osAccountHubs.map(({ hubId: accountHubId }) => accountRows(prisma, { hubId: accountHubId })))).flat()
+    : [];
   const balance = (lines: Array<{_sum:{debit:number|null;credit:number|null}}>) => lines.reduce((sum, line) => sum + (line._sum.debit??0) - (line._sum.credit??0), 0);
   const accountLines = (account: string) => financialLines.filter((line) => line.account === account);
   const allAccountLines = (account: string) => allProfitLines.filter((line) => line.account === account);
@@ -263,7 +272,7 @@ export async function dashboardOverview(actor: Actor) {
       deliveryFeesToday: -balance(accountLines("DELIVERY_FEE_REVENUE")),
       riderOutstanding: riderOutstandingSummary.outstandingAmount,
       unsettledRiderCount: riderOutstandingSummary.unsettledRiderCount,
-      unsettledOnlineShopBatches: unsettledBatches.length,
+      unsettledOnlineShopBatches: countUnsettledOsAccountBatches(osAccountRows),
       osOutstanding: Math.max(0, -balance(osPayableLines)),
       walletBalances: { cash: walletBalance("WALLET_CASH"), kbzPay: walletBalance("WALLET_KBZ_PAY"), wavePay: walletBalance("WALLET_WAVE_PAY") },
       expenseTotalToday: expenseTotal._sum.amount ?? 0,
