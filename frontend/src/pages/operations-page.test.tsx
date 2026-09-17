@@ -126,6 +126,7 @@ describe("OperationsPage", () => {
     renderPage();
     await waitFor(() => expect(screen.getByText("TRK-PAID")).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText("Status TRK-PAID"), { target: { value: "DELIVERED" } });
+    fireEvent.click(screen.getByRole("button", { name: /Delivered — paid to OS/ }));
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText("OS credit created: 25,000 MMK")).toBeInTheDocument();
     fireEvent.click(within(dialog).getByLabelText("Include the full delivery fee in OS credit"));

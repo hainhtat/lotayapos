@@ -164,6 +164,7 @@ export function OperationsPage() {
   const [manifestDateFrom, setManifestDateFrom] = useState("");
   const [manifestDateTo, setManifestDateTo] = useState("");
   const [partial, setPartial] = useState<Parcel | null>(null);
+  const [deliveryChoice, setDeliveryChoice] = useState<Parcel | null>(null);
   const [paidToOs, setPaidToOs] = useState<Parcel | null>(null);
   const [includeDeliveryFee, setIncludeDeliveryFee] = useState(false);
   const [editing, setEditing] = useState<Parcel | null>(null);
@@ -356,16 +357,18 @@ export function OperationsPage() {
   });
 
   const updateStatus = useMutation({
-    mutationFn: (input: { parcelId: string; status: string; reasonCode?: string; note?: string }) =>
+    mutationFn: (input: { parcelId: string; status: string; reasonCode?: string; note?: string; collectionMode?: "CASH_RECEIPT_EXCEPTION" }) =>
       api(`/parcels/${input.parcelId}/status`, {
         method: "POST",
         body: JSON.stringify({
           status: input.status,
           ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
+          ...(input.collectionMode ? { collectionMode: input.collectionMode } : {}),
           ...(input.note ? { note: input.note } : { note: OPS_CORRECTION_NOTE }),
         }),
       }),
     onSuccess: async () => {
+      setDeliveryChoice(null);
       setReasonPrompt(null);
       setReasonCode("");
       setReasonNote("");
@@ -686,8 +689,7 @@ export function OperationsPage() {
       return;
     }
     if (nextStatus === "DELIVERED") {
-      setPaidToOs(parcel);
-      setIncludeDeliveryFee(false);
+      setDeliveryChoice(parcel);
       return;
     }
     if (nextStatus === "FAILED" || nextStatus === "REJECTED") {
@@ -1668,6 +1670,21 @@ export function OperationsPage() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {deliveryChoice && (
+        <div role="dialog" aria-modal="true" aria-labelledby="delivery-choice-title" className="fixed inset-0 z-20 grid place-items-center overflow-y-auto bg-black/40 p-4">
+          <div className="relative my-6 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-[#181a1d]">
+            <button type="button" aria-label={t("close")} onClick={() => setDeliveryChoice(null)} className="absolute right-4 top-4 rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10"><X size={18}/></button>
+            <h2 id="delivery-choice-title" className="font-display text-xl font-bold">{t("recordDelivered")}</h2>
+            <p className="mt-2 text-sm text-slate-500">{t("recordDeliveredHelp")}</p>
+            <div className="mt-5 grid gap-3">
+              <button type="button" onClick={() => updateStatus.mutate({ parcelId: deliveryChoice.id, status: "DELIVERED", collectionMode: "CASH_RECEIPT_EXCEPTION", note: OPS_CORRECTION_NOTE })} disabled={updateStatus.isPending} className="rounded-xl border border-[#1598ef] p-4 text-left hover:bg-sky-50 disabled:opacity-50 dark:hover:bg-sky-950/30"><span className="block font-bold text-[#0787df]">{t("deliveredRiderCollected")}</span><span className="mt-1 block text-sm text-slate-500">{t("deliveredRiderCollectedHelp")}</span></button>
+              <button type="button" onClick={() => { setDeliveryChoice(null); setPaidToOs(deliveryChoice); setIncludeDeliveryFee(false); }} className="rounded-xl border border-slate-200 p-4 text-left hover:bg-slate-50 dark:border-white/10 dark:hover:bg-white/5"><span className="block font-bold">{t("deliveredPaidToOs")}</span><span className="mt-1 block text-sm text-slate-500">{t("deliveredPaidToOsHelp")}</span></button>
+            </div>
+            <div className="mt-6 flex justify-end"><button type="button" onClick={() => setDeliveryChoice(null)} className={control}>{t("cancel")}</button></div>
+          </div>
         </div>
       )}
 
