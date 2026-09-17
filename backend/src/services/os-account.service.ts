@@ -106,11 +106,12 @@ export async function accountRows(db: Db, input: { shopId?: string; hubId: strin
     createdAt: batch.createdAt, updatedAt: batch.createdAt, batch,
   });
   const batchIds = obligations.map((row) => row.batchId);
-  const [allocations, returnCreditRecords, advances, consumedCredits, legacySettlements] = await Promise.all([
+  const [allocations, returnCreditRecords, advances, consumedCredits, advanceCreditAllocations, legacySettlements] = await Promise.all([
     db.osPaymentAllocation.findMany({ where: { batchId: { in: batchIds }, payment: { status: "POSTED" } }, select: { batchId: true, amount: true } }),
     db.osReturnCredit.findMany({ where: { batchId: { in: batchIds } }, select: { id: true, parcelId: true, batchId: true, amount: true, status: true } }),
     postedAdvanceByBatch(db, batchIds),
     db.osCreditAllocation.findMany({ where: { credit: { ...(input.shopId ? { shopId: input.shopId } : {}), hubId: input.hubId }, payment: { status: "POSTED" } }, select: { creditId: true, amount: true } }),
+    db.osAdvanceCreditAllocation.findMany({ where: { credit: { ...(input.shopId ? { shopId: input.shopId } : {}), hubId: input.hubId } }, select: { creditId: true, batchId: true, amount: true } }),
     db.osSettlement.findMany({ where: { hubId: input.hubId, status: "POSTED", reversedAt: null, batches: { some: { batchId: { in: batchIds } } } }, include: { batches: true }, orderBy: [{ businessDate: "asc" }, { createdAt: "asc" }] }),
   ]);
   const returnCredits = returnCreditRecords.filter(credit => credit.status === "POSTED");
@@ -121,6 +122,11 @@ export async function accountRows(db: Db, input: { shopId?: string; hubId: strin
   for (const allocation of allocations) paid.set(allocation.batchId, (paid.get(allocation.batchId) ?? 0) + allocation.amount);
   const consumedByCredit = new Map<string, number>();
   for (const allocation of consumedCredits) consumedByCredit.set(allocation.creditId, (consumedByCredit.get(allocation.creditId) ?? 0) + allocation.amount);
+  const advanceCreditByBatch = new Map<string, number>();
+  for (const allocation of advanceCreditAllocations) {
+    consumedByCredit.set(allocation.creditId, (consumedByCredit.get(allocation.creditId) ?? 0) + allocation.amount);
+    advanceCreditByBatch.set(allocation.batchId, (advanceCreditByBatch.get(allocation.batchId) ?? 0) + allocation.amount);
+  }
   const requiredAdjustmentByShop = new Map<string, number>();
   // Legacy batch links carry the auditable per-batch components. Import only
   // that attributable amount; settlement-level adjustments require explicit
@@ -148,9 +154,10 @@ export async function accountRows(db: Db, input: { shopId?: string; hubId: strin
     const paidAmount = paid.get(row.batchId) ?? 0;
     const adjustedOriginalCod = row.originalCod + row.openingAdjustment;
     const historicalSettledAmount = row.batch.historicalOsSettlement?.amount ?? 0;
-    const raw = adjustedOriginalCod - advancePaid - returnedCod - paidAmount - historicalSettledAmount;
+    const advanceCreditApplied = advanceCreditByBatch.get(row.batchId) ?? 0;
+    const raw = adjustedOriginalCod - advancePaid - returnedCod - paidAmount - historicalSettledAmount - advanceCreditApplied;
     const creditAvailable = Math.min(Math.max(0, returnedCod - consumedCredit), Math.max(0, -raw - consumedCredit));
-    return { batchId: row.batchId, label: row.batch.label, pickupDate: row.batch.pickupDate, shop: { id: row.batch.shop.id, name: row.batch.shop.name }, hubId: row.hubId, originalCod: row.originalCod, openingAdjustment: row.openingAdjustment, adjustedOriginalCod, advancePaid, paymentPaid: paidAmount, historicalSettledAmount, historicallySettled: Boolean(row.batch.historicalOsSettlement), returnedCod, creditAvailable, outstanding: Math.max(0, raw), migrated: row.migrated };
+    return { batchId: row.batchId, label: row.batch.label, pickupDate: row.batch.pickupDate, shop: { id: row.batch.shop.id, name: row.batch.shop.name }, hubId: row.hubId, originalCod: row.originalCod, openingAdjustment: row.openingAdjustment, adjustedOriginalCod, advancePaid, advanceCreditApplied, paymentPaid: paidAmount, historicalSettledAmount, historicallySettled: Boolean(row.batch.historicalOsSettlement), returnedCod, creditAvailable, outstanding: Math.max(0, raw), migrated: row.migrated };
   });
 }
 

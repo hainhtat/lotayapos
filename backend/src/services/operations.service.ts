@@ -296,10 +296,10 @@ export async function getBatchDetail(id:string,actor:BatchActor){
   const advancePostedAmount=(await postedAdvanceByBatch(prisma,[batch.id])).get(batch.id) ?? 0;
   let balanceError: string | null = null;
   const account = batch.hubId ? (await accountRows(prisma,{hubId:batch.hubId,shopId:batch.shopId}).catch(error=>{ if (!(error instanceof ApiError) || error.code !== "OS_CUTOVER_RECONCILIATION_REQUIRED") throw error; balanceError=error.message; return []; })).find(row=>row.batchId===batch.id) : undefined;
-  const deliveryFeeCredit=0;
+  const deliveryFeeCredit=await prisma.osReturnCredit.aggregate({ where: { batchId: batch.id, status: "POSTED", kind: "PAID_TO_OS" }, _sum: { feeAmount: true } }).then(result => result._sum.feeAmount ?? 0);
   const returnedCod=account?.returnedCod ?? batch.parcels.reduce((sum,parcel)=>sum+(parcel.status === "RETURNED" ? parcel.codAmount : 0),0);
   const remainingToOs=account?.outstanding ?? Math.max(0,totalCod-advancePostedAmount-returnedCod);
-  return {...batch,totalCod,advancePostedAmount,deliveryFeeCredit,returnedCod,remainingToOs:balanceError?null:remainingToOs,balanceError,paymentPaid:account?.paymentPaid??0,historicalSettledAmount:account?.historicalSettledAmount??0,openingAdjustment:account?.openingAdjustment??0,nextTrackingSequence:await nextTrackingSequenceStart()};
+  return {...batch,totalCod,advancePostedAmount,deliveryFeeCredit,osCreditAvailable:account?.creditAvailable ?? 0,osAdvanceCreditApplied:account?.advanceCreditApplied ?? 0,returnedCod,remainingToOs:balanceError?null:remainingToOs,balanceError,paymentPaid:account?.paymentPaid??0,historicalSettledAmount:account?.historicalSettledAmount??0,openingAdjustment:account?.openingAdjustment??0,nextTrackingSequence:await nextTrackingSequenceStart()};
 }
 
 type NewParcelInput = { trackingNumber?: string; orderId?: string | null; customerName: string; customerPhone?: string; address: string; codAmount: number; townshipId: string; zoneId?: string };
@@ -311,8 +311,8 @@ export async function createBatch(input: { shopId: string; pickupDate: string; b
   const hubId = await resolveBatchHub(actor, input.hubId);
   if (!Number.isInteger(input.advancePaid) || input.advancePaid < 0) throw new ApiError(400,"INVALID_ADVANCE","Batch advance paid must be a non-negative integer");
   const wallets = input.wallets ?? { cash: 0, kbzPay: 0, wavePay: 0 };
-  if (Object.values(wallets).some(amount => !Number.isSafeInteger(amount) || amount < 0) || wallets.cash + wallets.kbzPay + wallets.wavePay !== input.advancePaid) throw new ApiError(400, "INVALID_WALLET_SPLIT", "Wallet amounts must equal the advance paid");
-  if (input.advancePaid > 0 && !["SUPERADMIN", "FINANCE"].includes(actor.role)) throw new ApiError(403, "FORBIDDEN", "Only Finance or Superadmin may record an advance payment");
+  if (Object.values(wallets).some(amount => !Number.isSafeInteger(amount) || amount < 0) || wallets.cash + wallets.kbzPay + wallets.wavePay > input.advancePaid) throw new ApiError(400, "INVALID_WALLET_SPLIT", "Wallet amounts may not exceed the requested advance");
+  if ((input.advancePaid > 0 || wallets.cash + wallets.kbzPay + wallets.wavePay > 0) && !["SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER"].includes(actor.role)) throw new ApiError(403, "FORBIDDEN", "Only Superadmin, Finance, or Operations Manager may record an advance payment");
   if (input.advancePaid > 0 && !input.idempotencyKey) throw new ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "An idempotency key is required for an advance payment");
   const creationKey = input.idempotencyKey ? `${actor.id}:${input.idempotencyKey}` : null;
   const creationHash = createHash("sha256").update(JSON.stringify({ shopId: input.shopId, hubId, pickupDate: pickupDate.toISOString(), label: input.batchName, advancePaid: input.advancePaid, wallets })).digest("hex");
@@ -328,15 +328,31 @@ export async function createBatch(input: { shopId: string; pickupDate: string; b
   if(!shop?.active) throw new ApiError(404,"SHOP_NOT_FOUND","Active online shop not found");
   try {
     return await prisma.$transaction(async tx => {
-      if (input.advancePaid > 0) await assertCashbookOpen(tx, pickupDate, hubId);
-      const batch = await tx.batch.create({ data: { shopId: shop.id, hubId, pickupDate, label: input.batchName, advancePaid: input.advancePaid, automaticAccounting: true, creationKey, creationHash, createdBy: actor.id }, include: { shop: true, parcels: true } });
+      const walletAdvance = wallets.cash + wallets.kbzPay + wallets.wavePay;
+      const availableCredit = (await accountRows(tx, { shopId: shop.id, hubId })).reduce((sum, row) => sum + row.creditAvailable, 0);
+      const creditApplied = Math.min(input.advancePaid, availableCredit);
+      if (walletAdvance !== input.advancePaid - creditApplied) throw new ApiError(400, "INVALID_WALLET_SPLIT", "Wallet amounts must equal requested advance after available OS credit is applied", { requestedAdvance: input.advancePaid, availableOsCredit: availableCredit, requiredWalletAdvance: input.advancePaid - creditApplied });
+      if (walletAdvance > 0) await assertCashbookOpen(tx, pickupDate, hubId);
+      const batch = await tx.batch.create({ data: { shopId: shop.id, hubId, pickupDate, label: input.batchName, advancePaid: walletAdvance, automaticAccounting: true, creationKey, creationHash, createdBy: actor.id }, include: { shop: true, parcels: true } });
       await syncBatchObligation(tx, batch.id, actor.id);
-      if (input.advancePaid > 0) await tx.journalEntry.create({ data: {
+      if (creditApplied > 0) {
+        const credits = await tx.osReturnCredit.findMany({ where: { shopId: shop.id, hubId, status: "POSTED" }, include: { allocations: { where: { payment: { status: "POSTED" } } }, advanceAllocations: true }, orderBy: [{ businessDate: "asc" }, { id: "asc" }] });
+        let remaining = creditApplied;
+        for (const credit of credits) {
+          const consumed = credit.allocations.reduce((sum, allocation) => sum + allocation.amount, 0) + credit.advanceAllocations.reduce((sum, allocation) => sum + allocation.amount, 0);
+          const use = Math.min(Math.max(0, credit.amount - consumed), remaining);
+          if (use > 0) await tx.osAdvanceCreditAllocation.create({ data: { batchId: batch.id, creditId: credit.id, amount: use } });
+          remaining -= use;
+          if (!remaining) break;
+        }
+        if (remaining) throw new ApiError(409, "OS_CREDIT_CONFLICT", "Available OS credit changed; refresh and retry");
+      }
+      if (walletAdvance > 0) await tx.journalEntry.create({ data: {
         sourceType: "BATCH_PICKUP_ADVANCE", sourceId: batch.id, hubId, businessDate: pickupDate,
         description: `Advance paid for ${batch.label} by ${actor.id}`,
-        lines: { create: [{ account: "OS_COD_PAYABLE", debit: input.advancePaid, credit: 0 }, ...Object.entries(wallets).filter(([, amount]) => amount > 0).map(([wallet, amount]) => ({ account: { cash: "WALLET_CASH", kbzPay: "WALLET_KBZ_PAY", wavePay: "WALLET_WAVE_PAY" }[wallet]!, debit: 0, credit: amount }))] },
+        lines: { create: [{ account: "OS_COD_PAYABLE", debit: walletAdvance, credit: 0 }, ...Object.entries(wallets).filter(([, amount]) => amount > 0).map(([wallet, amount]) => ({ account: { cash: "WALLET_CASH", kbzPay: "WALLET_KBZ_PAY", wavePay: "WALLET_WAVE_PAY" }[wallet]!, debit: 0, credit: amount }))] },
       } });
-      return batch;
+      return { ...batch, requestedAdvance: input.advancePaid, walletAdvance, osCreditApplied: creditApplied };
     });
   } catch (error) {
     if ((error as { code?: string }).code === "P2002") {

@@ -39,10 +39,10 @@ export async function createHub(input: { name: string }, actor: Actor) {
   return prisma.hub.create({ data: { name: input.name } });
 }
 
-export async function createShop(input: { name: string }, actor: Actor) {
+export async function createShop(input: { name: string; includeDeliveryFeeInOsCredit?: boolean }, actor: Actor) {
   const user = await actorScope(actor);
   if (!['SUPERADMIN','OPERATIONS_MANAGER'].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "You may not create online shops");
-  return prisma.onlineShop.create({ data: { name: input.name } });
+  return prisma.onlineShop.create({ data: { name: input.name, includeDeliveryFeeInOsCredit: input.includeDeliveryFeeInOsCredit ?? false } });
 }
 
 export async function listShops(actor: Actor) {

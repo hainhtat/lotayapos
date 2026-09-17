@@ -313,6 +313,7 @@ describe("parcel transitions", () => {
       "PARTIAL_RETURN_COLLECTION",
       "OS_PARTIAL_RETURN_ADJUSTMENT",
       "DELIVERY_COLLECTION",
+      "OS_PAID_TO_OS_CREDIT",
     ]);
     expect([...LINKED_MONEY_POSTED_SOURCE_TYPES]).toEqual([
       "LINKED_RIDER_RECEIVABLE_RECOGNITION",

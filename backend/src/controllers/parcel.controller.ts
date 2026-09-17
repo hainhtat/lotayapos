@@ -25,7 +25,7 @@ export const list: RequestHandler = async (req, res) => {
   });
   res.json({ success: true, data: result.items, pagination: { page: result.page, pageSize: result.pageSize, total: result.total, totalPages: Math.ceil(result.total / result.pageSize) } });
 };
-export const updateStatus: RequestHandler = async (req, res) => res.json({ success: true, data: await service.updateStatus(String(req.params.id), req.body.status, { id: req.auth!.sub, role: req.auth!.role }, req.body.reasonCode, req.body.note, req.body.actualCodCollected, req.body.collectionWallet) });
+export const updateStatus: RequestHandler = async (req, res) => res.json({ success: true, data: await service.updateStatus(String(req.params.id), req.body.status, { id: req.auth!.sub, role: req.auth!.role }, req.body.reasonCode, req.body.note, req.body.actualCodCollected, req.body.collectionWallet, req.body.collectionMode, req.body.paidToOsIncludeDeliveryFee) });
 export const reschedule: RequestHandler = async (req, res) => res.json({ success: true, data: await service.rescheduleParcels(req.body, { id: req.auth!.sub, role: req.auth!.role }) });
 export const bulkUpdateStatus: RequestHandler = async (req, res) => {
   const parcels = await service.bulkUpdateStatus(
@@ -36,6 +36,8 @@ export const bulkUpdateStatus: RequestHandler = async (req, res) => {
       note: req.body.note,
       actualCodCollected: req.body.actualCodCollected,
       collectionWallet: req.body.collectionWallet,
+      collectionMode: req.body.collectionMode,
+      paidToOsIncludeDeliveryFee: req.body.paidToOsIncludeDeliveryFee,
     })),
     { id: req.auth!.sub, role: req.auth!.role },
   );

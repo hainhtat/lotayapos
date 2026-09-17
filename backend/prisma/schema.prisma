@@ -161,6 +161,7 @@ model OnlineShop {
   id        String   @id @default(cuid())
   name      String   @unique
   active    Boolean  @default(true)
+  includeDeliveryFeeInOsCredit Boolean @default(false)
   batches   Batch[]
   settlements OsSettlement[]
   osPayments OsAccountPayment[]
@@ -199,6 +200,7 @@ model Batch {
   osObligation OsBatchObligation?
   historicalOsSettlement OsHistoricalSettlement?
   osPaymentAllocations OsPaymentAllocation[]
+  osAdvanceCreditAllocations OsAdvanceCreditAllocation[]
   finalizedAt DateTime?
   finalizedBy String?
   createdAt   DateTime   @default(now())
@@ -294,6 +296,9 @@ model OsReturnCredit {
   shopId         String
   hubId          String
   amount         Int
+  kind           String   @default("PHYSICAL_RETURN")
+  codAmount      Int      @default(0)
+  feeAmount      Int      @default(0)
   businessDate   DateTime
   status         String   @default("POSTED")
   idempotencyKey String   @unique
@@ -301,9 +306,26 @@ model OsReturnCredit {
   journalEntryId String?  @unique
   createdAt      DateTime @default(now())
   allocations    OsCreditAllocation[]
+  advanceAllocations OsAdvanceCreditAllocation[]
 
   @@index([shopId, hubId, businessDate])
   @@index([batchId])
+}
+
+// Allocation of an available OS credit to a new batch's pickup advance.  This
+// is intentionally separate from OS account-payment allocations: no wallet
+// movement occurs when the OS deducts a prior credit from the next advance.
+model OsAdvanceCreditAllocation {
+  id        String         @id @default(cuid())
+  batchId   String
+  batch     Batch          @relation(fields: [batchId], references: [id])
+  creditId  String
+  credit    OsReturnCredit @relation(fields: [creditId], references: [id])
+  amount    Int
+  createdAt DateTime       @default(now())
+
+  @@unique([batchId, creditId])
+  @@index([creditId])
 }
 
 model OsCreditAllocation {
@@ -330,6 +352,8 @@ model Parcel {
   codAmount              Int
   deliveryFee            Int?
   advanceAmount          Int                 @default(0)
+  collectionMode         String              @default("CASH_RECEIPT_EXCEPTION")
+  paidToOsFeeIncluded    Boolean             @default(false)
   actualCodCollected     Int?
   partialReturnShortfall Int?
   status                 String              @default("CREATED")

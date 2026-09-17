@@ -15,7 +15,7 @@ export { resolveCommissionRateBps };
 const transitions: Record<string, string[]> = { CREATED: ["PICKED_UP"], PICKED_UP: ["ASSIGNED"], ASSIGNED: ["OUT_FOR_DELIVERY"], OUT_FOR_DELIVERY: ["DELIVERED", "PARTIAL", "FAILED", "REJECTED"], PARTIAL: ["PENDING_RETURN"], FAILED: ["PENDING_RETURN"], REJECTED: ["PENDING_RETURN"], PENDING_RETURN: ["RETURNED"] };
 export const ALL_STATUSES = ["CREATED", "PICKED_UP", "ASSIGNED", "OUT_FOR_DELIVERY", "DELIVERED", "PARTIAL", "FAILED", "REJECTED", "PENDING_RETURN", "RETURNED"] as const;
 export const MONEY_BEARING_STATUSES = ["DELIVERED", "PARTIAL"] as const;
-export const MONEY_POSTED_SOURCE_TYPES = ["RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "PARTIAL_RETURN_COLLECTION", "OS_PARTIAL_RETURN_ADJUSTMENT", "DELIVERY_COLLECTION"] as const;
+export const MONEY_POSTED_SOURCE_TYPES = ["RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "PARTIAL_RETURN_COLLECTION", "OS_PARTIAL_RETURN_ADJUSTMENT", "DELIVERY_COLLECTION", "OS_PAID_TO_OS_CREDIT"] as const;
 export const LINKED_MONEY_POSTED_SOURCE_TYPES = ["LINKED_RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_COD", "LINKED_RIDER_RECEIVABLE_FEE", "LINKED_DELIVERY_COLLECTION", "LINKED_RIDER_COMMISSION", "LINKED_OS_SHORTFALL"] as const;
 export function isAllowedTransition(fromStatus: string, toStatus: string) { return transitions[fromStatus]?.includes(toStatus) ?? false; }
 export function canOverrideStatus(role: string) { return ["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"].includes(role); }
@@ -659,6 +659,8 @@ type StatusUpdateInput = {
   note?: string;
   actualCodCollected?: number;
   collectionWallet?: "CASH" | "KBZ_PAY" | "WAVE_PAY";
+  collectionMode?: "PAID_BY_OS" | "CASH_RECEIPT_EXCEPTION";
+  paidToOsIncludeDeliveryFee?: boolean;
 };
 
 async function updateStatusInTransaction(
@@ -673,7 +675,7 @@ async function updateStatusInTransaction(
     where: { id },
     include: {
       rider: { select: { userId: true, payModel: true, commissionRateBps: true } },
-      batch: { select: { hubId: true } },
+      batch: { select: { hubId: true, shopId: true, shop: { select: { includeDeliveryFeeInOsCredit: true } } } },
     },
   });
   if (!parcel) throw new ApiError(404, "PARCEL_NOT_FOUND", "Parcel not found");
@@ -708,6 +710,14 @@ async function updateStatusInTransaction(
   const commissionRateBps = resolveCommissionRateBps(
     parcel.rider ? { payModel: parcel.rider.payModel, commissionRateBps: parcel.rider.commissionRateBps } : null,
   );
+  const collectionMode = input.collectionMode ?? parcel.collectionMode as "PAID_BY_OS" | "CASH_RECEIPT_EXCEPTION";
+  if (toStatus === "DELIVERED" && !["PAID_BY_OS", "CASH_RECEIPT_EXCEPTION"].includes(collectionMode)) {
+    throw new ApiError(400, "INVALID_COLLECTION_MODE", "Delivery collection mode must be paid by OS or cash receipt exception");
+  }
+  if (toStatus !== "DELIVERED" && (input.collectionMode !== undefined || input.paidToOsIncludeDeliveryFee !== undefined)) {
+    throw new ApiError(400, "INVALID_COLLECTION_MODE", "Collection mode may only be recorded for a delivered parcel");
+  }
+  const paidToOsFeeIncluded = collectionMode === "PAID_BY_OS" && (input.paidToOsIncludeDeliveryFee ?? parcel.batch.shop.includeDeliveryFeeInOsCredit);
     if (overrideLeavesMoneyBearingStatus(parcel.status, toStatus, overrideTransition)) {
       const postedMoney = await findUnreversedMoneyPostedEntry(tx, {
         parcelId: id,
@@ -717,7 +727,7 @@ async function updateStatusInTransaction(
         throw new ApiError(409, "MONEY_POSTED", "Finance must reverse posted entries before correcting status");
       }
     }
-    const result = await tx.parcel.updateMany({ where: { id, status: parcel.status }, data: { status: toStatus as never, reasonCode, returnDueAt } });
+    const result = await tx.parcel.updateMany({ where: { id, status: parcel.status }, data: { status: toStatus as never, reasonCode, returnDueAt, ...(toStatus === "DELIVERED" ? { collectionMode, paidToOsFeeIncluded } : {}) } });
     if (result.count !== 1) throw new ApiError(409, "STATUS_CONFLICT", "Parcel status changed; refresh and retry");
     if (partialReturn) {
       await tx.parcel.update({ where: { id }, data: { actualCodCollected: partialReturn.actualCodCollected, partialReturnShortfall: partialReturn.shortfall } });
@@ -852,7 +862,25 @@ async function updateStatusInTransaction(
           });
         }
       }
-      if (toStatus === "DELIVERED" && !parcel.linkGroupId) {
+      if (toStatus === "DELIVERED" && collectionMode === "PAID_BY_OS" && !parcel.linkGroupId) {
+        const feeAmount = paidToOsFeeIncluded ? (parcel.deliveryFee ?? 0) : 0;
+        const creditAmount = parcel.codAmount + feeAmount;
+        const creditSourceId = await nextVersionedJournalSourceId(tx, "OS_PAID_TO_OS_CREDIT", parcel.id);
+        if (creditSourceId && creditAmount > 0) {
+          await assertCashbookOpen(tx, businessDate, parcelHubId);
+          const journal = await tx.journalEntry.create({ data: {
+            sourceType: "OS_PAID_TO_OS_CREDIT", sourceId: creditSourceId, hubId: parcelHubId, businessDate,
+            description: `Paid-to-OS credit for ${parcel.trackingNumber}${feeAmount ? " (includes delivery fee)" : ""}`,
+            lines: { create: [
+              { account: "OS_COD_PAYABLE", debit: creditAmount, credit: 0 },
+              ...(parcel.codAmount ? [{ account: "OS_BATCH_COD_CLEARING", debit: 0, credit: parcel.codAmount }] : []),
+              ...(feeAmount ? [{ account: "DELIVERY_FEE_REVENUE", debit: 0, credit: feeAmount }] : []),
+            ] },
+          } });
+          await tx.osReturnCredit.create({ data: { parcelId: parcel.id, batchId: parcel.batchId, shopId: parcel.batch.shopId, hubId: parcelHubId, amount: creditAmount, codAmount: parcel.codAmount, feeAmount, kind: "PAID_TO_OS", businessDate, idempotencyKey: `paid-to-os:${creditSourceId}`, postedBy: actor.id, journalEntryId: journal.id } });
+        }
+      }
+      if (toStatus === "DELIVERED" && collectionMode === "CASH_RECEIPT_EXCEPTION" && !parcel.linkGroupId) {
         const receivableSourceId = await nextRiderReceivableSourceId(tx, parcel.id);
         if (receivableSourceId) {
           await recognizeRiderReceivable(tx, {
@@ -937,10 +965,22 @@ async function updateStatusInTransaction(
         }
       }
     }
+    // ERP can mark an unassigned historical parcel as delivered. It still
+    // creates the OS credit, but naturally has no rider way/commission.
+    if (toStatus === "DELIVERED" && !parcel.riderId && collectionMode === "PAID_BY_OS") {
+      const feeAmount = paidToOsFeeIncluded ? (parcel.deliveryFee ?? 0) : 0;
+      const creditAmount = parcel.codAmount + feeAmount;
+      const creditSourceId = await nextVersionedJournalSourceId(tx, "OS_PAID_TO_OS_CREDIT", parcel.id);
+      if (creditSourceId && creditAmount > 0) {
+        await assertCashbookOpen(tx, businessDate, parcelHubId);
+        const journal = await tx.journalEntry.create({ data: { sourceType: "OS_PAID_TO_OS_CREDIT", sourceId: creditSourceId, hubId: parcelHubId, businessDate, description: `Paid-to-OS credit for ${parcel.trackingNumber}${feeAmount ? " (includes delivery fee)" : ""}`, lines: { create: [{ account: "OS_COD_PAYABLE", debit: creditAmount, credit: 0 }, ...(parcel.codAmount ? [{ account: "OS_BATCH_COD_CLEARING", debit: 0, credit: parcel.codAmount }] : []), ...(feeAmount ? [{ account: "DELIVERY_FEE_REVENUE", debit: 0, credit: feeAmount }] : [])] } } });
+        await tx.osReturnCredit.create({ data: { parcelId: parcel.id, batchId: parcel.batchId, shopId: parcel.batch.shopId, hubId: parcelHubId, amount: creditAmount, codAmount: parcel.codAmount, feeAmount, kind: "PAID_TO_OS", businessDate, idempotencyKey: `paid-to-os:${creditSourceId}`, postedBy: actor.id, journalEntryId: journal.id } });
+      }
+    }
     return tx.parcel.findUniqueOrThrow({ where: { id } });
 }
 
-export async function updateStatus(id: string, toStatus: string, actor: Actor, reasonCode?: string, note?: string, actualCodCollected?: number, collectionWallet?: "CASH" | "KBZ_PAY" | "WAVE_PAY") {
+export async function updateStatus(id: string, toStatus: string, actor: Actor, reasonCode?: string, note?: string, actualCodCollected?: number, collectionWallet?: "CASH" | "KBZ_PAY" | "WAVE_PAY", collectionMode?: "PAID_BY_OS" | "CASH_RECEIPT_EXCEPTION", paidToOsIncludeDeliveryFee?: boolean) {
   const scope = await actorScope(actor);
   return serializableTransaction((tx) => updateStatusInTransaction(tx, {
     parcelId: id,
@@ -949,6 +989,8 @@ export async function updateStatus(id: string, toStatus: string, actor: Actor, r
     note,
     actualCodCollected,
     collectionWallet,
+    collectionMode,
+    paidToOsIncludeDeliveryFee,
   }, actor, scope));
 }
 

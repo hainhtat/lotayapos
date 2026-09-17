@@ -148,6 +148,7 @@ export function OperationsPage() {
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<string[]>([]);
   const [riderId, setRiderId] = useState("");
+  const [linkRiderId, setLinkRiderId] = useState("");
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkReason, setLinkReason] = useState("");
   const [unlinkingGroupId, setUnlinkingGroupId] = useState<string | null>(null);
@@ -163,6 +164,8 @@ export function OperationsPage() {
   const [manifestDateFrom, setManifestDateFrom] = useState("");
   const [manifestDateTo, setManifestDateTo] = useState("");
   const [partial, setPartial] = useState<Parcel | null>(null);
+  const [paidToOs, setPaidToOs] = useState<Parcel | null>(null);
+  const [includeDeliveryFee, setIncludeDeliveryFee] = useState(false);
   const [editing, setEditing] = useState<Parcel | null>(null);
   const [historyParcel,setHistoryParcel]=useState<{id:string;trackingNumber:string}|null>(null);
   const [editForm, setEditForm] = useState({
@@ -436,6 +439,26 @@ export function OperationsPage() {
     onError: (e) => setMessage(e instanceof Error ? e.message : t("loadError")),
   });
 
+  const savePaidToOs = useMutation({
+    mutationFn: () =>
+      api(`/parcels/${paidToOs?.id}/status`, {
+        method: "POST",
+        body: JSON.stringify({
+          status: "DELIVERED",
+          collectionMode: "PAID_BY_OS",
+          paidToOsIncludeDeliveryFee: includeDeliveryFee,
+          note: OPS_CORRECTION_NOTE,
+        }),
+      }),
+    onSuccess: async () => {
+      setPaidToOs(null);
+      setIncludeDeliveryFee(false);
+      setMessage(t("paidToOsSaved"));
+      await invalidateParcels();
+    },
+    onError: (e) => setMessage(e instanceof Error ? e.message : t("loadError")),
+  });
+
   const updateParcel = useMutation({
     mutationFn: () => {
       const canEditDeliveryFields = fieldEditableStatuses.has(editing!.status) && !editing!.linkGroup;
@@ -490,17 +513,27 @@ export function OperationsPage() {
       api("/operations/parcels/link", {
         method: "POST",
         // Never submit IDs retained from a different filter/page.
-        body: JSON.stringify({ parcelIds: selectedParcels.map((parcel) => parcel.id), responsibleRiderId: riderId, reason: linkReason.trim() }),
+        body: JSON.stringify({ parcelIds: selectedParcels.map((parcel) => parcel.id), responsibleRiderId: linkRiderId, reason: linkReason.trim() }),
       }),
     onSuccess: async () => {
       setSelected([]);
       setLinkOpen(false);
       setLinkReason("");
+      setLinkRiderId("");
       setMessage(t("parcelsLinked"));
       await invalidateParcels();
     },
     onError: (e) => setMessage(e instanceof Error ? e.message : t("loadError")),
   });
+
+  const openLinkModal = () => {
+    // Linking reassesses responsibility. When every chosen parcel already has
+    // the same rider, make that safe, obvious default instead of disabling the
+    // action behind the separate dispatch-rider selector.
+    const existingRiderIds = [...new Set(selectedParcels.map((parcel) => parcel.rider?.id).filter((id): id is string => Boolean(id)))];
+    setLinkRiderId(existingRiderIds.length === 1 ? existingRiderIds[0] : "");
+    setLinkOpen(true);
+  };
 
   const unlink = useMutation({
     mutationFn: () => api(`/operations/parcel-link-groups/${unlinkingGroupId}/unlink`, {
@@ -650,6 +683,11 @@ export function OperationsPage() {
       setReasonNote("");
       setActualCod("");
       setCollectionWallet("");
+      return;
+    }
+    if (nextStatus === "DELIVERED") {
+      setPaidToOs(parcel);
+      setIncludeDeliveryFee(false);
       return;
     }
     if (nextStatus === "FAILED" || nextStatus === "REJECTED") {
@@ -905,8 +943,8 @@ export function OperationsPage() {
           </button>
           <button
             type="button"
-            disabled={Boolean(linkValidation) || selected.length !== selectedParcels.length || !riderId || link.isPending}
-            onClick={() => setLinkOpen(true)}
+            disabled={Boolean(linkValidation) || selected.length !== selectedParcels.length || link.isPending}
+            onClick={openLinkModal}
             className="rounded-md border border-[#1598ef] px-3 py-1.5 text-xs font-bold text-[#0787df] disabled:opacity-50"
           >
             <Link2 size={14} className="mr-1 inline" />
@@ -1633,6 +1671,25 @@ export function OperationsPage() {
         </div>
       )}
 
+      {paidToOs && (
+        <div role="dialog" aria-modal="true" aria-labelledby="paid-to-os-title" className="fixed inset-0 z-20 grid place-items-center overflow-y-auto bg-black/40 p-4">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              savePaidToOs.mutate();
+            }}
+            className="relative my-6 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-[#181a1d]"
+          >
+            <div className="flex items-start justify-between gap-4"><div><h2 id="paid-to-os-title" className="font-display text-xl font-bold">{t("deliveredPaidToOs")}</h2><p className="mt-2 text-sm text-slate-500">{t("deliveredPaidToOsHelp")}</p></div><button type="button" aria-label={t("close")} onClick={() => setPaidToOs(null)} className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10"><X size={18}/></button></div>
+            <div className="mt-5 rounded-xl bg-sky-50 p-4 text-sm dark:bg-sky-950/50"><p className="font-bold">{paidToOs.trackingNumber}</p><p className="mt-1 text-slate-600 dark:text-slate-300">{t("cod")}: {money(paidToOs.codAmount)} MMK</p><p className="mt-1 text-slate-600 dark:text-slate-300">{t("fee")}: {money(paidToOs.deliveryFee ?? 0)} MMK</p></div>
+            <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 p-4 text-sm dark:border-white/10"><input aria-label={t("includeFullDeliveryFee")} type="checkbox" checked={includeDeliveryFee} onChange={(event) => setIncludeDeliveryFee(event.target.checked)} className="mt-0.5 h-4 w-4"/><span><span className="block font-bold">{t("includeFullDeliveryFee")}</span><span className="mt-1 block text-slate-500">{t("includeFullDeliveryFeeHelp", { amount: money(paidToOs.deliveryFee ?? 0) })}</span></span></label>
+            <p className="mt-4 text-sm text-emerald-700 dark:text-emerald-400">{t("osCreditWillBe", { amount: money(paidToOs.codAmount + (includeDeliveryFee ? paidToOs.deliveryFee ?? 0 : 0)) })}</p>
+            <p className="mt-2 text-xs text-slate-500">{t("osCreditAutoOffsetHelp")}</p>
+            <div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setPaidToOs(null)} className={control}>{t("cancel")}</button><button type="submit" disabled={savePaidToOs.isPending} className="rounded-lg bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{savePaidToOs.isPending ? t("loading") : t("confirmDeliveredPaidToOs")}</button></div>
+          </form>
+        </div>
+      )}
+
       {reasonPrompt && (
         <div role="dialog" aria-modal="true" aria-labelledby="reason-prompt-title" className="fixed inset-0 z-20 grid place-items-center overflow-y-auto bg-black/40 p-4">
           <form
@@ -1710,7 +1767,7 @@ export function OperationsPage() {
           </form>
         </div>
       )}
-      {linkOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4"><form aria-label={t("linkParcels")} onSubmit={e=>{e.preventDefault();link.mutate()}} className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl dark:bg-[#181a1d]"><h2 className="text-xl font-bold">{t("linkParcels")}</h2><p className="mt-2 text-sm text-slate-500">{t("linkParcelsExplanation",{count:selected.length})}</p><label className="mt-4 block text-xs font-bold">{t("responsibleRider")}<select aria-label={t("responsibleRider")} value={riderId} onChange={e=>setRiderId(e.target.value)} className={`${control} mt-1 w-full`}><option value="">{t("selectRider")}</option>{riders.map(r=><option key={r.id} value={r.id}>{r.user.name}</option>)}</select></label><label className="mt-4 block text-xs font-bold">{t("reason")}<textarea aria-label={t("linkReason")} required minLength={3} value={linkReason} onChange={e=>setLinkReason(e.target.value)} className={`${control} mt-1 w-full`}/></label><div className="mt-6 flex justify-end gap-2"><button type="button" onClick={()=>setLinkOpen(false)} className={control}>{t("cancel")}</button><button disabled={link.isPending||!riderId||linkReason.trim().length<3} className="rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{t("confirmLink")}</button></div></form></div>}
+      {linkOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4"><form aria-label={t("linkParcels")} onSubmit={e=>{e.preventDefault();link.mutate()}} className="relative w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl dark:bg-[#181a1d]"><button type="button" aria-label={t("close")} onClick={()=>setLinkOpen(false)} className="absolute right-4 top-4 rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10"><X size={18}/></button><h2 className="text-xl font-bold">{t("linkParcels")}</h2><p className="mt-2 text-sm text-slate-500">{t("linkParcelsExplanation",{count:selected.length})}</p><label className="mt-4 block text-xs font-bold">{t("responsibleRider")}<select aria-label={t("responsibleRider")} value={linkRiderId} onChange={e=>setLinkRiderId(e.target.value)} className={`${control} mt-1 w-full`}><option value="">{t("selectRider")}</option>{riders.map(r=><option key={r.id} value={r.id}>{r.user.name}</option>)}</select></label><label className="mt-4 block text-xs font-bold">{t("reason")}<textarea aria-label={t("linkReason")} required minLength={3} value={linkReason} onChange={e=>setLinkReason(e.target.value)} className={`${control} mt-1 w-full`}/></label><div className="mt-6 flex justify-end gap-2"><button type="button" onClick={()=>setLinkOpen(false)} className={control}>{t("cancel")}</button><button disabled={link.isPending||!linkRiderId||linkReason.trim().length<3} className="rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{t("confirmLink")}</button></div></form></div>}
       {unlinkingGroupId && <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4"><form aria-label={t("unlinkParcels")} onSubmit={e=>{e.preventDefault();unlink.mutate()}} className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl dark:bg-[#181a1d]"><h2 className="text-xl font-bold">{t("unlinkParcels")}</h2><p className="mt-2 text-sm text-slate-500">{t("unlinkParcelsExplanation")}</p><label className="mt-4 block text-xs font-bold">{t("reason")}<textarea aria-label={t("unlinkReason")} required minLength={3} value={unlinkReason} onChange={e=>setUnlinkReason(e.target.value)} className={`${control} mt-1 w-full`}/></label><div className="mt-6 flex justify-end gap-2"><button type="button" onClick={()=>setUnlinkingGroupId(null)} className={control}>{t("cancel")}</button><button disabled={unlink.isPending||unlinkReason.trim().length<3} className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{t("confirmUnlink")}</button></div></form></div>}
       {returnOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4"><form role="dialog" aria-modal="true" aria-labelledby="return-bulk-title" onSubmit={event => { event.preventDefault(); if (!confirmReturns.isPending) confirmReturns.mutate(); }} className="w-full max-w-lg rounded-2xl bg-white p-6 dark:bg-[#181a1d]"><h2 id="return-bulk-title" className="text-xl font-bold">{t("confirmReturnedToOs")}</h2><p className="mt-3 text-sm text-slate-500">{t("confirmReturnedToOsHelp", { count: selected.length })}</p><label className="mt-4 block text-sm font-bold">{t("businessDate")}<input autoFocus required type="date" disabled={Boolean(returnRequest.current)} value={returnDate} onChange={event => setReturnDate(event.target.value)} className={`${control} mt-1 w-full`} /></label>{confirmReturns.isError && <p role="alert" className="mt-3 text-sm text-rose-600">{confirmReturns.error instanceof Error ? confirmReturns.error.message : t("loadError")}</p>}{returnRequest.current && confirmReturns.isError && <p role="alert">{t("paymentRetryUnchanged")}</p>}<div className="mt-5 flex justify-end gap-2"><button type="button" disabled={confirmReturns.isPending || Boolean(returnRequest.current)} onClick={() => setReturnOpen(false)} className={control}>{t("cancel")}</button><button disabled={confirmReturns.isPending} className="rounded-lg bg-sky-600 px-4 py-2 text-white disabled:opacity-40">{t(confirmReturns.isPending ? "loading" : "confirmReturnedToOs")}</button></div></form></div>}
       {rescheduleOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4"><form role="dialog" aria-modal="true" aria-labelledby="reschedule-title" onSubmit={event => { event.preventDefault(); if (!reschedule.isPending) reschedule.mutate(); }} className="w-full max-w-lg rounded-2xl bg-white p-6 dark:bg-[#181a1d]"><h2 id="reschedule-title" className="text-xl font-bold">{t("rescheduleParcels")}</h2><p className="mt-2 text-sm text-slate-500">{t("rescheduleHelp")}</p><label className="mt-4 block text-sm font-bold">{t("plannedDeliveryDate")}<input autoFocus required type="date" value={rescheduleDate} onChange={event => setRescheduleDate(event.target.value)} className={`${control} mt-1 w-full`} /></label><label className="mt-4 block text-sm font-bold">{t("reason")}<textarea required minLength={3} value={rescheduleReason} onChange={event => setRescheduleReason(event.target.value)} className={`${control} mt-1 w-full`} /></label>{reschedule.isError && <p role="alert" className="mt-3 text-sm text-rose-600">{reschedule.error instanceof Error ? reschedule.error.message : t("loadError")}</p>}<div className="mt-5 flex justify-end gap-2"><button type="button" disabled={reschedule.isPending} onClick={() => setRescheduleOpen(false)} className={control}>{t("cancel")}</button><button disabled={reschedule.isPending} className="rounded-lg bg-sky-600 px-4 py-2 text-white disabled:opacity-40">{t(reschedule.isPending ? "loading" : "save")}</button></div></form></div>}

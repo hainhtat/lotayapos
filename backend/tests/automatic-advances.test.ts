@@ -12,11 +12,13 @@ describe("automatic batch advance recording", () => {
   let districtId: string;
   let admin: { id: string; role: string };
   let dispatcher: { id: string; role: string };
+  let operationsManager: { id: string; role: string };
   beforeAll(async () => {
     hubId = (await prisma.hub.create({ data: { name: `Auto advance ${suffix}` } })).id;
     shopId = (await prisma.onlineShop.create({ data: { name: `Auto advance ${suffix}` } })).id;
     admin = await prisma.user.create({ data: { name: "Auto advance admin", email: `auto-admin-${suffix}@test.invalid`, passwordHash: "test-only", role: "SUPERADMIN", hubId } });
     dispatcher = await prisma.user.create({ data: { name: "Auto advance dispatcher", email: `auto-dispatcher-${suffix}@test.invalid`, passwordHash: "test-only", role: "DISPATCHER", hubId } });
+    operationsManager = await prisma.user.create({ data: { name: "Auto advance operations", email: `auto-operations-${suffix}@test.invalid`, passwordHash: "test-only", role: "OPERATIONS_MANAGER", hubId } });
     regionId = (await prisma.regionState.create({ data: { code: `R-${suffix}`, nameEn: "Region", nameMy: "" } })).id;
     districtId = (await prisma.district.create({ data: { code: `D-${suffix}`, nameEn: "District", nameMy: "", regionStateId: regionId } })).id;
     townshipId = (await prisma.township.create({ data: { code: `T-${suffix}`, nameEn: "Township", districtId, deliveryFee: 1000 } })).id;
@@ -32,7 +34,7 @@ describe("automatic batch advance recording", () => {
     await prisma.township.delete({ where: { id: townshipId } });
     await prisma.district.delete({ where: { id: districtId } });
     await prisma.regionState.delete({ where: { id: regionId } });
-    await prisma.user.deleteMany({ where: { id: { in: [admin.id, dispatcher.id] } } });
+    await prisma.user.deleteMany({ where: { id: { in: [admin.id, dispatcher.id, operationsManager.id] } } });
     await prisma.onlineShop.delete({ where: { id: shopId } });
     await prisma.cashbookDay.deleteMany({ where: { hubId } });
     await prisma.hub.delete({ where: { id: hubId } });
@@ -63,6 +65,11 @@ describe("automatic batch advance recording", () => {
     await expect(createBatch({ ...input(), pickupDate: "2037-01-02" }, dispatcher)).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(createBatch({ ...input(), wallets: { cash: 1, kbzPay: 0, wavePay: 0 } }, admin)).rejects.toMatchObject({ code: "INVALID_WALLET_SPLIT" });
     expect(await prisma.batch.count({ where: { shopId } })).toBe(1);
+  });
+  test("allows an Operations Manager to create a split-wallet advance", async () => {
+    const batch = await createBatch({ ...input(), pickupDate: "2037-01-05", idempotencyKey: `operations-${suffix}` }, operationsManager);
+    expect(batch.advancePaid).toBe(1_000_000);
+    expect(await prisma.journalEntry.count({ where: { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: batch.id } })).toBe(1);
   });
   test("zero advance permits operations recording without wallet mutation", async () => {
     const batch = await createBatch({ shopId, pickupDate: "2037-01-03", batchName: "Unpaid pickup", advancePaid: 0 }, dispatcher);

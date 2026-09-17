@@ -1171,7 +1171,7 @@ export async function receiveOsReturn(
         description: `Full COD return credit for ${parcel.trackingNumber}`,
         lines: { create: [{ account: "OS_COD_PAYABLE", debit: parcel.codAmount, credit: 0 }, { account: "OS_BATCH_COD_CLEARING", debit: 0, credit: parcel.codAmount }] },
       } }) : null;
-      return tx.osReturnCredit.create({ data: { id: creditId, parcelId: parcel.id, batchId: parcel.batchId, shopId: parcel.batch.shopId, hubId, amount: parcel.codAmount, businessDate: date, idempotencyKey: `return:${idempotencyKey}`, postedBy: actor.id, journalEntryId: journal?.id } });
+      return tx.osReturnCredit.create({ data: { id: creditId, parcelId: parcel.id, batchId: parcel.batchId, shopId: parcel.batch.shopId, hubId, amount: parcel.codAmount, codAmount: parcel.codAmount, feeAmount: 0, kind: "PHYSICAL_RETURN", businessDate: date, idempotencyKey: `return:${idempotencyKey}`, postedBy: actor.id, journalEntryId: journal?.id } });
     };
 
     const simplifiedObligation = await tx.osBatchObligation.findUnique({ where: { batchId: parcel.batchId }, select: { id: true } });

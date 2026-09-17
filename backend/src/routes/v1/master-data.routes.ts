@@ -40,7 +40,7 @@ masterDataRouter.patch("/reason-codes/:id", [
   body().custom((value) => ["labelEn", "labelMy", "noteRequired", "active"].some((key) => key in value)).withMessage("At least one editable field is required"),
 ], validation, asyncHandler(updateReasonCode));
 masterDataRouter.post("/hubs",[body("name").isString().trim().isLength({min:2,max:100})],validation,asyncHandler(createHub));
-masterDataRouter.post("/shops",[body("name").isString().trim().isLength({min:2,max:150})],validation,asyncHandler(createShop));
+masterDataRouter.post("/shops",[body("name").isString().trim().isLength({min:2,max:150}),body("includeDeliveryFeeInOsCredit").optional().isBoolean().toBoolean()],validation,asyncHandler(createShop));
 masterDataRouter.get("/shops",asyncHandler(listShops));
 masterDataRouter.get("/shops/:id",[param("id").isString().trim().notEmpty()],validation,asyncHandler(getShop));
 masterDataRouter.post("/zones",[body("name").isString().trim().isLength({min:2,max:100}),body("hubId").isString().trim().notEmpty(),body("townshipId").isString().trim().notEmpty()],validation,asyncHandler(createZone));

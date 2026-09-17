@@ -92,7 +92,7 @@ export async function applyHistoricalOsSettlement(input: ApplyInput, actor: Acto
               description: `Historical confirmed return: ${input.reason.trim()}`,
               lines: { create: [{ account: "OS_COD_PAYABLE", debit: parcel.codAmount, credit: 0 }, { account: "OS_BATCH_COD_CLEARING", debit: 0, credit: parcel.codAmount }] },
             } }) : null;
-            await tx.osReturnCredit.create({ data: { parcelId: parcel.id, batchId: source.id, shopId: source.shopId, hubId: source.hubId!, amount: parcel.codAmount, businessDate, idempotencyKey: `historical-return:${parcel.id}`, postedBy: actor.id, journalEntryId: returnJournal?.id } });
+            await tx.osReturnCredit.create({ data: { parcelId: parcel.id, batchId: source.id, shopId: source.shopId, hubId: source.hubId!, amount: parcel.codAmount, codAmount: parcel.codAmount, feeAmount: 0, kind: "PHYSICAL_RETURN", businessDate, idempotencyKey: `historical-return:${parcel.id}`, postedBy: actor.id, journalEntryId: returnJournal?.id } });
           }
         }
         const journal = batch.adjustmentAmount > 0 ? await tx.journalEntry.create({ data: {

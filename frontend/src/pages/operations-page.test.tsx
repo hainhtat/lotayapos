@@ -115,6 +115,28 @@ describe("OperationsPage", () => {
     );
   });
 
+  it("records a delivered parcel as paid to OS and creates credit without a wallet", async () => {
+    const parcel = { id: "parcel-paid", trackingNumber: "TRK-PAID", customerName: "Customer", address: "Address", status: "OUT_FOR_DELIVERY", codAmount: 25000, deliveryFee: 3000, batch: { label: "Batch", shop: { name: "Shop" } }, rider: { id: "rider-1", user: { name: "Rider" } } };
+    mockParcelList([parcel]);
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/master-data") return Promise.resolve({ data: { shops: [], riders: [{ id: "rider-1", user: { name: "Rider" } }] } });
+      if (path === "/operations/batches" || path === "/master-data/reason-codes") return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: {} });
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("TRK-PAID")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Status TRK-PAID"), { target: { value: "DELIVERED" } });
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("OS credit created: 25,000 MMK")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByLabelText("Include the full delivery fee in OS credit"));
+    expect(within(dialog).getByText("OS credit created: 28,000 MMK")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirm paid to OS" }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/parcels/parcel-paid/status", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ status: "DELIVERED", collectionMode: "PAID_BY_OS", paidToOsIncludeDeliveryFee: true, note: "Ops correction" }),
+    })));
+  });
+
   it("sends an ops correction note when changing status without an exception dialog", async () => {
     const parcel = {
       id: "parcel-1",

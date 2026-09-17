@@ -1,25 +1,19 @@
 import { Link } from "react-router-dom";
-import { ArrowUpRight, RotateCcw, Store } from "lucide-react";
+import { ArrowUpRight, BadgeDollarSign } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { LedgerAccount } from "@/lib/ledger";
 
-const OS_ACCOUNTS = ["OS_ADVANCE_RECEIVABLE", "OS_SETTLEMENT_OFFSET", "OS_RETURN_DEDUCTION"] as const;
+const OS_ACCOUNTS = ["OS_CREDIT", "OS_COD_PAYABLE"] as const;
 
 export function OsCashbookOverview({ ledger }: { ledger: LedgerAccount[] }) {
   const { t } = useTranslation();
   const byAccount = new Map(ledger.map((line) => [line.account, line.balance]));
   const cards = [
     {
-      key: "OS_ADVANCE_RECEIVABLE",
-      label: t("osAdvanceReceivable"),
-      hint: t("osAdvanceReceivableHint"),
-      icon: Store,
-    },
-    {
-      key: "OS_SETTLEMENT_OFFSET",
-      label: t("osSettlementOffset"),
-      hint: t("osSettlementOffsetHint"),
-      icon: RotateCcw,
+      key: "OS_CREDIT",
+      label: t("osCreditAvailable"),
+      hint: t("osCreditAvailableHint"),
+      icon: BadgeDollarSign,
     },
   ] as const;
 
@@ -45,7 +39,7 @@ export function OsCashbookOverview({ ledger }: { ledger: LedgerAccount[] }) {
           </Link>
         </div>
       </div>
-      <div className="mt-5 grid gap-4 sm:grid-cols-2">
+      <div className="mt-5 grid gap-4">
         {cards.map(({ key, label, hint, icon: Icon }) => {
           const balance = byAccount.get(key) ?? 0;
           return (
