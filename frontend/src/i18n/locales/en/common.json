@@ -741,7 +741,7 @@
   "viewParcels": "View parcels",
   "dispatchWorkQueues": "Daily work queues",
   "queueToAssign": "To assign",
-  "queueWithRiders": "With riders — physically taken / out for delivery",
+  "queueWithRiders": "With riders",
   "assignedAwaitingHandover": "Assigned — planned / awaiting handover",
   "outForDeliveryWithRider": "Out for delivery — physically with rider",
   "queueRescheduled": "Rescheduled",

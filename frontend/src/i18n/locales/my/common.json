@@ -739,7 +739,7 @@
   "viewParcels": "ပါဆယ်ကြည့်ရန်",
   "dispatchWorkQueues": "နေ့စဉ်လုပ်ငန်းများ",
   "queueToAssign": "တာဝန်ပေးရန်",
-  "queueWithRiders": "Rider လက်ဝယ်ရှိ — ပို့ဆောင်ရန်ထွက်ပြီး",
+  "queueWithRiders": "ပို့ဆောင်သူထံရှိ",
   "assignedAwaitingHandover": "တာဝန်ပေးပြီး — လက်လွှဲရန် စောင့်ဆိုင်း",
   "outForDeliveryWithRider": "ပို့ဆောင်ရန်ထွက်ပြီး — Rider လက်ဝယ်ရှိ",
   "queueRescheduled": "ရက်ပြောင်းထား",
