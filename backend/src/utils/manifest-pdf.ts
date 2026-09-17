@@ -5,6 +5,7 @@ import type { Font as FontkitFont } from "@pdf-lib/fontkit";
 import { PDFDocument, PDFFont, RGB, StandardFonts, rgb } from "pdf-lib";
 
 export type ManifestParcel = {
+  id?: string;
   trackingNumber: string;
   orderId?: string | null;
   customerName: string;
@@ -18,7 +19,7 @@ export type ManifestParcel = {
   shopName?: string;
   /** Parcel status enum (e.g. ASSIGNED) — rendered as a short Status label */
   status?: string;
-  /** Return/exception note only — never a status code */
+  /** Return/exception reason and note, never a status code */
   note?: string | null;
 };
 
@@ -38,6 +39,10 @@ export type ManifestInput = {
   parcels?: ManifestParcel[];
   generatedAt?: Date;
   statusesLabel?: string;
+  documentTitle?: string;
+  noteLabel?: string;
+  documentSubtitle?: string;
+  footerLabel?: string;
 };
 
 /** A4 portrait — matches active rider sheet print size */
@@ -293,15 +298,15 @@ function drawText(
   });
 }
 
-function drawFooter(ctx: PageContext) {
-  drawText(ctx, "Lotaya Delivery - Active rider sheet", MARGIN_X, 12, 7, false, BRAND.muted);
+function drawFooter(ctx: PageContext, footerLabel = "Lotaya Delivery - Active rider sheet") {
+  drawText(ctx, footerLabel, MARGIN_X, 12, 7, false, BRAND.muted);
   drawText(ctx, `Page ${ctx.pageIndex + 1}`, PAGE_WIDTH - 48, 12, 7, false, BRAND.muted);
 }
 
-function drawBrandBar(ctx: PageContext) {
+function drawBrandBar(ctx: PageContext, label = "Active Rider Sheet") {
   drawRect(ctx, 0, PAGE_HEIGHT - 22, PAGE_WIDTH, 22, BRAND.blue);
   drawText(ctx, "LOTAYA", MARGIN_X, PAGE_HEIGHT - 15, 10, true, BRAND.white);
-  drawText(ctx, "Active Rider Sheet", MARGIN_X + 58, PAGE_HEIGHT - 14, 8, false, BRAND.white);
+  drawText(ctx, label, MARGIN_X + 58, PAGE_HEIGHT - 14, 8, false, BRAND.white);
 }
 
 function drawRiderSheetHeader(
@@ -311,19 +316,22 @@ function drawRiderSheetHeader(
   generatedAt: Date,
   statusesLabel: string,
   selectedRidersLabel: string,
+  documentTitle = "All Active Deliveries",
+  documentSubtitle = "All remaining assigned orders combined",
 ) {
-  drawBrandBar(ctx);
+  drawBrandBar(ctx, documentTitle === "Return to OS Handover" ? "Return Handover" : "Active Rider Sheet");
   ctx.y = PAGE_HEIGHT - 40;
+  const riderTitle = documentTitle === "All Active Deliveries";
   const title = ctx.continued
-    ? `All Active Deliveries - Rider: ${fitManifestText(section.riderName, 42)} (continued)`
-    : `All Active Deliveries - Rider: ${fitManifestText(section.riderName, 48)}`;
+    ? `${documentTitle} - ${riderTitle ? "Rider: " : ""}${fitManifestText(section.riderName, 42)} (continued)`
+    : `${documentTitle} - ${riderTitle ? "Rider: " : ""}${fitManifestText(section.riderName, 48)}`;
   drawText(ctx, title, MARGIN_X, ctx.y, 12, true, BRAND.navy);
   ctx.y -= 14;
-  drawText(ctx, `Generated: ${formatYangonStamp(generatedAt)}  |  All remaining assigned orders combined`, MARGIN_X, ctx.y, 7, false, BRAND.muted);
+  drawText(ctx, `Generated: ${formatYangonStamp(generatedAt)}  |  ${documentSubtitle}`, MARGIN_X, ctx.y, 7, false, BRAND.muted);
   ctx.y -= 11;
   drawText(ctx, `Selected statuses: ${statusesLabel}`, MARGIN_X, ctx.y, 7, false, BRAND.slate);
   ctx.y -= 11;
-  drawText(ctx, `Selected riders: ${fitManifestText(selectedRidersLabel, 90)}`, MARGIN_X, ctx.y, 7, false, BRAND.slate);
+  drawText(ctx, `${documentTitle === "Return to OS Handover" ? "Handover" : "Selected riders"}: ${fitManifestText(selectedRidersLabel, 90)}`, MARGIN_X, ctx.y, 7, false, BRAND.slate);
   if (section.hubName) {
     ctx.y -= 11;
     drawText(ctx, `Hub: ${fitManifestText(section.hubName, 40)}`, MARGIN_X, ctx.y, 7, false, BRAND.muted);
@@ -347,10 +355,10 @@ function drawRiderSheetHeader(
   ctx.y -= 48;
 }
 
-function drawTableHeader(ctx: PageContext) {
+function drawTableHeader(ctx: PageContext, noteLabel?: string) {
   const h = 18;
   drawRect(ctx, MARGIN_X, ctx.y - h, TABLE_RIGHT - MARGIN_X, h, BRAND.softGray, BRAND.line);
-  COLS.forEach((col) => drawText(ctx, col.key, col.x + 2, ctx.y - 12, 6, true, BRAND.slate));
+  COLS.forEach((col) => drawText(ctx, col.key === "Note" && noteLabel ? noteLabel : col.key, col.x + 2, ctx.y - 12, 6, true, BRAND.slate));
   ctx.y -= h + 2;
 }
 
@@ -361,9 +369,12 @@ function startRiderPage(
   generatedAt: Date,
   statusesLabel: string,
   selectedRidersLabel: string,
+  documentTitle?: string,
+  noteLabel?: string,
+  documentSubtitle?: string,
 ) {
-  drawRiderSheetHeader(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel);
-  drawTableHeader(ctx);
+  drawRiderSheetHeader(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel, documentTitle, documentSubtitle);
+  drawTableHeader(ctx, noteLabel);
 }
 
 function drawParcelRow(ctx: PageContext, parcel: ManifestParcel, index: number) {
@@ -466,7 +477,7 @@ async function buildPdfDocument(input: ManifestInput) {
     const totals = totalsFor(section.parcels);
     let page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
     let ctx: PageContext = { doc, page, fonts, y: PAGE_HEIGHT - 40, pageIndex, continued: false, glyphPathCache };
-    startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel);
+    startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel, input.documentTitle, input.noteLabel, input.documentSubtitle);
 
     if (!section.parcels.length) {
       drawText(ctx, "No assigned parcels for this rider.", MARGIN_X, ctx.y - 8, 9, false, BRAND.muted);
@@ -476,24 +487,24 @@ async function buildPdfDocument(input: ManifestInput) {
     for (const [index, parcel] of section.parcels.entries()) {
       const drawn = drawParcelRow(ctx, parcel, index);
       if (!drawn) {
-        drawFooter(ctx);
+        drawFooter(ctx, input.footerLabel);
         pageIndex += 1;
         page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
         ctx = { doc, page, fonts, y: PAGE_HEIGHT - 40, pageIndex, continued: true, glyphPathCache };
-        startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel);
+        startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel, input.documentTitle, input.noteLabel, input.documentSubtitle);
         drawParcelRow(ctx, parcel, index);
       }
     }
 
     if (ctx.y - 28 < MARGIN_BOTTOM) {
-      drawFooter(ctx);
+      drawFooter(ctx, input.footerLabel);
       pageIndex += 1;
       page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
       ctx = { doc, page, fonts, y: PAGE_HEIGHT - 40, pageIndex, continued: true, glyphPathCache };
-      startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel);
+      startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel, input.documentTitle, input.noteLabel, input.documentSubtitle);
     }
     drawSectionTotals(ctx, totals);
-    drawFooter(ctx);
+    drawFooter(ctx, input.footerLabel);
     pageIndex += 1;
   }
 

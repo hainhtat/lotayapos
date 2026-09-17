@@ -99,3 +99,10 @@ export const pendingReturnExtensionValidation = [
   body("days").isInt({ min: 1, max: 30 }).toInt(),
   body("reason").isString().trim().isLength({ min: 3, max: 500 }),
 ];
+export const failedDecisionValidation = [
+  body("action").isIn(["RETRY_TOMORROW", "RESCHEDULE", "RETURN_TO_OS"]),
+  body("plannedDeliveryDate").if(body("action").equals("RESCHEDULE")).matches(/^\d{4}-\d{2}-\d{2}$/).isISO8601({ strict: true }),
+  body("reason").isString().trim().isLength({ min: 3, max: 500 }),
+  body("note").optional().isString().trim().isLength({ max: 1000 }),
+];
+export const returnHandoverValidation = [body("parcelIds").isArray({ min: 1, max: 500 }), body("parcelIds.*").isString().trim().notEmpty(), body("parcelIds").custom((ids: string[]) => new Set(ids).size === ids.length).withMessage("parcelIds must be unique"), body("hubId").optional().isString().trim().notEmpty()];

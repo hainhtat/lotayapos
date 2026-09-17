@@ -115,6 +115,24 @@ describe("OperationsPage", () => {
     );
   });
 
+  it("previews selected Return to OS parcels without posting a physical return", async () => {
+    const parcel = { id: "return-1", trackingNumber: "TRK-RETURN", customerName: "Customer", address: "Address", status: "PENDING_RETURN", codAmount: 12000, batch: { label: "Batch", shop: { name: "Shop" } }, rider: null };
+    mockParcelList([parcel]);
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/master-data") return Promise.resolve({ data: { shops: [], riders: [] } });
+      if (path === "/operations/batches" || path === "/master-data/reason-codes") return Promise.resolve({ data: [] });
+      if (path === "/operations/parcels/returns/preview") return Promise.resolve({ data: { parcelCount: 1, totalCod: 12000, parcels: [{ ...parcel, reasonCode: "CUSTOMER_CANCELLED" }] } });
+      return Promise.resolve({ data: {} });
+    });
+    renderPage("/operations/dispatch?queue=return-to-os");
+    await waitFor(() => expect(screen.getByText("TRK-RETURN")).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText("Select TRK-RETURN"));
+    fireEvent.click(screen.getByRole("button", { name: "Generate OS return list" }));
+    await waitFor(() => expect(screen.getByText("OS return list")).toBeInTheDocument());
+    expect(apiMock).toHaveBeenCalledWith("/operations/parcels/returns/preview", expect.objectContaining({ method: "POST", body: JSON.stringify({ parcelIds: ["return-1"] }) }));
+    expect(apiMock.mock.calls.some(([path]) => path === "/finance/os-returns/receive-bulk")).toBe(false);
+  });
+
   it("records a delivered parcel as paid to OS and creates credit without a wallet", async () => {
     const parcel = { id: "parcel-paid", trackingNumber: "TRK-PAID", customerName: "Customer", address: "Address", status: "OUT_FOR_DELIVERY", codAmount: 25000, deliveryFee: 3000, batch: { label: "Batch", shop: { name: "Shop" } }, rider: { id: "rider-1", user: { name: "Rider" } } };
     mockParcelList([parcel]);
@@ -231,6 +249,11 @@ describe("OperationsPage", () => {
         }),
       ),
     );
+    const decision = await screen.findByRole("dialog", { name: "What should happen next?" });
+    expect(within(decision).getByRole("button", { name: "Return to OS" })).toBeDisabled();
+    fireEvent.change(within(decision).getByLabelText("Next-step reason"), { target: { value: "Customer asked us to return it" } });
+    fireEvent.click(within(decision).getByRole("button", { name: "Return to OS" }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/operations/parcels/parcel-1/failed-decision", expect.objectContaining({ method: "POST", body: JSON.stringify({ action: "RETURN_TO_OS", reason: "Customer asked us to return it" }) })));
   });
 
   it("opens the edit parcel modal for assigned parcels", async () => {

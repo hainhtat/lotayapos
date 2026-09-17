@@ -24,4 +24,11 @@ describe("dispatch work queues", () => {
       { status: { in: ["PENDING_RETURN", "REJECTED"] } },
     ] });
   });
+
+  test("with-riders shows only parcels currently out for delivery", () => {
+    expect(buildParcelListWhere(scope, false, { queue: "with-riders" })).toEqual({ AND: [
+      { batch: { hubId: "hub-a" } },
+      { status: "OUT_FOR_DELIVERY" },
+    ] });
+  });
 });

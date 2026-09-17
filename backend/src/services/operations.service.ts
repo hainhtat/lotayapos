@@ -8,6 +8,7 @@ import { buildRiderCommissionLines, buildRiderReceivableRecognitionLines, calcul
 import { accountRows, postedAdvanceByBatch, syncBatchObligation } from "./os-account.service.js";
 import { resolveCommissionRateBps } from "../utils/commission.js";
 import { buildDeliveryCollectionLines } from "./ledger.service.js";
+import { businessDateUtcBoundary, nextCalendarDate } from "../utils/business-date.js";
 
 export type FundingWallet = "CASH" | "KBZ_PAY" | "WAVE_PAY";
 const walletAccounts: Record<FundingWallet, string> = { CASH: "WALLET_CASH", KBZ_PAY: "WALLET_KBZ_PAY", WAVE_PAY: "WALLET_WAVE_PAY" };
@@ -143,6 +144,12 @@ function calendarDateInZone(at: Date, timeZone: string) {
   }).formatToParts(at);
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
   return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+export function hubCalendarDaysAfter(date: string, days: number) {
+  let result = date;
+  for (let index = 0; index < days; index += 1) result = nextCalendarDate(result);
+  return result;
 }
 
 export function overdueUnsentCutoffDate(at = new Date(), days = 3, timeZone = env.hubTimezone) {
@@ -872,4 +879,49 @@ export async function extendPendingReturn(parcelId: string, input: { days: numbe
     await tx.statusHistory.create({ data: { parcelId: parcel.id, fromStatus: "PENDING_RETURN", toStatus: "PENDING_RETURN", actorId: actor.id, reasonCode: "RETURN_EXTENSION", note: `${input.reason} | ${previousDueAt.toISOString()} -> ${newDueAt.toISOString()}` } });
     return tx.parcel.findUniqueOrThrow({ where: { id: parcel.id } });
   });
+}
+
+export async function decideFailedParcel(parcelId: string, input: { action: "RETRY_TOMORROW" | "RESCHEDULE" | "RETURN_TO_OS"; plannedDeliveryDate?: string; reason: string; note?: string }, actor: BatchActor) {
+  const user = await prisma.user.findUnique({ where: { id: actor.id }, select: { role: true, active: true, hubId: true } });
+  if (!user || !user.active || user.role !== actor.role || !["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Only operations may decide the next step for a failed parcel");
+  const parcel = await prisma.parcel.findUnique({ where: { id: parcelId }, include: { batch: { select: { hubId: true } } } });
+  if (!parcel) throw new ApiError(404, "PARCEL_NOT_FOUND", "Parcel not found");
+  if (parcel.status !== "FAILED") throw new ApiError(409, "PARCEL_NOT_FAILED", "Only a failed parcel needs a next-step decision");
+  if (!parcel.batch.hubId || (user.role !== "SUPERADMIN" && user.hubId !== parcel.batch.hubId)) throw new ApiError(403, "FORBIDDEN", "Parcel is outside your hub scope");
+  let plannedDeliveryDate: Date | null = null;
+  if (input.action === "RESCHEDULE") {
+    if (!input.plannedDeliveryDate) throw new ApiError(400, "PLANNED_DELIVERY_DATE_REQUIRED", "A rescheduled delivery date is required");
+    plannedDeliveryDate = new Date(`${input.plannedDeliveryDate.slice(0, 10)}T00:00:00.000Z`);
+    if (Number.isNaN(plannedDeliveryDate.getTime())) throw new ApiError(400, "INVALID_DATE", "Invalid planned delivery date");
+    if (input.plannedDeliveryDate < calendarDateInZone(new Date(), env.hubTimezone)) throw new ApiError(400, "PAST_DELIVERY_DATE", "A rescheduled delivery date cannot be before the hub business date");
+  }
+  if (input.action === "RETRY_TOMORROW") {
+    plannedDeliveryDate = businessDateUtcBoundary(hubCalendarDaysAfter(calendarDateInZone(new Date(), env.hubTimezone), 1), env.hubTimezone);
+  }
+  const toStatus = input.action === "RETURN_TO_OS" ? "PENDING_RETURN" : "PICKED_UP";
+  const returnDueAt = toStatus === "PENDING_RETURN" ? businessDateUtcBoundary(hubCalendarDaysAfter(calendarDateInZone(new Date(), env.hubTimezone), 4), env.hubTimezone) : null;
+  return prisma.$transaction(async (tx) => {
+    const changed = await tx.parcel.updateMany({ where: { id: parcel.id, status: "FAILED" }, data: { status: toStatus, plannedDeliveryDate, returnDueAt, reasonCode: input.action === "RETURN_TO_OS" ? "RETURN_TO_OS" : input.action } });
+    if (changed.count !== 1) throw new ApiError(409, "STATUS_CONFLICT", "Parcel status changed; refresh and retry");
+    await tx.statusHistory.create({ data: { parcelId: parcel.id, fromStatus: "FAILED", toStatus, actorId: actor.id, reasonCode: input.action, note: `${input.reason.trim()}${input.note?.trim() ? ` | ${input.note.trim()}` : ""}` } });
+    return tx.parcel.findUniqueOrThrow({ where: { id: parcel.id } });
+  });
+}
+
+export async function buildReturnToOsHandover(input: { parcelIds: string[]; hubId?: string }, actor: BatchActor) {
+  const ids = [...new Set(input.parcelIds)];
+  if (!ids.length || ids.length !== input.parcelIds.length || ids.length > 500) throw new ApiError(400, "INVALID_PARCEL_IDS", "Select between 1 and 500 unique parcels");
+  const user = await prisma.user.findUnique({ where: { id: actor.id }, select: { role: true, active: true, hubId: true } });
+  if (!user || !user.active || user.role !== actor.role || !manifestReadRoles.includes(user.role)) throw new ApiError(403, "FORBIDDEN", "You may not view return handovers");
+  if (user.role !== "SUPERADMIN" && input.hubId && input.hubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Hub is outside your scope");
+  const hubId = user.role === "SUPERADMIN" ? input.hubId ?? user.hubId : user.hubId;
+  const parcels = await prisma.parcel.findMany({ where: { id: { in: ids }, status: { in: ["PENDING_RETURN", "REJECTED"] }, ...(hubId ? { batch: { hubId } } : {}) }, include: { batch: { select: { label: true, pickupDate: true, shop: { select: { name: true } } } }, statusHistory: { orderBy: { createdAt: "desc" }, take: 1, select: { note: true, reasonCode: true } } }, orderBy: { trackingNumber: "asc" } });
+  if (parcels.length !== ids.length) throw new ApiError(409, "PARCELS_NOT_ELIGIBLE", "Return handover only allows selected pending-return or rejected parcels in your hub");
+  const manifestParcels = parcels.map((parcel) => {
+    const latest = parcel.statusHistory[0];
+    const reason = latest?.reasonCode ?? parcel.reasonCode;
+    const note = latest?.note;
+    return { id: parcel.id, trackingNumber: parcel.trackingNumber, orderId: parcel.orderId, customerName: parcel.customerName, customerPhone: parcel.customerPhone, address: parcel.address, codAmount: parcel.codAmount, deliveryFee: parcel.deliveryFee, zone: parcel.zone, township: parcel.township, status: parcel.status, batchLabel: `${parcel.batch.label} (${parcel.batch.pickupDate.toISOString().slice(0, 10)})`, shopName: parcel.batch.shop.name, note: [reason, note].filter(Boolean).join(": ") || null };
+  });
+  return { sections: [{ riderName: "Return to OS", hubName: hubId ? (await prisma.hub.findUnique({ where: { id: hubId }, select: { name: true } }))?.name : undefined, parcels: manifestParcels }], parcelCount: parcels.length, filename: `lotaya-return-to-os-${new Date().toISOString().slice(0, 10)}.pdf` };
 }

@@ -164,6 +164,12 @@ async function assertFinanceActor(actor: FinanceActor) {
   return user;
 }
 
+async function assertReturnHandoverActor(actor: FinanceActor) {
+  const user = await prisma.user.findUnique({ where: { id: actor.id }, select: { role: true, active: true, hubId: true } });
+  if (!user || !user.active || user.role !== actor.role || ![...financeRoles, "DISPATCHER"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Active return-handover scope required");
+  return user;
+}
+
 async function assertFinanceReadActor(actor: FinanceActor) {
   const user = await prisma.user.findUnique({
     where: { id: actor.id },
@@ -1129,7 +1135,7 @@ export async function receiveOsReturn(
   actor: FinanceActor,
   transaction?: Prisma.TransactionClient,
 ) {
-  const user = await assertFinanceActor(actor);
+  const user = await assertReturnHandoverActor(actor);
   const date = businessDay(input.businessDate);
   const idempotencyKey = input.idempotencyKey.trim();
 
@@ -1307,7 +1313,7 @@ export async function receiveOsReturn(
 }
 
 export async function receiveOsReturnsBulk(input: { parcelIds: string[]; businessDate: string; idempotencyKey: string }, actor: FinanceActor) {
-  const user = await assertFinanceActor(actor);
+  const user = await assertReturnHandoverActor(actor);
   const ids = [...new Set(input.parcelIds)].sort();
   if (!ids.length || ids.length > 50 || ids.length !== input.parcelIds.length) throw new ApiError(400, "INVALID_PARCEL_SELECTION", "Select between 1 and 50 distinct parcels");
   const hash = createHash("sha256").update(JSON.stringify({ ids, businessDate: input.businessDate, actorId: actor.id })).digest("hex");

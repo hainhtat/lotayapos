@@ -1,6 +1,8 @@
 import { prisma } from "../config/database.js";
 import { isDateChangeReason } from "../domain/exception-reasons.js";
 import { ApiError } from "../utils/api-error.js";
+import { env } from "../config/env.js";
+import { businessDateUtcBoundary, nextCalendarDate } from "../utils/business-date.js";
 import { resolveCommissionRateBps } from "../utils/commission.js";
 import { caseInsensitiveTextCondition } from "../utils/string-filters.js";
 import { Prisma } from "@prisma/client";
@@ -23,6 +25,11 @@ export function requiresOverrideNote(fromStatus: string, toStatus: string) { ret
 export function calculateCommissionAmount(deliveryFee: number, rateBps: number) { return Math.round(deliveryFee * rateBps / 10000); }
 export function overrideLeavesMoneyBearingStatus(fromStatus: string, toStatus: string, isOverride: boolean) {
   return isOverride && (MONEY_BEARING_STATUSES as readonly string[]).includes(fromStatus) && fromStatus !== toStatus;
+}
+function hubToday() {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: env.hubTimezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const get = (kind: string) => parts.find((part) => part.type === kind)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
 /** True when a journal has no LEDGER_REVERSAL whose sourceId is the original entry id. */
@@ -274,7 +281,7 @@ export function buildParcelListWhere(scope: ActorScope, assignedToMe = false, fi
     const rescheduleCodes = ["DATE_CHANGE", "DELIVERY_DATE_CHANGE", "RESCHEDULE"];
     const notRescheduled = { OR: [{ reasonCode: null }, { reasonCode: { notIn: rescheduleCodes } }] };
     if (filters.queue === "to-assign") conditions.push({ status: { in: ["CREATED", "PICKED_UP", "FAILED", "PARTIAL"] }, ...notRescheduled });
-    if (filters.queue === "with-riders") conditions.push({ status: { in: ["ASSIGNED", "OUT_FOR_DELIVERY"] } });
+    if (filters.queue === "with-riders") conditions.push({ status: "OUT_FOR_DELIVERY" });
     if (filters.queue === "rescheduled") conditions.push({ status: { notIn: ["DELIVERED", "RETURNED", "PENDING_RETURN"] }, reasonCode: { in: rescheduleCodes } });
     if (filters.queue === "return-to-os") conditions.push({ status: { in: ["PENDING_RETURN", "REJECTED"] } });
     if (filters.queue === "overdue") conditions.push({ status: { notIn: ["DELIVERED", "RETURNED"] }, createdAt: { lte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) } });
@@ -661,6 +668,7 @@ type StatusUpdateInput = {
   collectionWallet?: "CASH" | "KBZ_PAY" | "WAVE_PAY";
   collectionMode?: "PAID_BY_OS" | "CASH_RECEIPT_EXCEPTION";
   paidToOsIncludeDeliveryFee?: boolean;
+  returnToOs?: boolean;
 };
 
 async function updateStatusInTransaction(
@@ -685,6 +693,11 @@ async function updateStatusInTransaction(
   if (!(ALL_STATUSES as readonly string[]).includes(toStatus)) {
     throw new ApiError(400, "INVALID_STATUS", "Status is not a valid parcel lifecycle status");
   }
+  if (parcel.status === "FAILED" && toStatus === "PENDING_RETURN") {
+    throw new ApiError(409, "FAILED_DECISION_REQUIRED", "Use the failed-decision action to send a failed parcel to return to OS");
+  }
+  if (input.returnToOs && toStatus !== "REJECTED") throw new ApiError(400, "INVALID_RETURN_TO_OS", "returnToOs is only valid when recording a rejected/cancelled parcel");
+  if (input.returnToOs && !canOverrideStatus(scope.role)) throw new ApiError(403, "FORBIDDEN", "Only operations may send a cancelled parcel to return to OS");
   const allowedTransition = isAllowedTransition(parcel.status, toStatus);
   const overrideTransition = !allowedTransition && canOverrideStatus(scope.role);
   if (!allowedTransition && !overrideTransition) {
@@ -704,7 +717,7 @@ async function updateStatusInTransaction(
       : calculatePartialReturnAmounts({ codAmount: parcel.codAmount, advanceAmount: parcel.advanceAmount, actualCodCollected })
     : null;
   if (partialReturn && !collectionWallet) throw new ApiError(400, "COLLECTION_WALLET_REQUIRED", "Collection wallet is required for a partial return");
-  const returnDueAt = toStatus === "PENDING_RETURN" ? new Date(Date.now() + 4 * 24 * 60 * 60 * 1000) : undefined;
+  const returnDueAt = toStatus === "PENDING_RETURN" || input.returnToOs ? businessDateUtcBoundary(nextCalendarDate(nextCalendarDate(nextCalendarDate(nextCalendarDate(hubToday())))), env.hubTimezone) : undefined;
   const businessDate = new Date();
   businessDate.setUTCHours(0, 0, 0, 0);
   const commissionRateBps = resolveCommissionRateBps(
@@ -727,7 +740,7 @@ async function updateStatusInTransaction(
         throw new ApiError(409, "MONEY_POSTED", "Finance must reverse posted entries before correcting status");
       }
     }
-    const result = await tx.parcel.updateMany({ where: { id, status: parcel.status }, data: { status: toStatus as never, reasonCode, returnDueAt, ...(toStatus === "DELIVERED" ? { collectionMode, paidToOsFeeIncluded } : {}) } });
+    const result = await tx.parcel.updateMany({ where: { id, status: parcel.status }, data: { status: (input.returnToOs ? "PENDING_RETURN" : toStatus) as never, reasonCode, returnDueAt, ...(toStatus === "DELIVERED" ? { collectionMode, paidToOsFeeIncluded } : {}) } });
     if (result.count !== 1) throw new ApiError(409, "STATUS_CONFLICT", "Parcel status changed; refresh and retry");
     if (partialReturn) {
       await tx.parcel.update({ where: { id }, data: { actualCodCollected: partialReturn.actualCodCollected, partialReturnShortfall: partialReturn.shortfall } });
@@ -766,6 +779,7 @@ async function updateStatusInTransaction(
       }
     }
     await tx.statusHistory.create({ data: { parcelId: id, fromStatus: parcel.status as never, toStatus: toStatus as never, actorId: actor.id, reasonCode, note } });
+    if (input.returnToOs) await tx.statusHistory.create({ data: { parcelId: id, fromStatus: "REJECTED", toStatus: "PENDING_RETURN", actorId: actor.id, reasonCode: "RETURN_TO_OS", note: note?.trim() || "Cancelled parcel routed to return to OS" } });
     if (["PARTIAL", "FAILED"].includes(toStatus)) {
       const dateChange = isDateChangeReason(reasonCode);
       await tx.alert.create({
@@ -980,7 +994,7 @@ async function updateStatusInTransaction(
     return tx.parcel.findUniqueOrThrow({ where: { id } });
 }
 
-export async function updateStatus(id: string, toStatus: string, actor: Actor, reasonCode?: string, note?: string, actualCodCollected?: number, collectionWallet?: "CASH" | "KBZ_PAY" | "WAVE_PAY", collectionMode?: "PAID_BY_OS" | "CASH_RECEIPT_EXCEPTION", paidToOsIncludeDeliveryFee?: boolean) {
+export async function updateStatus(id: string, toStatus: string, actor: Actor, reasonCode?: string, note?: string, actualCodCollected?: number, collectionWallet?: "CASH" | "KBZ_PAY" | "WAVE_PAY", collectionMode?: "PAID_BY_OS" | "CASH_RECEIPT_EXCEPTION", paidToOsIncludeDeliveryFee?: boolean, returnToOs?: boolean) {
   const scope = await actorScope(actor);
   return serializableTransaction((tx) => updateStatusInTransaction(tx, {
     parcelId: id,
@@ -991,6 +1005,7 @@ export async function updateStatus(id: string, toStatus: string, actor: Actor, r
     collectionWallet,
     collectionMode,
     paidToOsIncludeDeliveryFee,
+    returnToOs,
   }, actor, scope));
 }
 

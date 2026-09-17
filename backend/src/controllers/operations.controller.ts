@@ -94,3 +94,14 @@ export const correctDeliveredRider: RequestHandler = async (req, res) =>
   res.json({ success: true, data: await parcelService.correctDeliveredRider(String(req.params.id), req.body, actor(req)) });
 export const reassignParcel: RequestHandler = async (req, res) => res.json({ success: true, data: await service.reassignParcel(String(req.params.id), req.body, actor(req)) });
 export const extendPendingReturn: RequestHandler = async (req, res) => res.json({ success: true, data: await service.extendPendingReturn(String(req.params.id), req.body, actor(req)) });
+export const decideFailed: RequestHandler = async (req, res) => res.json({ success: true, data: await service.decideFailedParcel(String(req.params.id), req.body, actor(req)) });
+export const previewReturnHandover: RequestHandler = async (req, res) => {
+  const result = await service.buildReturnToOsHandover(req.body, actor(req));
+  const parcels = result.sections[0]!.parcels;
+  res.json({ success: true, data: { parcels, parcelCount: result.parcelCount, totalCod: parcels.reduce((sum, parcel) => sum + parcel.codAmount, 0), totalFees: parcels.reduce((sum, parcel) => sum + (parcel.deliveryFee ?? 0), 0), generatedAt: new Date().toISOString() } });
+};
+export const downloadReturnHandover: RequestHandler = async (req, res) => {
+  const result = await service.buildReturnToOsHandover(req.body, actor(req));
+  const pdf = await generateDispatchManifestPdf({ sections: result.sections, statusesLabel: "Pending return, Rejected/cancelled", documentTitle: "Return to OS Handover", documentSubtitle: "Read-only handover record; no financial receipt is posted", footerLabel: "Lotaya Delivery - Return to OS handover", noteLabel: "Reason/note" });
+  res.type("application/pdf").set("Content-Disposition", `attachment; filename="${result.filename}"`).send(pdf);
+};

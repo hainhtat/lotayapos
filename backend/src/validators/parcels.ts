@@ -32,6 +32,7 @@ export const parcelStatusValidation = [
   body("collectionWallet").if(body("status").equals("PARTIAL")).isIn(["CASH", "KBZ_PAY", "WAVE_PAY"]),
   body("collectionMode").optional().isIn(["PAID_BY_OS", "CASH_RECEIPT_EXCEPTION"]),
   body("paidToOsIncludeDeliveryFee").optional().isBoolean().toBoolean(),
+  body("returnToOs").optional().isBoolean().toBoolean(),
 ];
 
 export const parcelRescheduleValidation = [
@@ -51,6 +52,7 @@ export const parcelBulkStatusValidation = [
   body("collectionWallet").if(body("status").equals("PARTIAL")).isIn(["CASH", "KBZ_PAY", "WAVE_PAY"]),
   body("collectionMode").optional().isIn(["PAID_BY_OS", "CASH_RECEIPT_EXCEPTION"]),
   body("paidToOsIncludeDeliveryFee").optional().isBoolean().toBoolean(),
+  body("returnToOs").optional().isBoolean().toBoolean(),
 ];
 
 export const parcelUpdateValidation = [
