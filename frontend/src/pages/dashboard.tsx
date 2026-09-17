@@ -33,6 +33,7 @@ type Overview = {
   osOutstanding?: number;
   codCollectedToday?: number;
   deliveryFeesToday?: number;
+  deliveredTotalToday?: number;
   walletBalances?: { cash: number; kbzPay: number; wavePay: number };
   returnsDue?: number;
   returnsOverdue?: number;
@@ -102,10 +103,17 @@ export function Dashboard() {
     },
     {
       key: "codCollectedToday",
-      value: money(data?.codCollectedToday ?? data?.cashCollected ?? 0),
+      value: money(data?.codCollectedToday ?? 0),
       detail: t("deliveryFeesTodayDetail", { amount: money(data?.deliveryFeesToday ?? 0) }),
       icon: Banknote,
       to: "/finance",
+    },
+    {
+      key: "deliveredTotalToday",
+      value: money(data?.deliveredTotalToday ?? 0),
+      detail: t("deliveredTotalTodayDetail"),
+      icon: ReceiptText,
+      to: "/operations/dispatch?status=DELIVERED",
     },
     {
       key: "returnsDue",

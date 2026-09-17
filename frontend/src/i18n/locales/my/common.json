@@ -494,6 +494,8 @@
   "unsettledOsBatches": "ငွေမရှင်းရသေးသော OS ဘတ်ချ်များ",
   "codCollectedToday": "ယနေ့ ကောက်ခံ COD",
   "deliveryFeesTodayDetail": "ပို့ဆောင်ခ: {{amount}}",
+  "deliveredTotalToday": "ယနေ့ ပို့ဆောင်ပြီး စုစုပေါင်း",
+  "deliveredTotalTodayDetail": "COD နှင့် သတ်မှတ်ထားသော ပို့ဆောင်ခ စုစုပေါင်း",
   "returnsDue": "ပြန်အပ်ရန် ရောက်ရှိနေသည်",
   "returnsOverdueDetail": "{{count}} ခု ရက်ကျော်နေသည်",
   "deliveryAlerts": "မအောင်မြင်/တစ်စိတ်တစ်ပိုင်း သတိပေးချက်",

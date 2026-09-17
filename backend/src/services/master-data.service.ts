@@ -236,8 +236,19 @@ export async function dashboardOverview(actor: Actor) {
   const nextBusinessDate = new Date(businessDate.getTime() + 24 * 60 * 60 * 1000);
   const hubId = user.role === "SUPERADMIN" ? undefined : user.hubId!;
   const financialAccess = ["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "AUDITOR"].includes(user.role);
-  const [allParcels, batches, financialLines, allProfitLines, returnMetrics, alertCount, walletLines, osPayableLines, expenseTotal, allExpenseTotal, riderOutstandingSummary, osAccountHubs] = await Promise.all([
+  const [allParcels, deliveredToday, batches, financialLines, allProfitLines, returnMetrics, alertCount, walletLines, osPayableLines, expenseTotal, allExpenseTotal, riderOutstandingSummary, osAccountHubs] = await Promise.all([
     prisma.parcel.groupBy({ by: ["status"], where: hubId ? { batch: { hubId } } : {}, _count: { _all: true } }),
+    prisma.statusHistory.findMany({
+      where: {
+        toStatus: "DELIVERED",
+        createdAt: { gte: businessDate, lt: nextBusinessDate },
+        ...(hubId ? { parcel: { batch: { hubId } } } : {}),
+      },
+      // A corrected parcel can have more than one delivered history event in a
+      // day. The dashboard is an operational total, so count its COD once.
+      distinct: ["parcelId"],
+      select: { parcel: { select: { codAmount: true, deliveryFee: true } } },
+    }),
     prisma.batch.findMany({ where: { ...(hubId ? { hubId } : {}), pickupDate: { gte: businessDate, lt: nextBusinessDate } }, include: { shop: true, parcels: { select: { status: true } } }, orderBy: { pickupDate: "desc" }, take: 5 }),
     financialAccess ? prisma.journalLine.groupBy({ by:["account"], where: { account: { in: ["WALLET_CASH", "WALLET_KBZ_PAY", "WALLET_WAVE_PAY", "CUSTOMER_COD_RECEIVABLE", "OS_COD_PAYABLE", "DELIVERY_FEE_REVENUE", "RIDER_COMMISSION_EXPENSE"] }, entry: { ...(hubId ? { hubId } : {}), businessDate: { gte: businessDate, lt: nextBusinessDate } } }, _sum:{debit:true,credit:true} }) : Promise.resolve([]),
     financialAccess ? prisma.journalLine.groupBy({ by:["account"], where: { account: { in: ["DELIVERY_FEE_REVENUE", "RIDER_COMMISSION_EXPENSE"] }, entry: { ...(hubId ? { hubId } : {}) } }, _sum:{debit:true,credit:true} }) : Promise.resolve([]),
@@ -268,8 +279,11 @@ export async function dashboardOverview(actor: Actor) {
     failedPartialAlerts: alertCount,
     ...(financialAccess ? {
       cashCollected: balance(accountLines("WALLET_CASH")),
-      codCollectedToday: -balance(accountLines("CUSTOMER_COD_RECEIVABLE")) - balance(accountLines("OS_COD_PAYABLE")),
-      deliveryFeesToday: -balance(accountLines("DELIVERY_FEE_REVENUE")),
+      // This is parcel activity, not a wallet or ledger balance. Wallet
+      // adjustments, advances, and OS payments must never change it.
+      codCollectedToday: deliveredToday.reduce((sum, row) => sum + row.parcel.codAmount, 0),
+      deliveryFeesToday: deliveredToday.reduce((sum, row) => sum + (row.parcel.deliveryFee ?? 0), 0),
+      deliveredTotalToday: deliveredToday.reduce((sum, row) => sum + row.parcel.codAmount + (row.parcel.deliveryFee ?? 0), 0),
       riderOutstanding: riderOutstandingSummary.outstandingAmount,
       unsettledRiderCount: riderOutstandingSummary.unsettledRiderCount,
       unsettledOnlineShopBatches: countUnsettledOsAccountBatches(osAccountRows),

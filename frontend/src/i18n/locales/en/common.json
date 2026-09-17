@@ -494,6 +494,8 @@
   "unsettledOsBatches": "Unsettled OS batches",
   "codCollectedToday": "COD collected today",
   "deliveryFeesTodayDetail": "Delivery fees: {{amount}}",
+  "deliveredTotalToday": "Total delivered today",
+  "deliveredTotalTodayDetail": "COD plus configured delivery fees",
   "returnsDue": "Returns due",
   "returnsOverdueDetail": "{{count}} overdue",
   "deliveryAlerts": "Failed and partial alerts",
