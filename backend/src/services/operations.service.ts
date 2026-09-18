@@ -915,13 +915,14 @@ export async function buildReturnToOsHandover(input: { parcelIds: string[]; hubI
   if (!user || !user.active || user.role !== actor.role || !manifestReadRoles.includes(user.role)) throw new ApiError(403, "FORBIDDEN", "You may not view return handovers");
   if (user.role !== "SUPERADMIN" && input.hubId && input.hubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Hub is outside your scope");
   const hubId = user.role === "SUPERADMIN" ? input.hubId ?? user.hubId : user.hubId;
-  const parcels = await prisma.parcel.findMany({ where: { id: { in: ids }, status: { in: ["PENDING_RETURN", "REJECTED"] }, ...(hubId ? { batch: { hubId } } : {}) }, include: { batch: { select: { label: true, pickupDate: true, shop: { select: { name: true } } } }, statusHistory: { orderBy: { createdAt: "desc" }, take: 1, select: { note: true, reasonCode: true } } }, orderBy: { trackingNumber: "asc" } });
+  const parcels = await prisma.parcel.findMany({ where: { id: { in: ids }, status: { in: ["PENDING_RETURN", "REJECTED"] }, ...(hubId ? { batch: { hubId } } : {}) }, select:{id:true,trackingNumber:true,orderId:true,customerName:true,customerPhone:true,address:true,codAmount:true,deliveryFee:true,paidToOsFeeIncluded:true,zone:true,township:true,status:true,reasonCode:true,batch:{select:{label:true,pickupDate:true,shop:{select:{name:true}}}},statusHistory:{orderBy:{createdAt:"desc"},take:1,select:{note:true,reasonCode:true}}}, orderBy: { trackingNumber: "asc" } });
   if (parcels.length !== ids.length) throw new ApiError(409, "PARCELS_NOT_ELIGIBLE", "Return handover only allows selected pending-return or rejected parcels in your hub");
   const manifestParcels = parcels.map((parcel) => {
     const latest = parcel.statusHistory[0];
-    const reason = latest?.reasonCode ?? parcel.reasonCode;
+    const reasonCode = latest?.reasonCode ?? parcel.reasonCode;
+    const reason = reasonCode === "RETURN_TO_OS" ? null : reasonCode;
     const note = latest?.note;
-    return { id: parcel.id, trackingNumber: parcel.trackingNumber, orderId: parcel.orderId, customerName: parcel.customerName, customerPhone: parcel.customerPhone, address: parcel.address, codAmount: parcel.codAmount, deliveryFee: parcel.deliveryFee, zone: parcel.zone, township: parcel.township, status: parcel.status, batchLabel: `${parcel.batch.label} (${parcel.batch.pickupDate.toISOString().slice(0, 10)})`, shopName: parcel.batch.shop.name, note: [reason, note].filter(Boolean).join(": ") || null };
+    return { id: parcel.id, trackingNumber: parcel.trackingNumber, orderId: parcel.orderId, customerName: parcel.customerName, customerPhone: parcel.customerPhone, address: parcel.address, codAmount: parcel.codAmount, deliveryFee: parcel.deliveryFee, paidToOsFeeIncluded:parcel.paidToOsFeeIncluded, zone: parcel.zone, township: parcel.township, status: parcel.status, batchLabel: `${parcel.batch.label} (${parcel.batch.pickupDate.toISOString().slice(0, 10)})`, shopName: parcel.batch.shop.name, note: [reason, note].filter(Boolean).join(": ") || null };
   });
   return { sections: [{ riderName: "Return to OS", hubName: hubId ? (await prisma.hub.findUnique({ where: { id: hubId }, select: { name: true } }))?.name : undefined, parcels: manifestParcels }], parcelCount: parcels.length, filename: `lotaya-return-to-os-${new Date().toISOString().slice(0, 10)}.pdf` };
 }

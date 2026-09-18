@@ -390,6 +390,23 @@ describe("OperationsPage", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("requires a free-text reason in the Pending Return status modal and posts that reason", async () => {
+    mockParcelList([{id:"parcel-return",trackingNumber:"TRK-RETURN",customerName:"Customer",address:"Address",status:"FAILED",codAmount:12000,batch:{label:"Batch",shop:{name:"Shop"}},rider:null}]);
+    apiMock.mockImplementation((path:string)=>path==="/master-data"?Promise.resolve({data:{riders:[]}}):path==="/parcels/parcel-return/status"?Promise.resolve({data:{}}):Promise.resolve({data:[]}));
+    renderPage();
+    await screen.findByText("TRK-RETURN");
+    fireEvent.change(screen.getByLabelText("Status TRK-RETURN"),{target:{value:"PENDING_RETURN"}});
+    const dialog=await screen.findByRole("dialog");
+    const save=within(dialog).getByRole("button",{name:"Save"});
+    expect(save).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText("Return reason"),{target:{value:"No"}});
+    expect(save).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText("Return reason"),{target:{value:"Customer requested another delivery date"}});
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    await waitFor(()=>expect(apiMock).toHaveBeenCalledWith("/operations/parcels/parcel-return/failed-decision",expect.objectContaining({method:"POST",body:expect.stringContaining('"reason":"Customer requested another delivery date"')})));
+  });
+
   it("allows selecting an unassigned exception parcel for multi-edit", async () => {
     mockParcelList([
       {

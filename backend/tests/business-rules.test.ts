@@ -1,9 +1,9 @@
-import { addWalletAmounts, assertCashbookOpen, buildCashbookAdjustmentLines, buildExpenseLines, buildOpeningBalanceLines, buildRiderSettlementReceivableLines, buildWalletTransferLines, calculateDailySalaryDeduction, calculateOsSettlementNet, calculateRecognitionTotals, calculateRiderSettlementAmounts, calculateRiderSettlementTotals, calculateWalletBalances, calculateWalletReconciliationVariance, combineRiderOutstandingAggregates, cumulativeReceiptPosition, isOsSettlementCodCovered, returnedAdvanceContribution, settlementWalletMismatch } from "../src/services/finance.service.js";
+import { addWalletAmounts, assertCashbookOpen, buildCashbookAdjustmentLines, buildExpenseLines, buildOpeningBalanceLines, buildRiderSettlementReceivableLines, buildWalletTransferLines, calculateDailySalaryDeduction, calculateOsSettlementNet, calculateRecognitionTotals, calculateRiderSettlementAmounts, calculateRiderSettlementTotals, calculateWalletBalances, calculateWalletReconciliationVariance, combineRiderOutstandingAggregates, cumulativeReceiptPosition, isOsSettlementCodCovered, osBatchComponents, returnedAdvanceContribution, settlementWalletMismatch } from "../src/services/finance.service.js";
 import { buildRiderReceivableRecognitionLines } from "../src/services/parcel.service.js";
 import { ApiError } from "../src/utils/api-error.js";
 import { batchMutationLockMode, buildManifestFilenameSuffix, buildPickupAdvanceJournalLines, bulkAssignParcels, calculateReturnExtension, hubCalendarDaysAfter, isAssignmentEligible, manifestStatusesLabel, pickupAdvancePostingDisposition, sanitizeManifestFilenamePart, summarizeManifestParcels, yangonBusinessDate } from "../src/services/operations.service.js";
 import { businessDateFor, countUnsettledOsAccountBatches } from "../src/services/master-data.service.js";
-import { assertParcelAccess, buildParcelListWhere, buildParcelScope, buildRiderCommissionLines, calculateCommissionAmount, canOverrideStatus, isAllowedTransition, LINKED_MONEY_POSTED_SOURCE_TYPES, MONEY_POSTED_SOURCE_TYPES, overrideLeavesMoneyBearingStatus, requiresOverrideNote, resolveCommissionRateBps, validateConfiguredReason } from "../src/services/parcel.service.js";
+import { assertParcelAccess, buildParcelListWhere, buildParcelScope, buildRiderCommissionLines, calculateCommissionAmount, canOverrideStatus, isAllowedTransition, LINKED_MONEY_POSTED_SOURCE_TYPES, MONEY_POSTED_SOURCE_TYPES, overrideLeavesMoneyBearingStatus, requiresOverrideNote, requirePendingReturnReason, resolveCommissionRateBps, validateConfiguredReason } from "../src/services/parcel.service.js";
 import { normalizeReasonCode, normalizeRiderPayFields } from "../src/services/master-data.service.js";
 import { assertBalancedLines, buildDeliveryCollectionLines, buildPartialReturnAdjustmentLines, buildPartialReturnCollectionLines, buildReturnDeductionLines, calculatePartialReturnAmounts } from "../src/services/ledger.service.js";
 import { recoverableAdvanceAmount, buildOsSettlementReturnDeductionLines, allocateProRata, baseParcelIdFromSourceId } from "../src/services/os-advance.js";
@@ -40,6 +40,19 @@ function extractPdfStrings(pdf: Buffer) {
 }
 
 describe("rider settlement formula", () => {
+  test("requires a trimmed three-character Pending Return reason at the service boundary", () => {
+    expect(() => requirePendingReturnReason("PENDING_RETURN", "  ")).toThrow(expect.objectContaining({ code: "RETURN_REASON_REQUIRED", status: 400 }));
+    expect(() => requirePendingReturnReason("PENDING_RETURN", " ok ")).toThrow(expect.objectContaining({ code: "RETURN_REASON_REQUIRED", status: 400 }));
+    expect(() => requirePendingReturnReason("PENDING_RETURN", " Customer asked to return ")).not.toThrow();
+    expect(() => requirePendingReturnReason("DELIVERED", null)).not.toThrow();
+  });
+  test("includes an OS delivery-fee credit only when the OS actually paid that fee", () => {
+    const parcel = { id: "returned", status: "RETURNED", codAmount: 10000, actualCodCollected: 0, deliveryFee: 2500, advanceAmount: 0 };
+    expect(osBatchComponents({ advancePaid: 0, parcels: [parcel] }, new Map(), new Map()).deliveryFees).toBe(0);
+    expect(osBatchComponents({ advancePaid: 0, parcels: [{ ...parcel, paidToOsFeeIncluded: true }] }, new Map(), new Map()).deliveryFees).toBe(2500);
+    expect(osBatchComponents({ advancePaid: 0, parcels: [{ ...parcel, status:"DELIVERED" }] }, new Map(), new Map()).deliveryFees).toBe(0);
+    expect(osBatchComponents({ advancePaid: 0, parcels: [{ ...parcel, status:"DELIVERED", paidToOsFeeIncluded:true }] }, new Map(), new Map()).deliveryFees).toBe(2500);
+  });
   test("recognizes rider debt at delivery without treating it as a wallet receipt", () => {
     expect(buildRiderReceivableRecognitionLines(100000, 3000, 1200)).toEqual({
       receivableAmount: 101800,
@@ -618,6 +631,37 @@ describe("bulk dispatch and manifest rules", () => {
     expect(pdf.subarray(0, 5).toString("ascii")).toBe("%PDF-");
     const doc = await PDFDocument.load(pdf);
     expect(doc.getPageCount()).toBeGreaterThan(0);
+  });
+
+  test("uses landscape, wrapped return handover rows that retain customer, address, and reason text", async () => {
+    const pdf=await generateDispatchManifestPdf({documentTitle:"Return to OS Handover",noteLabel:"Reason/note",sections:[{riderName:"Return to OS",parcels:[{trackingNumber:"LTY-1193",orderId:"001",customerName:"Khaing Zaw Win",customerPhone:"0912345678",address:"No 24 Thiri Street near the market",codAmount:36000,deliveryFee:4000,zone:null,township:"Kamayut",status:"PENDING_RETURN",note:"Customer requested date change"}]}]});
+    const page=(await PDFDocument.load(pdf)).getPage(0);
+    expect(page.getWidth()).toBeGreaterThan(page.getHeight());
+    const text=extractPdfStrings(pdf).join(" ");
+    expect(text).toContain("Khaing Zaw Win");
+    expect(text).toContain("No 24 Thiri Street near the market");
+    expect(text).toContain("Customer requested date change");
+  });
+
+  test("keeps ordinary rider manifests in portrait while return handovers use landscape", async () => {
+    const input={sections:[{riderName:"Rider",parcels:[{trackingNumber:"LTY-ORIENT",customerName:"Customer",customerPhone:null,address:"Address",codAmount:1000,deliveryFee:100,zone:null,township:"Yangon"}]}]};
+    const riderPdf=await generateDispatchManifestPdf(input);
+    const returnPdf=await generateDispatchManifestPdf({...input,documentTitle:"Return to OS Handover"});
+    const riderPage=(await PDFDocument.load(riderPdf)).getPage(0);
+    const returnPage=(await PDFDocument.load(returnPdf)).getPage(0);
+    expect(riderPage.getHeight()).toBeGreaterThan(riderPage.getWidth());
+    expect(returnPage.getWidth()).toBeGreaterThan(returnPage.getHeight());
+  });
+
+  test("return handover totals include a fee only when the persisted OS-paid decision includes it", async () => {
+    const parcel={trackingNumber:"LTY-FEE",orderId:"001",customerName:"Customer",customerPhone:"0912345678",address:"Address",codAmount:36000,deliveryFee:4000,zone:null,township:"Kamayut",status:"PENDING_RETURN",note:"Return requested"};
+    const excluded=await generateDispatchManifestPdf({documentTitle:"Return to OS Handover",sections:[{riderName:"Return to OS",parcels:[{...parcel,paidToOsFeeIncluded:false}]}]});
+    const included=await generateDispatchManifestPdf({documentTitle:"Return to OS Handover",sections:[{riderName:"Return to OS",parcels:[{...parcel,paidToOsFeeIncluded:true}]}]});
+    const excludedText=extractPdfStrings(excluded).join(" ");
+    const includedText=extractPdfStrings(included).join(" ");
+    expect(excludedText).toContain("36,000");
+    expect(excludedText).not.toContain("40,000");
+    expect(includedText).toContain("40,000");
   });
 
   test("supports multi-rider sections as separate active rider sheets", async () => {

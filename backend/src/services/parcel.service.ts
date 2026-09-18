@@ -22,6 +22,11 @@ export const LINKED_MONEY_POSTED_SOURCE_TYPES = ["LINKED_RIDER_RECEIVABLE_RECOGN
 export function isAllowedTransition(fromStatus: string, toStatus: string) { return transitions[fromStatus]?.includes(toStatus) ?? false; }
 export function canOverrideStatus(role: string) { return ["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"].includes(role); }
 export function requiresOverrideNote(fromStatus: string, toStatus: string) { return !isAllowedTransition(fromStatus, toStatus); }
+export function requirePendingReturnReason(status: string, note?: string | null) {
+  if (status === "PENDING_RETURN" && (!note?.trim() || note.trim().length < 3)) {
+    throw new ApiError(400, "RETURN_REASON_REQUIRED", "A return reason of at least 3 characters is required");
+  }
+}
 export function calculateCommissionAmount(deliveryFee: number, rateBps: number) { return Math.round(deliveryFee * rateBps / 10000); }
 export function overrideLeavesMoneyBearingStatus(fromStatus: string, toStatus: string, isOverride: boolean) {
   return isOverride && (MONEY_BEARING_STATUSES as readonly string[]).includes(fromStatus) && fromStatus !== toStatus;
@@ -697,6 +702,7 @@ async function updateStatusInTransaction(
     throw new ApiError(409, "FAILED_DECISION_REQUIRED", "Use the failed-decision action to send a failed parcel to return to OS");
   }
   if (input.returnToOs && toStatus !== "REJECTED") throw new ApiError(400, "INVALID_RETURN_TO_OS", "returnToOs is only valid when recording a rejected/cancelled parcel");
+  requirePendingReturnReason(toStatus, note);
   if (input.returnToOs && !canOverrideStatus(scope.role)) throw new ApiError(403, "FORBIDDEN", "Only operations may send a cancelled parcel to return to OS");
   const allowedTransition = isAllowedTransition(parcel.status, toStatus);
   const overrideTransition = !allowedTransition && canOverrideStatus(scope.role);

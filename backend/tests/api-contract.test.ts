@@ -7,8 +7,8 @@ const testRoles = ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER","RID
 const token = (role = "FINANCE") => signAccessToken({ sub: `contract-${role.toLowerCase()}`, email: `${role.toLowerCase()}@contract.test`, role, tokenVersion:0 });
 
 describe("protected API contracts", () => {
-  beforeAll(async()=>{await prisma.hub.upsert({where:{id:"contract-hub"},update:{},create:{id:"contract-hub",name:"Contract Hub"}});for(const role of testRoles)await prisma.user.upsert({where:{id:`contract-${role.toLowerCase()}`},update:{active:true,role,tokenVersion:0},create:{id:`contract-${role.toLowerCase()}`,name:role,email:`${role.toLowerCase()}@contract.test`,username:`contract-${role.toLowerCase()}`,passwordHash:"test-only",role,hubId:role==="SUPERADMIN"?null:"contract-hub"}});});
-  afterAll(async()=>{await prisma.user.deleteMany({where:{id:{in:testRoles.map(role=>`contract-${role.toLowerCase()}`)}}});await prisma.hub.deleteMany({where:{id:"contract-hub"}});});
+  beforeAll(async()=>{await prisma.hub.upsert({where:{id:"contract-hub"},update:{},create:{id:"contract-hub",name:"Contract Hub"}});await prisma.onlineShop.upsert({where:{id:"shop-1"},update:{active:true},create:{id:"shop-1",name:"Contract Shop"}});for(const role of testRoles)await prisma.user.upsert({where:{id:`contract-${role.toLowerCase()}`},update:{active:true,role,tokenVersion:0},create:{id:`contract-${role.toLowerCase()}`,name:role,email:`${role.toLowerCase()}@contract.test`,username:`contract-${role.toLowerCase()}`,passwordHash:"test-only",role,hubId:role==="SUPERADMIN"?null:"contract-hub"}});});
+  afterAll(async()=>{await prisma.user.deleteMany({where:{id:{in:testRoles.map(role=>`contract-${role.toLowerCase()}`)}}});await prisma.onlineShop.delete({where:{id:"shop-1"}});await prisma.hub.deleteMany({where:{id:"contract-hub"}});});
   test("does not expose public registration", async () => {
     const response = await request(app).post("/api/v1/auth/register").send({ name: "New User", email: "new@example.com", password: "strong-password" });
     expect(response.status).toBe(401);
@@ -54,6 +54,7 @@ describe("protected API contracts", () => {
         batchName: "duplicate order import",
         advancePaid: 1000,
         fundingWallet: "CASH",
+        idempotencyKey: "wallet-split-contract",
       });
 
     expect(response.status).toBe(400);

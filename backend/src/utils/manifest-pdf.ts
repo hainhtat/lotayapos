@@ -13,6 +13,7 @@ export type ManifestParcel = {
   address: string;
   codAmount: number;
   deliveryFee?: number | null;
+  paidToOsFeeIncluded?: boolean;
   zone: string | null;
   township: string | null;
   batchLabel?: string;
@@ -45,12 +46,13 @@ export type ManifestInput = {
   footerLabel?: string;
 };
 
-/** A4 portrait — matches active rider sheet print size */
+/** Active rider sheets retain A4 portrait; return handovers use A4 landscape. */
 const PAGE_WIDTH = 595.28;
 const PAGE_HEIGHT = 841.89;
+const RETURN_PAGE_WIDTH = 841.89;
+const RETURN_PAGE_HEIGHT = 595.28;
 const MARGIN_X = 18;
 const MARGIN_BOTTOM = 28;
-const TABLE_RIGHT = PAGE_WIDTH - MARGIN_X;
 
 const BRAND = {
   blue: rgb(0.082, 0.596, 0.937),
@@ -66,22 +68,27 @@ const BRAND = {
   green: rgb(0.071, 0.651, 0.416),
 };
 
-/** Columns must end at or before TABLE_RIGHT (577.28). Status + Note for return notes. */
-const COLS = [
-  { key: "#", x: 18, w: 16 },
-  { key: "Order", x: 34, w: 40 },
-  { key: "Batch", x: 74, w: 52 },
-  { key: "Merchant", x: 126, w: 48 },
-  { key: "Customer", x: 174, w: 52 },
-  { key: "Phone", x: 226, w: 54 },
-  { key: "Township", x: 280, w: 48 },
-  { key: "Address", x: 328, w: 68 },
-  { key: "COD", x: 396, w: 36 },
-  { key: "Fee", x: 432, w: 28 },
-  { key: "Total", x: 460, w: 36 },
-  { key: "Status", x: 496, w: 28 },
-  { key: "Note", x: 524, w: 53 },
+/** Landscape widths give return handovers space to wrap customer/address/reason. */
+const RETURN_COL_DEFS = [
+  ["#", 18], ["Order", 50], ["Batch", 56], ["Merchant", 62], ["Customer", 80],
+  ["Phone", 56], ["Township", 65], ["Address", 128], ["COD", 47], ["Fee", 42],
+  ["Total", 48], ["Status", 44], ["Note", 105],
 ] as const;
+const PORTRAIT_COL_DEFS = [
+  ["#", 14], ["Order", 38], ["Batch", 42], ["Merchant", 42], ["Customer", 55],
+  ["Phone", 45], ["Township", 48], ["Address", 70], ["COD", 35], ["Fee", 30],
+  ["Total", 34], ["Status", 38], ["Note", 48],
+] as const;
+
+function columns(defs: ReadonlyArray<readonly [string, number]>) {
+  return defs.reduce<Array<{key:string;x:number;w:number}>>((cols,[key,w])=>{
+    const x=cols.length?cols[cols.length-1]!.x+cols[cols.length-1]!.w:MARGIN_X;
+    cols.push({key,x,w});
+    return cols;
+  },[]);
+}
+const RETURN_COLS = columns(RETURN_COL_DEFS);
+const PORTRAIT_COLS = columns(PORTRAIT_COL_DEFS);
 
 const MYANMAR_RE = /[\u1000-\u109F\uA9E0-\uA9FF\uAA60-\uAA7F]/;
 
@@ -124,8 +131,26 @@ export function fitManifestText(value: string, maxLength: number) {
   return parts.length > maxLength ? `${parts.slice(0, Math.max(1, maxLength - 3)).join("")}...` : normalized;
 }
 
-function afterGraphemes(value: string, count: number) {
-  return graphemes(value).slice(count).join("");
+function wrapManifestText(value: string, maxChars: number, maxLines = 4) {
+  const normalized=value.replace(/\s+/g," ").trim();
+  if(!normalized)return ["-"];
+  const words=normalized.split(" ");
+  const lines:string[]=[];
+  let line="";
+  for(const word of words){
+    const parts=graphemes(word);
+    while(parts.length>maxChars){
+      const head=parts.splice(0,maxChars).join("");
+      if(line){lines.push(line);line="";}
+      lines.push(head);
+    }
+    const remaining=parts.join("");
+    if(line&&graphemes(`${line} ${remaining}`).length>maxChars){lines.push(line);line=remaining;}
+    else line=line?`${line} ${remaining}`:remaining;
+  }
+  if(line)lines.push(line);
+  if(lines.length>maxLines){lines.length=maxLines;lines[maxLines-1]=fitManifestText(lines[maxLines-1]!,Math.max(1,maxChars-3));}
+  return lines;
 }
 
 function money(value: number) {
@@ -137,9 +162,9 @@ function statusLabel(status?: string) {
   return STATUS_SHORT[status] ?? status.slice(0, 3).toUpperCase();
 }
 
-function totalsFor(parcels: ManifestParcel[]) {
+function totalsFor(parcels: ManifestParcel[], returnHandover = false) {
   const totalCod = parcels.reduce((sum, parcel) => sum + parcel.codAmount, 0);
-  const totalFees = parcels.reduce((sum, parcel) => sum + (parcel.deliveryFee ?? 0), 0);
+  const totalFees = parcels.reduce((sum, parcel) => sum + (returnHandover ? (parcel.paidToOsFeeIncluded ? parcel.deliveryFee ?? 0 : 0) : parcel.deliveryFee ?? 0), 0);
   return { totalCod, totalFees, totalAmount: totalCod + totalFees, count: parcels.length };
 }
 
@@ -258,6 +283,12 @@ type PageContext = {
   pageIndex: number;
   continued: boolean;
   glyphPathCache: Map<number, string>;
+  pageWidth: number;
+  pageHeight: number;
+  cols: Array<{key:string;x:number;w:number}>;
+  tableRight: number;
+  marginBottom: number;
+  returnHandover: boolean;
 };
 
 function drawRect(ctx: PageContext, x: number, y: number, w: number, h: number, fill: RGB, stroke?: RGB) {
@@ -300,13 +331,13 @@ function drawText(
 
 function drawFooter(ctx: PageContext, footerLabel = "Lotaya Delivery - Active rider sheet") {
   drawText(ctx, footerLabel, MARGIN_X, 12, 7, false, BRAND.muted);
-  drawText(ctx, `Page ${ctx.pageIndex + 1}`, PAGE_WIDTH - 48, 12, 7, false, BRAND.muted);
+  drawText(ctx, `Page ${ctx.pageIndex + 1}`, ctx.pageWidth - 48, 12, 7, false, BRAND.muted);
 }
 
 function drawBrandBar(ctx: PageContext, label = "Active Rider Sheet") {
-  drawRect(ctx, 0, PAGE_HEIGHT - 22, PAGE_WIDTH, 22, BRAND.blue);
-  drawText(ctx, "LOTAYA", MARGIN_X, PAGE_HEIGHT - 15, 10, true, BRAND.white);
-  drawText(ctx, label, MARGIN_X + 58, PAGE_HEIGHT - 14, 8, false, BRAND.white);
+  drawRect(ctx, 0, ctx.pageHeight - 22, ctx.pageWidth, 22, BRAND.blue);
+  drawText(ctx, "LOTAYA", MARGIN_X, ctx.pageHeight - 15, 10, true, BRAND.white);
+  drawText(ctx, label, MARGIN_X + 58, ctx.pageHeight - 14, 8, false, BRAND.white);
 }
 
 function drawRiderSheetHeader(
@@ -320,7 +351,7 @@ function drawRiderSheetHeader(
   documentSubtitle = "All remaining assigned orders combined",
 ) {
   drawBrandBar(ctx, documentTitle === "Return to OS Handover" ? "Return Handover" : "Active Rider Sheet");
-  ctx.y = PAGE_HEIGHT - 40;
+  ctx.y = ctx.pageHeight - 40;
   const riderTitle = documentTitle === "All Active Deliveries";
   const title = ctx.continued
     ? `${documentTitle} - ${riderTitle ? "Rider: " : ""}${fitManifestText(section.riderName, 42)} (continued)`
@@ -338,7 +369,7 @@ function drawRiderSheetHeader(
   }
   ctx.y -= 16;
 
-  const cardW = (PAGE_WIDTH - MARGIN_X * 2 - 18) / 4;
+  const cardW = (ctx.pageWidth - MARGIN_X * 2 - 18) / 4;
   const cards = [
     { label: "Orders", value: String(totals.count), color: BRAND.blue },
     { label: "COD", value: money(totals.totalCod), color: BRAND.navy },
@@ -357,8 +388,8 @@ function drawRiderSheetHeader(
 
 function drawTableHeader(ctx: PageContext, noteLabel?: string) {
   const h = 18;
-  drawRect(ctx, MARGIN_X, ctx.y - h, TABLE_RIGHT - MARGIN_X, h, BRAND.softGray, BRAND.line);
-  COLS.forEach((col) => drawText(ctx, col.key === "Note" && noteLabel ? noteLabel : col.key, col.x + 2, ctx.y - 12, 6, true, BRAND.slate));
+  drawRect(ctx, MARGIN_X, ctx.y - h, ctx.tableRight - MARGIN_X, h, BRAND.softGray, BRAND.line);
+  ctx.cols.forEach((col) => drawText(ctx, col.key === "Note" && noteLabel ? noteLabel : col.key, col.x + 2, ctx.y - 12, 6, true, BRAND.slate));
   ctx.y -= h + 2;
 }
 
@@ -377,63 +408,50 @@ function startRiderPage(
   drawTableHeader(ctx, noteLabel);
 }
 
-function drawParcelRow(ctx: PageContext, parcel: ManifestParcel, index: number) {
-  const rowH = 26;
-  if (ctx.y - rowH < MARGIN_BOTTOM) return false;
-
-  if (index % 2 === 1) {
-    drawRect(ctx, MARGIN_X, ctx.y - rowH, TABLE_RIGHT - MARGIN_X, rowH, BRAND.zebra);
-  }
-  ctx.page.drawRectangle({
-    x: MARGIN_X,
-    y: ctx.y - rowH,
-    width: TABLE_RIGHT - MARGIN_X,
-    height: rowH,
-    borderColor: BRAND.line,
-    borderWidth: 0.4,
-  });
-
+function drawParcelRow(ctx: PageContext, parcel: ManifestParcel, index: number, returnHandover = false) {
   const fee = parcel.deliveryFee ?? 0;
-  const total = parcel.codAmount + fee;
+  const includedFee = returnHandover && !parcel.paidToOsFeeIncluded ? 0 : fee;
+  const total = parcel.codAmount + includedFee;
   const orderLabel = parcel.orderId?.trim() || parcel.trackingNumber;
   const address = parcel.address.replace(/\s+/g, " ").trim();
-  const y1 = ctx.y - 9;
-  const y2 = ctx.y - 19;
-  const statusCol = COLS[11];
-  const noteCol = COLS[12];
-  const noteText = parcel.note?.trim() || "";
+  const shopLines=wrapManifestText(parcel.shopName??"-",ctx.returnHandover?18:10,3);
+  const customerLines=wrapManifestText(parcel.customerName,ctx.returnHandover?22:11,4);
+  const addressLines=wrapManifestText(address,ctx.returnHandover?38:14,4);
+  const noteLines=wrapManifestText(parcel.note?.trim()||"",ctx.returnHandover?32:11,4);
+  const rowLines=Math.max(shopLines.length,customerLines.length,addressLines.length,noteLines.length,parcel.orderId?.trim()?2:1);
+  const rowH=Math.max(18,rowLines*8+6);
+  if (ctx.y - rowH < ctx.marginBottom) return false;
+  if (index % 2 === 1) drawRect(ctx, MARGIN_X, ctx.y - rowH, ctx.tableRight - MARGIN_X, rowH, BRAND.zebra);
+  ctx.page.drawRectangle({x:MARGIN_X,y:ctx.y-rowH,width:ctx.tableRight-MARGIN_X,height:rowH,borderColor:BRAND.line,borderWidth:0.4});
 
-  drawText(ctx, String(index + 1), COLS[0].x + 2, y1, 7, true, BRAND.slate);
-  drawText(ctx, fitManifestText(orderLabel, 8), COLS[1].x + 2, y1, 7, true, BRAND.navy);
+  const y1 = ctx.y - 10;
+  const cols=ctx.cols;
+  const statusCol = cols[11]!;
+  const noteCol = cols[12]!;
+
+  drawText(ctx, String(index + 1), cols[0]!.x + 2, y1, 7, true, BRAND.slate);
+  drawText(ctx, fitManifestText(orderLabel, 13), cols[1]!.x + 2, y1, 7, true, BRAND.navy);
   if (parcel.orderId?.trim()) {
-    drawText(ctx, fitManifestText(parcel.trackingNumber, 8), COLS[1].x + 2, y2, 5.5, false, BRAND.muted);
+    drawText(ctx, fitManifestText(parcel.trackingNumber, 15), cols[1]!.x + 2, y1-8, 5.5, false, BRAND.muted);
   }
-  drawText(ctx, fitManifestText(parcel.batchLabel ?? "-", 11), COLS[2].x + 2, y1, 6.5);
-  drawText(ctx, fitManifestText(parcel.shopName ?? "-", 10), COLS[3].x + 2, y1, 6.5);
-  drawText(ctx, fitManifestText(parcel.customerName, 11), COLS[4].x + 2, y1, 6.5, true);
-  drawText(ctx, fitManifestText(parcel.customerPhone ?? "-", 11), COLS[5].x + 2, y1, 6, false, BRAND.slate);
-  drawText(ctx, fitManifestText(parcel.township ?? parcel.zone ?? "-", 10), COLS[6].x + 2, y1, 6, false, BRAND.slate);
-  drawText(ctx, fitManifestText(address, 16), COLS[7].x + 2, y1, 6);
-  if (graphemes(address).length > 16) {
-    drawText(ctx, fitManifestText(afterGraphemes(address, 16), 16), COLS[7].x + 2, y2, 5.5, false, BRAND.muted);
-  }
-  drawText(ctx, fitManifestText(money(parcel.codAmount), 8), COLS[8].x + 1, y1, 6, true);
-  drawText(ctx, fitManifestText(money(fee), 7), COLS[9].x + 1, y1, 6, false, BRAND.slate);
-  drawText(ctx, fitManifestText(money(total), 8), COLS[10].x + 1, y1, 6.5, true, BRAND.accent);
-  drawText(ctx, fitManifestText(statusLabel(parcel.status), 5), statusCol.x + 1, y1, 6, true, BRAND.slate);
-  if (noteText) {
-    drawText(ctx, fitManifestText(noteText, 14), noteCol.x + 1, y1, 5.5, false, BRAND.muted);
-    if (graphemes(noteText).length > 14) {
-      drawText(ctx, fitManifestText(afterGraphemes(noteText, 14), 14), noteCol.x + 1, y2, 5, false, BRAND.muted);
-    }
-  }
+  drawText(ctx, fitManifestText(parcel.batchLabel ?? "-", 16), cols[2]!.x + 2, y1, 6.5);
+  shopLines.forEach((line,i)=>drawText(ctx,line,cols[3]!.x+2,y1-i*8,6.2));
+  customerLines.forEach((line,i)=>drawText(ctx,line,cols[4]!.x+2,y1-i*8,6.2,true));
+  drawText(ctx, fitManifestText(parcel.customerPhone ?? "-", 15), cols[5]!.x + 2, y1, 6, false, BRAND.slate);
+  drawText(ctx, fitManifestText(parcel.township ?? parcel.zone ?? "-", 17), cols[6]!.x + 2, y1, 6, false, BRAND.slate);
+  addressLines.forEach((line,i)=>drawText(ctx,line,cols[7]!.x+2,y1-i*8,6));
+  drawText(ctx, money(parcel.codAmount), cols[8]!.x + 1, y1, 6, true);
+  drawText(ctx, money(includedFee), cols[9]!.x + 1, y1, 6, false, BRAND.slate);
+  drawText(ctx, money(total), cols[10]!.x + 1, y1, 6.5, true, BRAND.accent);
+  drawText(ctx, statusLabel(parcel.status), statusCol.x + 1, y1, 6, true, BRAND.slate);
+  noteLines.forEach((line,i)=>drawText(ctx,line,noteCol.x+1,y1-i*8,6,false,BRAND.muted));
 
   ctx.y -= rowH;
   return true;
 }
 
 function drawSectionTotals(ctx: PageContext, totals: ReturnType<typeof totalsFor>) {
-  drawRect(ctx, MARGIN_X, ctx.y - 24, TABLE_RIGHT - MARGIN_X, 22, BRAND.blue);
+  drawRect(ctx, MARGIN_X, ctx.y - 24, ctx.tableRight - MARGIN_X, 22, BRAND.blue);
   drawText(
     ctx,
     `Orders: ${totals.count}   COD: ${money(totals.totalCod)}   Fees: ${money(totals.totalFees)}   Total: ${money(totals.totalAmount)}`,
@@ -450,6 +468,14 @@ async function buildPdfDocument(input: ManifestInput) {
   const generatedAt = input.generatedAt ?? new Date();
   const statusesLabel = input.statusesLabel ?? "Assigned, Out for delivery, Picked up";
   const sections = normalizeSections(input);
+  const returnHandover = input.documentTitle === "Return to OS Handover";
+  const pageWidth = returnHandover ? RETURN_PAGE_WIDTH : PAGE_WIDTH;
+  const pageHeight = returnHandover ? RETURN_PAGE_HEIGHT : PAGE_HEIGHT;
+  const cols = returnHandover ? RETURN_COLS : PORTRAIT_COLS;
+  const pageContext = (page: ReturnType<PDFDocument["addPage"]>, pageIndex: number, continued: boolean): PageContext => ({
+    doc, page, fonts, y: pageHeight - 40, pageIndex, continued, glyphPathCache,
+    pageWidth, pageHeight, cols, tableRight: pageWidth - MARGIN_X, marginBottom: MARGIN_BOTTOM, returnHandover,
+  });
   const selectedRidersLabel = sections.map((section) => section.riderName).join(", ") || "-";
 
   const doc = await PDFDocument.create();
@@ -463,20 +489,20 @@ async function buildPdfDocument(input: ManifestInput) {
   const glyphPathCache = new Map<number, string>();
 
   if (!sections.length) {
-    const page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-    const ctx: PageContext = { doc, page, fonts, y: PAGE_HEIGHT - 40, pageIndex: 0, continued: false, glyphPathCache };
+    const page = doc.addPage([pageWidth, pageHeight]);
+    const ctx = pageContext(page, 0, false);
     drawBrandBar(ctx);
-    drawText(ctx, "All Active Deliveries", MARGIN_X, PAGE_HEIGHT - 40, 12, true);
-    drawText(ctx, "No riders selected.", MARGIN_X, PAGE_HEIGHT - 58, 9, false, BRAND.muted);
+    drawText(ctx, "All Active Deliveries", MARGIN_X, pageHeight - 40, 12, true);
+    drawText(ctx, "No riders selected.", MARGIN_X, pageHeight - 58, 9, false, BRAND.muted);
     drawFooter(ctx);
     return doc;
   }
 
   let pageIndex = 0;
   for (const section of sections) {
-    const totals = totalsFor(section.parcels);
-    let page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-    let ctx: PageContext = { doc, page, fonts, y: PAGE_HEIGHT - 40, pageIndex, continued: false, glyphPathCache };
+    const totals = totalsFor(section.parcels, input.documentTitle === "Return to OS Handover");
+    let page = doc.addPage([pageWidth, pageHeight]);
+    let ctx = pageContext(page, pageIndex, false);
     startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel, input.documentTitle, input.noteLabel, input.documentSubtitle);
 
     if (!section.parcels.length) {
@@ -485,22 +511,23 @@ async function buildPdfDocument(input: ManifestInput) {
     }
 
     for (const [index, parcel] of section.parcels.entries()) {
-      const drawn = drawParcelRow(ctx, parcel, index);
+      const isReturnHandover=input.documentTitle === "Return to OS Handover";
+      const drawn = drawParcelRow(ctx, parcel, index, isReturnHandover);
       if (!drawn) {
         drawFooter(ctx, input.footerLabel);
         pageIndex += 1;
-        page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-        ctx = { doc, page, fonts, y: PAGE_HEIGHT - 40, pageIndex, continued: true, glyphPathCache };
+        page = doc.addPage([pageWidth, pageHeight]);
+        ctx = pageContext(page, pageIndex, true);
         startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel, input.documentTitle, input.noteLabel, input.documentSubtitle);
-        drawParcelRow(ctx, parcel, index);
+        drawParcelRow(ctx, parcel, index, isReturnHandover);
       }
     }
 
-    if (ctx.y - 28 < MARGIN_BOTTOM) {
+    if (ctx.y - 28 < ctx.marginBottom) {
       drawFooter(ctx, input.footerLabel);
       pageIndex += 1;
-      page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-      ctx = { doc, page, fonts, y: PAGE_HEIGHT - 40, pageIndex, continued: true, glyphPathCache };
+      page = doc.addPage([pageWidth, pageHeight]);
+      ctx = pageContext(page, pageIndex, true);
       startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel, input.documentTitle, input.noteLabel, input.documentSubtitle);
     }
     drawSectionTotals(ctx, totals);

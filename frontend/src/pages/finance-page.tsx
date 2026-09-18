@@ -10,6 +10,7 @@ import { ledgerAccounts, type LedgerSummary } from "@/lib/ledger";
 import { CashbookExpenses } from "./cashbook-expenses";
 import { SettlementWorkspaces } from "./settlement-workspaces";
 import { useAuth } from "@/app/auth";
+import { hubBusinessDate } from "@/lib/business-date";
 
 type Batch = {
   id: string;
@@ -39,7 +40,7 @@ function WalletAdjustmentDialog({ wallet, currentBalance, hubs, onClose, onSaved
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [actual, setActual] = useState(String(Math.max(0, currentBalance)));
-  const [businessDate, setBusinessDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [businessDate, setBusinessDate] = useState(() => hubBusinessDate());
   const [hubId, setHubId] = useState(hubs.length === 1 ? hubs[0].id : "");
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");

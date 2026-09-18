@@ -158,6 +158,22 @@ describe("FinancePage",()=>{
     expect(within(row).getByText("-2,400 MMK")).toBeInTheDocument();
   });
 
+  it("shows selected business-date receipt channels beside cumulative outstanding balance", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if(path.startsWith("/finance/rider-outstanding?"))return Promise.resolve({data:[{rider:{id:"rider-1",name:"Aung Rider"},parcelCount:2,cod:50000,fees:4000,commission:2000,salaryDeduction:0,expectedAmount:52000,recognizedAmount:200000,declaredAmount:null,paidAmount:150000,outstandingAmount:50000,settlementStatus:"POSTED",receipts:[{lines:[{wallet:"CASH",amount:100000},{wallet:"KBZ_PAY",amount:50000},{wallet:"WAVE_PAY",amount:0}]}]}]});
+      if(path==="/operations/batches"||path==="/finance/expense-categories"||path.startsWith("/finance/expenses?")||path==="/master-data/shops"||path.startsWith("/finance/os-settlement"))return Promise.resolve({data:[]});
+      return Promise.resolve({data:ledgerReport});
+    });
+    renderPage("/finance?tab=settlements#rider-outstanding");
+    const row=(await screen.findByText("Aung Rider")).closest("tr")!;
+    expect(screen.getByText("Expected today")).toBeInTheDocument();
+    expect(screen.getByText("Received today · Total")).toBeInTheDocument();
+    expect(within(row).getByText("100,000 MMK")).toBeInTheDocument();
+    expect(screen.getByText("Outstanding balance")).toBeInTheDocument();
+    expect(within(row).getByText("52,000 MMK")).toBeInTheDocument();
+    expect(within(row).queryByText("200,000 MMK")).not.toBeInTheDocument();
+  });
+
   it("shows rider outstanding and records an auditable manual payment", async () => {
     apiMock.mockImplementation((path: string, init?: RequestInit) => {
       if (path === "/operations/batches") return Promise.resolve({ data: [] });
@@ -206,7 +222,7 @@ describe("FinancePage",()=>{
     });
   });
 
-  it("keeps partial rider receivables payable and shows accumulated wallet receipts", async () => {
+  it("keeps partial rider receivables payable and shows date wallet receipts", async () => {
     apiMock.mockImplementation((path: string) => {
       if (path.startsWith("/finance/rider-outstanding?")) return Promise.resolve({ data: [{
         rider: { id: "rider-1", name: "Aung Rider" }, parcelCount: 3, cod: 30000, fees: 6000,
@@ -218,14 +234,15 @@ describe("FinancePage",()=>{
       return Promise.resolve({ data: ledgerReport });
     });
     renderPage("/finance?tab=settlements&businessDate=2026-08-12#rider-outstanding");
-    expect(await screen.findByText("Received: Cash 4,000 MMK · KBZ 6,000 MMK · Wave 0 MMK")).toBeInTheDocument();
-    expect(screen.getByText("1 receipt(s) posted")).toBeInTheDocument();
+    const row=(await screen.findByText("Aung Rider")).closest("tr")!;
+    expect(within(row).getByText("4,000 MMK")).toBeInTheDocument();
+    expect(within(row).getAllByText("6,000 MMK").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Record another payment" })).toBeEnabled();
     expect(within(screen.getByText("Rider outstanding payments").closest("section")!).getByLabelText("Business date")).toHaveValue("2026-08-12");
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/finance/rider-outstanding?businessDate=2026-08-12"));
   });
 
-  it("uses the cumulative recognized receivable as the expected total", async () => {
+  it("uses selected business-date expected receivable and keeps cumulative unpaid balance separate", async () => {
     apiMock.mockImplementation((path: string) => {
       if (path.startsWith("/finance/rider-outstanding?")) return Promise.resolve({ data: [{
         rider: { id: "rider-1", name: "Aung Rider" }, parcelCount: 1, cod: 52000, fees: 4000,
@@ -240,8 +257,8 @@ describe("FinancePage",()=>{
     renderPage();
     await user.click(screen.getByRole("tab", { name: "OS & riders" }));
     const rider = await screen.findByText("Aung Rider");
-    expect(rider.closest("tr")).toHaveTextContent("54,000 MMK");
-    expect(rider.closest("tr")).toHaveTextContent("Received: Cash 10,000 MMK");
+    expect(rider.closest("tr")).toHaveTextContent("56,000 MMK");
+    expect(rider.closest("tr")).toHaveTextContent("10,000 MMK");
     expect(rider.closest("tr")).toHaveTextContent("44,000 MMK");
   });
 

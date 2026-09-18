@@ -166,6 +166,7 @@ describe("Finance OS pending-return recovery", () => {
         codAmount: 50000,
         advanceAmount: 8000,
         deliveryFee: 1000,
+        paidToOsFeeIncluded: true,
         status: "DELIVERED",
       },
     });

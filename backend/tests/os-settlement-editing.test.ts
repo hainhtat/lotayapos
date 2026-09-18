@@ -20,7 +20,7 @@ describe("auditable OS settlement editing", () => {
     await prisma.onlineShop.create({ data: { id: shopId, name: `OSE Shop ${suffix}` } });
     await prisma.batch.create({ data: { id: batchId, shopId, hubId, pickupDate: new Date("2026-08-01T00:00:00Z"), label: "Posted edit", advancePaid: 2_000 } });
     await prisma.batch.create({ data: { id: draftBatchId, shopId, hubId, pickupDate: new Date("2026-08-02T00:00:00Z"), label: "Draft edit", advancePaid: 5_000 } });
-    await prisma.parcel.create({ data: { batchId: draftBatchId, trackingNumber: `OSE-${suffix}`, customerName: "Customer", address: "Address", codAmount: 20_000, advanceAmount: 5_000, deliveryFee: 2_000, status: "DELIVERED" } });
+    await prisma.parcel.create({ data: { batchId: draftBatchId, trackingNumber: `OSE-${suffix}`, customerName: "Customer", address: "Address", codAmount: 20_000, advanceAmount: 5_000, deliveryFee: 2_000, paidToOsFeeIncluded: true, status: "DELIVERED" } });
     await prisma.journalEntry.create({ data: {
       id: originalJournalId, sourceType: "OS_SETTLEMENT", sourceId: originalId, hubId,
       businessDate: new Date("2026-08-10T00:00:00Z"), description: "Original OS statement",

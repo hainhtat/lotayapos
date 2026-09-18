@@ -166,7 +166,7 @@ async function assertFinanceActor(actor: FinanceActor) {
 
 async function assertReturnHandoverActor(actor: FinanceActor) {
   const user = await prisma.user.findUnique({ where: { id: actor.id }, select: { role: true, active: true, hubId: true } });
-  if (!user || !user.active || user.role !== actor.role || ![...financeRoles, "DISPATCHER"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Active return-handover scope required");
+  if (!user || !user.active || user.role !== actor.role || !financeRoles.includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Active finance scope required");
   return user;
 }
 
@@ -455,6 +455,7 @@ export async function listOsSettlementDrafts(
   const batches = await prisma.batch.findMany({
     where: {
       ...(input.shopId ? { shopId: input.shopId } : {}),
+      settlementLinks: { none: { settlement: { status: "POSTED" } } },
       ...(user.role === "SUPERADMIN"
         ? {}
         : { hubId: user.hubId ?? "__none__" }),
@@ -469,6 +470,7 @@ export async function listOsSettlementDrafts(
           codAmount: true,
           actualCodCollected: true,
           deliveryFee: true,
+          paidToOsFeeIncluded: true,
           advanceAmount: true,
         },
       },
@@ -560,7 +562,7 @@ type OsSettlementInput = {
   idempotencyKey: string;
 };
 
-function osBatchComponents(
+export function osBatchComponents(
   batch: {
     advancePaid: number;
     parcels: Array<{
@@ -569,6 +571,7 @@ function osBatchComponents(
       codAmount: number;
       actualCodCollected: number | null;
       deliveryFee: number | null;
+      paidToOsFeeIncluded?: boolean;
       advanceAmount: number;
     }>;
   },
@@ -583,9 +586,7 @@ function osBatchComponents(
     return sum;
   }, 0);
   const deliveryFees = batch.parcels.reduce((sum, parcel) => {
-    if (["DELIVERED", "PARTIAL"].includes(parcel.status)) return sum + (parcel.deliveryFee ?? 0);
-    if (parcel.status === "RETURNED" && parcel.actualCodCollected != null) return sum + (parcel.deliveryFee ?? 0);
-    return sum;
+    return parcel.paidToOsFeeIncluded ? sum + (parcel.deliveryFee ?? 0) : sum;
   }, 0);
   const returnedAdvance = batch.parcels.reduce((sum, parcel) => sum + settlementReturnedAdvanceContribution(
     parcel,
@@ -636,7 +637,7 @@ export async function previewOsSettlement(input: { shopId: string; hubId?: strin
   const hubId = await resolveFinanceHub(actor, input.hubId);
   const batchIds = [...new Set(input.batchIds)];
   if (!batchIds.length) throw new ApiError(400, "BATCH_REQUIRED", "Select at least one batch");
-  const batches = await prisma.batch.findMany({ where: { id: { in: batchIds } }, include: { shop: true, parcels: { select: { id: true, status: true, codAmount: true, actualCodCollected: true, deliveryFee: true, advanceAmount: true } }, settlementLinks: { where: { settlement: { status: "POSTED" } }, select: { id: true } } } });
+  const batches = await prisma.batch.findMany({ where: { id: { in: batchIds } }, include: { shop: true, parcels: { select: { id: true, status: true, codAmount: true, actualCodCollected: true, deliveryFee: true, paidToOsFeeIncluded: true, advanceAmount: true } }, settlementLinks: { where: { settlement: { status: "POSTED" } }, select: { id: true } } } });
   if (batches.length !== batchIds.length) throw new ApiError(404, "BATCH_NOT_FOUND", "One or more batches were not found");
   if (batches.some((batch) => batch.shopId !== input.shopId || batch.hubId !== hubId)) throw new ApiError(403, "SETTLEMENT_SCOPE_MISMATCH", "All batches must belong to the selected shop and hub");
   if (batches.some((batch) => batch.settlementLinks.length > 0)) throw new ApiError(409, "BATCH_ALREADY_SETTLED", "One or more batches are already in a posted settlement");
@@ -730,7 +731,7 @@ export async function postOsSettlement(input: OsSettlementInput, actor: FinanceA
     if (activeLinks.length) throw new ApiError(409, "BATCH_ALREADY_SETTLED", "One or more batches were settled while this statement was open");
     const liveBatches = await tx.batch.findMany({
       where: { id: { in: batchIds } },
-      include: { parcels: { select: { id: true, status: true, codAmount: true, actualCodCollected: true, deliveryFee: true, advanceAmount: true } } },
+      include: { parcels: { select: { id: true, status: true, codAmount: true, actualCodCollected: true, deliveryFee: true, paidToOsFeeIncluded: true, advanceAmount: true } } },
     });
     const liveCredits = await sumUnreversedCreditsToOsAdvanceReceivableByParcel(
       tx,

@@ -91,6 +91,26 @@ describe("ReportsPage", () => {
     expect(await screen.findByText("WALLET_CASH")).toBeInTheDocument();
   });
 
+  it("keeps all rider receipt wallets visible when there are no receipts", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/master-data/dashboard") return Promise.resolve({ data: { totalParcels: 0, delivered: 0, pendingReturn: 0, cashCollected: 0, grossProfit: 0 } });
+      if (path === "/master-data") return Promise.resolve({ data: { hubs: [], riders: [] } });
+      if (path.startsWith("/finance/rider-outstanding?")) return Promise.resolve({ data: [] });
+      if (path.startsWith("/reports/profit?")) return Promise.resolve({ data: { period: {}, components: { deliveryFeeRevenue: 0, riderCommissionCost: 0, riderSalaryCost: 0, riderCompensationCost: 0, returns: { advanceRecovery: 0, includedInProfit: false }, adjustments: { contribution: 0 }, expenses: { cost: 0 } }, grossProfit: 0, netProfit: 0, journalEntries: [] } });
+      if (path === "/operations/parcels/manifest/preview") return Promise.resolve({ data: { sections: [], summary: {}, parcelCount: 0, riderCount: 0 } });
+      return Promise.resolve({ data: { accounts: [], entries: [], totalDebit: 0, totalCredit: 0, difference: 0, balanced: true } });
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReportsPage /></QueryClientProvider>);
+
+    const section = await screen.findByText("Rider receipts today");
+    const receiptSection = section.closest("section")!;
+    expect(within(receiptSection).getByText("Cash")).toBeInTheDocument();
+    expect(within(receiptSection).getByText("KBZ Pay")).toBeInTheDocument();
+    expect(within(receiptSection).getByText("Wave Pay")).toBeInTheDocument();
+    expect(within(receiptSection).getAllByText("0 MMK")).toHaveLength(3);
+  });
+
   it("shows a transparent profit breakdown and journal drilldown", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><ReportsPage /></QueryClientProvider>);

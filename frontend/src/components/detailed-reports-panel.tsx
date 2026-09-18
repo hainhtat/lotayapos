@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/app/auth";
 import { api, apiRaw } from "@/lib/api";
+import { hubBusinessDate } from "@/lib/business-date";
 
 type ReportKey = "monthly-operations" | "returns" | "rider-performance" | "os-statements";
 type Masters = { hubs?: Array<{id:string;name:string}>; shops?: Array<{id:string;name:string}>; riders?: Array<{id:string;user:{name:string}}> };
@@ -17,7 +18,7 @@ type OsStatements = { source?:"OS_ACCOUNT"|"LEGACY_SETTLEMENT"; totals:{records:
 const tabs:ReportKey[]=["monthly-operations","returns","rider-performance","os-statements"];
 const csvReports=new Set<ReportKey>(["returns","rider-performance","os-statements"]);
 const control="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#1598ef] dark:border-white/10 dark:bg-[#121416]";
-const today=()=>new Date().toISOString().slice(0,10);
+const today=hubBusinessDate;
 const money=(value:number)=>`${value.toLocaleString()} MMK`;
 
 export function DetailedReportsPanel(){

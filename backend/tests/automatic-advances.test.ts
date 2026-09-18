@@ -25,6 +25,9 @@ describe("automatic batch advance recording", () => {
   });
   afterAll(async () => {
     const batchIds = (await prisma.batch.findMany({ where: { shopId }, select: { id: true } })).map(row => row.id);
+    await prisma.osAdvanceCreditAllocation.deleteMany({ where: { batchId: { in: batchIds } } });
+    await prisma.osCreditAllocation.deleteMany({ where: { credit: { shopId } } });
+    await prisma.osReturnCredit.deleteMany({ where: { shopId } });
     await prisma.parcelFieldAudit.deleteMany({ where: { parcel: { batchId: { in: batchIds } } } });
     await prisma.parcel.deleteMany({ where: { batchId: { in: batchIds } } });
     await prisma.osBatchObligation.deleteMany({ where: { batchId: { in: batchIds } } });
@@ -62,14 +65,48 @@ describe("automatic batch advance recording", () => {
     expect((await prisma.osBatchObligation.findUniqueOrThrow({ where: { batchId: batch.id } })).originalCod).toBe(2400000);
   });
   test("rejects unauthorized or invalid money before creating any batch", async () => {
-    await expect(createBatch({ ...input(), pickupDate: "2037-01-02" }, dispatcher)).rejects.toMatchObject({ code: "FORBIDDEN" });
-    await expect(createBatch({ ...input(), wallets: { cash: 1, kbzPay: 0, wavePay: 0 } }, admin)).rejects.toMatchObject({ code: "INVALID_WALLET_SPLIT" });
+    await expect(createBatch({ ...input(), pickupDate: "2037-01-02", idempotencyKey: `unauthorized-${suffix}` }, dispatcher)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(createBatch({ ...input(), wallets: { cash: 1, kbzPay: 0, wavePay: 0 }, idempotencyKey: `invalid-wallet-${suffix}` }, admin)).rejects.toMatchObject({ code: "INVALID_WALLET_SPLIT" });
     expect(await prisma.batch.count({ where: { shopId } })).toBe(1);
   });
   test("allows an Operations Manager to create a split-wallet advance", async () => {
     const batch = await createBatch({ ...input(), pickupDate: "2037-01-05", idempotencyKey: `operations-${suffix}` }, operationsManager);
     expect(batch.advancePaid).toBe(1_000_000);
     expect(await prisma.journalEntry.count({ where: { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: batch.id } })).toBe(1);
+  });
+  test("automatically applies available OS credit before posting the wallet split", async () => {
+    const sourceBatch = await prisma.batch.create({ data: {
+      shopId, hubId, pickupDate: new Date("2037-01-31T00:00:00.000Z"), label: "Credit source", advancePaid: 100_000,
+      automaticAccounting: true, finalizedAt: new Date("2037-01-31T00:00:00.000Z"),
+    } });
+    await prisma.osBatchObligation.create({ data: { batchId: sourceBatch.id, shopId, hubId, originalCod: 100_000 } });
+    const advanceJournal = await prisma.journalEntry.create({ data: {
+      sourceType: "BATCH_PICKUP_ADVANCE", sourceId: sourceBatch.id, hubId, businessDate: sourceBatch.pickupDate, description: "Credit fixture advance",
+      lines: { create: [{ account: "OS_COD_PAYABLE", debit: 100_000, credit: 0 }, { account: "WALLET_CASH", debit: 0, credit: 100_000 }] },
+    } });
+    const returnJournal = await prisma.journalEntry.create({ data: {
+      sourceType: "OS_PHYSICAL_RETURN_CREDIT", sourceId: `credit-fixture-${suffix}`, hubId, businessDate: sourceBatch.pickupDate, description: "Credit fixture return",
+      lines: { create: [{ account: "OS_COD_PAYABLE", debit: 100_000, credit: 0 }, { account: "OS_BATCH_COD_CLEARING", debit: 0, credit: 100_000 }] },
+    } });
+    await prisma.osReturnCredit.create({ data: {
+      parcelId: `credit-fixture-parcel-${suffix}`, batchId: sourceBatch.id, shopId, hubId, amount: 100_000, codAmount: 100_000, feeAmount: 0,
+      kind: "PHYSICAL_RETURN", businessDate: sourceBatch.pickupDate, idempotencyKey: `credit-fixture-${suffix}`, postedBy: admin.id, journalEntryId: returnJournal.id,
+    } });
+    expect((await prisma.journalEntry.findUniqueOrThrow({ where: { id: advanceJournal.id }, include: { lines: true } })).lines).toHaveLength(2);
+
+    const fullyCovered = await createBatch({
+      ...input(), pickupDate: "2037-02-01", advancePaid: 80_000, wallets: { cash: 0, kbzPay: 0, wavePay: 0 }, idempotencyKey: `credit-full-${suffix}`,
+    }, operationsManager);
+    expect(fullyCovered).toMatchObject({ advancePaid: 0, walletAdvance: 0, osCreditApplied: 80_000 });
+    expect(await prisma.osAdvanceCreditAllocation.findMany({ where: { batchId: fullyCovered.id }, select: { amount: true } })).toEqual([{ amount: 80_000 }]);
+    expect(await prisma.journalEntry.count({ where: { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: fullyCovered.id } })).toBe(0);
+
+    const partiallyCovered = await createBatch({
+      ...input(), pickupDate: "2037-02-02", advancePaid: 80_000, wallets: { cash: 20_000, kbzPay: 20_000, wavePay: 20_000 }, idempotencyKey: `credit-partial-${suffix}`,
+    }, operationsManager);
+    expect(partiallyCovered).toMatchObject({ advancePaid: 60_000, walletAdvance: 60_000, osCreditApplied: 20_000 });
+    const posted = await prisma.journalEntry.findUniqueOrThrow({ where: { sourceType_sourceId: { sourceType: "BATCH_PICKUP_ADVANCE", sourceId: partiallyCovered.id } }, include: { lines: true } });
+    expect(posted.lines.filter(line => line.account.startsWith("WALLET_")).reduce((sum, line) => sum + line.credit, 0)).toBe(60_000);
   });
   test("zero advance permits operations recording without wallet mutation", async () => {
     const batch = await createBatch({ shopId, pickupDate: "2037-01-03", batchName: "Unpaid pickup", advancePaid: 0 }, dispatcher);

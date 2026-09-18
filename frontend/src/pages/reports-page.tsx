@@ -6,6 +6,7 @@ import { useAuth } from "@/app/auth";
 import { DeliveryStatusPanel, type ManifestPreviewData } from "@/components/delivery-status-panel";
 import { DetailedReportsPanel } from "@/components/detailed-reports-panel";
 import { api, apiRaw } from "@/lib/api";
+import { hubBusinessDate } from "@/lib/business-date";
 import { resolveManifestPdfFilename } from "@/lib/content-disposition";
 import { ledgerAccounts, type LedgerReport } from "@/lib/ledger";
 import {
@@ -18,6 +19,7 @@ import {
 } from "@/lib/manifest-filters";
 
 type Overview = { totalParcels: number; delivered: number; pendingReturn: number; cashCollected: number; grossProfit: number };
+type DailyRiderReceivable = { receipts?: Array<{lines?:Array<{wallet:string;amount:number}>}>; settlements?:Array<{lines?:Array<{wallet:string;amount:number}>}>; settlement?:{lines?:Array<{wallet:string;amount:number}>}|null };
 type MasterData = {
   hubs?: Array<{ id: string; name: string }>;
   riders: Array<{ id: string; user: { name: string }; hub?: { name: string } | null }>;
@@ -54,7 +56,7 @@ type ProfitReport = {
   }>;
 };
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => hubBusinessDate();
 const money = (value: number) => `${value.toLocaleString()} MMK`;
 
 const control = "rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#1598ef] dark:border-white/10 dark:bg-[#121416]";
@@ -75,6 +77,8 @@ export function ReportsPage() {
   const [profitFilters, setProfitFilters] = useState(profitDraft);
   const qs = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString();
   const overview = useQuery({ queryKey: ["report-overview"], queryFn: () => api<Overview>("/master-data/dashboard").then((r) => r.data) });
+  const canViewRiderReceipts=["SUPERADMIN","FINANCE","OPERATIONS_MANAGER"].includes(user?.role??"");
+  const riderReceipts=useQuery({queryKey:["report-rider-receipts",today()],queryFn:()=>api<DailyRiderReceivable[]>(`/finance/rider-outstanding?businessDate=${today()}`).then(r=>r.data),enabled:canViewRiderReceipts});
   const ledger = useQuery({
     queryKey: ["report-ledger", qs],
     queryFn: () => api<LedgerReport>(`/finance/ledger${qs ? `?${qs}` : ""}`).then((r) => ledgerAccounts(r.data)),
@@ -124,6 +128,7 @@ export function ReportsPage() {
     { key: "pendingReturn", value: overview.data?.pendingReturn ?? 0, icon: RotateCcw },
     { key: "cashCollected", value: `${(overview.data?.cashCollected ?? 0).toLocaleString()} MMK`, icon: Wallet },
   ];
+  const dailyWallets=(Array.isArray(riderReceipts.data)?riderReceipts.data:[]).reduce((totals,row)=>{const receipts=row.receipts??row.settlements??(row.settlement?[row.settlement]:[]);for(const receipt of receipts)for(const line of receipt.lines??[]){if(line.wallet==="CASH")totals.cash+=line.amount;else if(line.wallet==="KBZ_PAY")totals.kbzPay+=line.amount;else if(line.wallet==="WAVE_PAY")totals.wavePay+=line.amount;}return totals;},{cash:0,kbzPay:0,wavePay:0});
   const riders = masters.data?.riders ?? [];
   const statusLabel = (key: ManifestStatusKey) => t(manifestStatusLabelKey(key));
   const dateLabel = (key: ManifestDatePreset) => (key === "all" ? t("allDates") : key === "custom" ? t("customRange") : t(key));
@@ -149,6 +154,8 @@ export function ReportsPage() {
           ))}
         </div>
       )}
+
+      {canViewRiderReceipts&&<section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#181a1d]"><h2 className="font-display text-base font-bold">{t("riderReceiptsToday")}</h2><dl className="mt-3 grid gap-3 sm:grid-cols-3">{(["cash","kbzPay","wavePay"] as const).map(wallet=><div key={wallet} className="rounded-xl bg-slate-50 p-3 dark:bg-white/5"><dt className="text-xs font-semibold text-slate-500">{t(wallet)}</dt><dd className="mt-1 font-bold">{(dailyWallets[wallet]??0).toLocaleString()} MMK</dd></div>)}</dl></section>}
 
       {canViewProfit && (
         <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d]">

@@ -98,7 +98,7 @@ export const decideFailed: RequestHandler = async (req, res) => res.json({ succe
 export const previewReturnHandover: RequestHandler = async (req, res) => {
   const result = await service.buildReturnToOsHandover(req.body, actor(req));
   const parcels = result.sections[0]!.parcels;
-  res.json({ success: true, data: { parcels, parcelCount: result.parcelCount, totalCod: parcels.reduce((sum, parcel) => sum + parcel.codAmount, 0), totalFees: parcels.reduce((sum, parcel) => sum + (parcel.deliveryFee ?? 0), 0), generatedAt: new Date().toISOString() } });
+  res.json({ success: true, data: { parcels, parcelCount: result.parcelCount, totalCod: parcels.reduce((sum, parcel) => sum + parcel.codAmount, 0), totalFees: parcels.reduce((sum, parcel) => sum + (parcel.paidToOsFeeIncluded ? parcel.deliveryFee ?? 0 : 0), 0), generatedAt: new Date().toISOString() } });
 };
 export const downloadReturnHandover: RequestHandler = async (req, res) => {
   const result = await service.buildReturnToOsHandover(req.body, actor(req));

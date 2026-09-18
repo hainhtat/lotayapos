@@ -189,7 +189,7 @@ export function OperationsPage() {
   const [correctingRider, setCorrectingRider] = useState<Parcel | null>(null);
   const [correctRiderId, setCorrectRiderId] = useState("");
   const [correctReason, setCorrectReason] = useState("");
-  const [reasonPrompt, setReasonPrompt] = useState<{ parcel: Parcel; status: "FAILED" | "REJECTED" } | null>(null);
+  const [reasonPrompt, setReasonPrompt] = useState<{ parcel: Parcel; status: "FAILED" | "REJECTED" | "PENDING_RETURN" } | null>(null);
   const [rejectAsCancelled, setRejectAsCancelled] = useState(false);
   const [actualCod, setActualCod] = useState("");
   const [collectionWallet, setCollectionWallet] = useState("");
@@ -393,7 +393,7 @@ export function OperationsPage() {
   });
 
   const decideFailed = useMutation({
-    mutationFn: (input: { parcel: Parcel; action: "RETRY_TOMORROW" | "RESCHEDULE" | "RETURN_TO_OS"; plannedDeliveryDate?: string }) => api(`/operations/parcels/${input.parcel.id}/failed-decision`, { method: "POST", body: JSON.stringify({ action: input.action, ...(input.plannedDeliveryDate ? { plannedDeliveryDate: input.plannedDeliveryDate } : {}), reason: failedDecisionReason.trim() }) }),
+    mutationFn: (input: { parcel: Parcel; action: "RETRY_TOMORROW" | "RESCHEDULE" | "RETURN_TO_OS"; plannedDeliveryDate?: string; reason?:string }) => api(`/operations/parcels/${input.parcel.id}/failed-decision`, { method: "POST", body: JSON.stringify({ action: input.action, ...(input.plannedDeliveryDate ? { plannedDeliveryDate: input.plannedDeliveryDate } : {}), reason: input.reason?.trim()??failedDecisionReason.trim() }) }),
     onSuccess: async () => { setFailedDecision(null); setFailedDecisionReason(""); setMessage(t("statusUpdated")); await invalidateParcels(); },
     onError: (error) => setMessage(error instanceof Error ? error.message : t("loadError")),
   });
@@ -723,7 +723,7 @@ export function OperationsPage() {
       setDeliveryChoice(parcel);
       return;
     }
-    if (nextStatus === "FAILED" || nextStatus === "REJECTED") {
+    if (nextStatus === "FAILED" || nextStatus === "REJECTED" || nextStatus === "PENDING_RETURN") {
       setReasonPrompt({ parcel, status: nextStatus });
       setRejectAsCancelled(false);
       setReasonCode("");
@@ -1745,6 +1745,15 @@ export function OperationsPage() {
           <form
             onSubmit={(e) => {
               e.preventDefault();
+              if (reasonPrompt.status === "PENDING_RETURN") {
+                if (!reasonNote.trim()) return;
+                if(reasonPrompt.parcel.status==="FAILED"){
+                  decideFailed.mutate({parcel:reasonPrompt.parcel,action:"RETURN_TO_OS",reason:reasonNote});
+                  return;
+                }
+                updateStatus.mutate({ parcelId: reasonPrompt.parcel.id, status: reasonPrompt.status, reasonCode: "RETURN_TO_OS", note: reasonNote.trim() });
+                return;
+              }
               if (!reasonCode) return;
               const noteNeeded = reasonList.find((r) => r.code === reasonCode)?.noteRequired;
               if (noteNeeded && !reasonNote.trim()) return;
@@ -1759,10 +1768,10 @@ export function OperationsPage() {
             className="relative my-6 max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-xl dark:bg-[#181a1d]"
           >
             <div className="sticky top-0 z-10 -mx-6 -mt-6 flex justify-between bg-white px-6 pt-6 dark:bg-[#181a1d]"><h2 id="reason-prompt-title" className="font-display text-xl font-bold">
-              {t("reasonCode")} · {reasonPrompt.status.replaceAll("_", " ")}
+              {reasonPrompt.status === "PENDING_RETURN" ? t("returnReason") : t("reasonCode")} · {reasonPrompt.status.replaceAll("_", " ")}
             </h2><button type="button" aria-label={t("close")} onClick={() => setReasonPrompt(null)} className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10"><X size={18}/></button></div>
             <p className="mt-2 text-sm text-slate-500">{reasonPrompt.parcel.trackingNumber}</p>
-            <label className="mt-5 block text-sm font-bold">
+            {reasonPrompt.status === "PENDING_RETURN" ? <label className="mt-5 block text-sm font-bold">{t("returnReason")}<textarea aria-label={t("returnReason")} required minLength={3} maxLength={500} value={reasonNote} onChange={event=>setReasonNote(event.target.value)} className={`${control} mt-2 min-h-28 w-full whitespace-normal`}/></label> : <label className="mt-5 block text-sm font-bold">
               {t("reasonCode")}
               <select
                 aria-label={t("reasonCode")}
@@ -1778,8 +1787,8 @@ export function OperationsPage() {
                   </option>
                 ))}
               </select>
-            </label>
-            {reasonList.find((r) => r.code === reasonCode)?.noteRequired && (
+            </label>}
+            {reasonPrompt.status !== "PENDING_RETURN" && reasonList.find((r) => r.code === reasonCode)?.noteRequired && (
               <label className="mt-4 block text-sm font-bold">
                 {t("reasonNote")}
                 <textarea
@@ -1807,9 +1816,8 @@ export function OperationsPage() {
               <button
                 type="submit"
                 disabled={
-                  updateStatus.isPending ||
-                  !reasonCode ||
-                  (Boolean(reasonList.find((r) => r.code === reasonCode)?.noteRequired) && !reasonNote.trim())
+                  updateStatus.isPending || decideFailed.isPending ||
+                  (reasonPrompt.status === "PENDING_RETURN" ? reasonNote.trim().length < 3 : !reasonCode || (Boolean(reasonList.find((r) => r.code === reasonCode)?.noteRequired) && !reasonNote.trim()))
                 }
                 className="rounded-lg bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
               >
