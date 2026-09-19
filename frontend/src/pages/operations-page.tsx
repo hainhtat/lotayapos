@@ -693,6 +693,8 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
       return;
     }
     if (nextStatus === "DELIVERED") {
+      updateStatus.reset();
+      savePaidToOs.reset();
       setDeliveryChoice(parcel);
       return;
     }
@@ -1685,9 +1687,10 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
             <button type="button" aria-label={t("close")} onClick={() => setDeliveryChoice(null)} className="absolute right-4 top-4 rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10"><X size={18}/></button>
             <h2 id="delivery-choice-title" className="font-display text-xl font-bold">{t("recordDelivered")}</h2>
             <p className="mt-2 text-sm text-slate-500">{t("recordDeliveredHelp")}</p>
+            {updateStatus.isError && <p role="alert" className="mt-4 rounded-xl bg-rose-50 p-3 text-sm font-semibold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200">{updateStatus.error instanceof Error ? updateStatus.error.message : t("loadError")}</p>}
             <div className="mt-5 grid gap-3">
               <button type="button" onClick={() => updateStatus.mutate({ parcelId: deliveryChoice.id, status: "DELIVERED", collectionMode: "CASH_RECEIPT_EXCEPTION", note: OPS_CORRECTION_NOTE })} disabled={updateStatus.isPending} className="rounded-xl border border-[#1598ef] p-4 text-left hover:bg-sky-50 disabled:opacity-50 dark:hover:bg-sky-950/30"><span className="block font-bold text-[#0787df]">{t("deliveredRiderCollected")}</span><span className="mt-1 block text-sm text-slate-500">{t("deliveredRiderCollectedHelp")}</span></button>
-              <button type="button" onClick={() => { setDeliveryChoice(null); setPaidToOs(deliveryChoice); setIncludeDeliveryFee(false); }} className="rounded-xl border border-slate-200 p-4 text-left hover:bg-slate-50 dark:border-white/10 dark:hover:bg-white/5"><span className="block font-bold">{t("deliveredPaidToOs")}</span><span className="mt-1 block text-sm text-slate-500">{t("deliveredPaidToOsHelp")}</span></button>
+              <button type="button" onClick={() => { savePaidToOs.reset(); setDeliveryChoice(null); setPaidToOs(deliveryChoice); setIncludeDeliveryFee(false); }} className="rounded-xl border border-slate-200 p-4 text-left hover:bg-slate-50 dark:border-white/10 dark:hover:bg-white/5"><span className="block font-bold">{t("deliveredPaidToOs")}</span><span className="mt-1 block text-sm text-slate-500">{t("deliveredPaidToOsHelp")}</span></button>
             </div>
             <div className="mt-6 flex justify-end"><button type="button" onClick={() => setDeliveryChoice(null)} className={control}>{t("cancel")}</button></div>
           </div>
@@ -1715,6 +1718,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
             <button type="button" aria-label={t("close")} onClick={() => setBulkPaidToOs(false)} className="absolute right-4 top-4 rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10"><X size={18}/></button>
             <h2 id="bulk-paid-to-os-title" className="font-display text-xl font-bold">{t("deliveredPaidToOs")}</h2>
             <p className="mt-2 text-sm text-slate-500">{t("deliveredPaidToOsHelp")}</p>
+            {applyStatusBulk.isError && <p role="alert" className="mt-4 rounded-xl bg-rose-50 p-3 text-sm font-semibold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200">{applyStatusBulk.error instanceof Error ? applyStatusBulk.error.message : t("loadError")}</p>}
             <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 p-4 text-sm dark:border-white/10"><input aria-label={t("includeFullDeliveryFee")} type="checkbox" checked={includeDeliveryFee} onChange={(event) => setIncludeDeliveryFee(event.target.checked)} className="mt-0.5 h-4 w-4"/><span><span className="block font-bold">{t("includeFullDeliveryFee")}</span></span></label>
             <div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setBulkPaidToOs(false)} className={control}>{t("cancel")}</button><button type="submit" disabled={applyStatusBulk.isPending} className="rounded-lg bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{applyStatusBulk.isPending ? t("loading") : t("confirmDeliveredPaidToOs")}</button></div>
           </form>
@@ -1731,6 +1735,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
             className="relative my-6 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-[#181a1d]"
           >
             <div className="flex items-start justify-between gap-4"><div><h2 id="paid-to-os-title" className="font-display text-xl font-bold">{t("deliveredPaidToOs")}</h2><p className="mt-2 text-sm text-slate-500">{t("deliveredPaidToOsHelp")}</p></div><button type="button" aria-label={t("close")} onClick={() => setPaidToOs(null)} className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10"><X size={18}/></button></div>
+            {savePaidToOs.isError && <p role="alert" className="mt-4 rounded-xl bg-rose-50 p-3 text-sm font-semibold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200">{savePaidToOs.error instanceof Error ? savePaidToOs.error.message : t("loadError")}</p>}
             <div className="mt-5 rounded-xl bg-sky-50 p-4 text-sm dark:bg-sky-950/50"><p className="font-bold">{paidToOs.trackingNumber}</p><p className="mt-1 text-slate-600 dark:text-slate-300">{t("cod")}: {money(paidToOs.codAmount)} MMK</p><p className="mt-1 text-slate-600 dark:text-slate-300">{t("fee")}: {money(paidToOs.deliveryFee ?? 0)} MMK</p></div>
             <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 p-4 text-sm dark:border-white/10"><input aria-label={t("includeFullDeliveryFee")} type="checkbox" checked={includeDeliveryFee} onChange={(event) => setIncludeDeliveryFee(event.target.checked)} className="mt-0.5 h-4 w-4"/><span><span className="block font-bold">{t("includeFullDeliveryFee")}</span><span className="mt-1 block text-slate-500">{t("includeFullDeliveryFeeHelp", { amount: money(paidToOs.deliveryFee ?? 0) })}</span></span></label>
             <p className="mt-4 text-sm text-emerald-700 dark:text-emerald-400">{t("osCreditWillBe", { amount: money(paidToOs.codAmount + (includeDeliveryFee ? paidToOs.deliveryFee ?? 0 : 0)) })}</p>

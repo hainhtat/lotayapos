@@ -170,6 +170,27 @@ describe("OperationsPage", () => {
     })));
   });
 
+  it("shows an operations-manager delivery error inside the open modal and allows closing it", async () => {
+    const parcel = { id: "parcel-error", trackingNumber: "TRK-ERROR", customerName: "Customer", address: "Address", status: "OUT_FOR_DELIVERY", codAmount: 25000, deliveryFee: 3000, batch: { label: "Batch", shop: { name: "Shop" } }, rider: { id: "rider-1", user: { name: "Rider" } } };
+    mockParcelList([parcel]);
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/master-data") return Promise.resolve({ data: { shops: [], riders: [{ id: "rider-1", user: { name: "Rider" } }] } });
+      if (path === "/operations/batches" || path === "/master-data/reason-codes") return Promise.resolve({ data: [] });
+      if (path === "/parcels/parcel-error/status") return Promise.reject(new Error("Cashbook day is already closed"));
+      return Promise.resolve({ data: {} });
+    });
+    renderPage();
+    await screen.findByText("TRK-ERROR");
+    fireEvent.change(screen.getByLabelText("Status TRK-ERROR"), { target: { value: "DELIVERED" } });
+    const dialog = screen.getByRole("dialog", { name: "Record delivery" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Rider collected from customer/ }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Cashbook day is already closed");
+    expect(within(dialog).getByRole("button", { name: /Rider collected from customer/ })).toBeEnabled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog", { name: "Record delivery" })).not.toBeInTheDocument();
+  });
+
   it("sends an ops correction note when changing status without an exception dialog", async () => {
     const parcel = {
       id: "parcel-1",
