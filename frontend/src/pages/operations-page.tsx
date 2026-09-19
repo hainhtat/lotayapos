@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Link2, Pencil, RefreshCw, Search, UserPlus, UserRoundPen, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@/app/auth";
 import { DeliveryStatusPanel, type ManifestPreviewData } from "@/components/delivery-status-panel";
+import { ManifestStatusSelect } from "@/components/manifest-status-select";
 import { ApiError, api, apiRaw } from "@/lib/api";
 import { resolveManifestPdfFilename } from "@/lib/content-disposition";
 import { isDateChangeReason } from "@/lib/exception-reasons";
@@ -14,10 +16,9 @@ import { ParcelFieldHistory } from "@/components/parcel-field-history";
 import {
   buildManifestBody,
   MANIFEST_DATE_PRESETS,
-  MANIFEST_STATUS_FILTERS,
-  manifestStatusLabelKey,
+  TO_DELIVER_STATUSES,
   type ManifestDatePreset,
-  type ManifestStatusKey,
+  type ManifestStatus,
 } from "@/lib/manifest-filters";
 import { dispatchFiltersFromSearch, dispatchFiltersToSearch, emptyDispatchFilters, type DispatchFilters as Filters } from "@/lib/dispatch-filters";
 
@@ -136,7 +137,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
   const [bulkOverrideNote, setBulkOverrideNote] = useState("");
   const [manifestOpen, setManifestOpen] = useState(false);
   const [manifestRiderIds, setManifestRiderIds] = useState<string[]>([]);
-  const [manifestStatus, setManifestStatus] = useState<ManifestStatusKey>("toDeliver");
+  const [manifestStatuses, setManifestStatuses] = useState<ManifestStatus[]>([...TO_DELIVER_STATUSES]);
   const [manifestDatePreset, setManifestDatePreset] = useState<ManifestDatePreset>("all");
   const [manifestDateFrom, setManifestDateFrom] = useState("");
   const [manifestDateTo, setManifestDateTo] = useState("");
@@ -372,12 +373,12 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
     () =>
       buildManifestBody({
         riderIds: manifestRiderIds,
-        status: manifestStatus,
+        statuses: manifestStatuses,
         datePreset: manifestDatePreset,
         dateFrom: manifestDateFrom,
         dateTo: manifestDateTo,
       }),
-    [manifestRiderIds, manifestStatus, manifestDatePreset, manifestDateFrom, manifestDateTo],
+    [manifestRiderIds, manifestStatuses, manifestDatePreset, manifestDateFrom, manifestDateTo],
   );
   const manifestPreview = useQuery({
     queryKey: ["manifest-preview", manifestBody],
@@ -654,7 +655,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
       ...new Set(visible.filter((parcel) => parcel.rider?.id).map((parcel) => parcel.rider!.id!)),
     ];
     setManifestRiderIds(assignedRiderIds.length ? assignedRiderIds : []);
-    setManifestStatus("toDeliver");
+    setManifestStatuses([...TO_DELIVER_STATUSES]);
     setManifestDatePreset("today");
     setManifestDateFrom("");
     setManifestDateTo("");
@@ -1249,9 +1250,10 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
         )}
       </section>
 
-      {manifestOpen && (
-        <div role="dialog" aria-modal="true" aria-labelledby="manifest-title" className="fixed inset-0 z-20 grid place-items-center overflow-y-auto bg-black/40 p-4">
-          <div className="relative my-6 max-h-[calc(100dvh-2rem)] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl dark:bg-[#181a1d]">
+      {manifestOpen && createPortal(
+        <div className="fixed inset-0 z-[100] overflow-y-auto bg-black/55 p-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="manifest-title" className="relative mx-auto flex max-h-[calc(100dvh-2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#181a1d]">
+            <div className="min-h-0 flex-1 overflow-y-auto p-6">
             <div className="sticky top-0 z-10 -mx-6 -mt-6 flex justify-between bg-white px-6 pt-6 dark:bg-[#181a1d]"><h2 id="manifest-title" className="font-display text-xl font-bold">
               {t("downloadManifest")}
             </h2><button type="button" aria-label={t("close")} onClick={() => setManifestOpen(false)} className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10"><X size={18}/></button></div>
@@ -1280,16 +1282,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
                 </label>
               </div>
             )}
-            <label className="mt-4 block text-xs font-bold text-slate-500">
-              {t("status")}
-              <select aria-label={t("status")} value={manifestStatus} onChange={(e) => setManifestStatus(e.target.value as ManifestStatusKey)} className={`${control} mt-1 w-full max-w-sm`}>
-                {MANIFEST_STATUS_FILTERS.map((key) => (
-                  <option key={key} value={key}>
-                    {t(manifestStatusLabelKey(key))}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="mt-4"><ManifestStatusSelect id="manifest-statuses" value={manifestStatuses} onChange={setManifestStatuses} /></div>
             <div className="mt-4 flex flex-wrap gap-2">
               <button
                 type="button"
@@ -1338,8 +1331,10 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
                 {downloadManifest.isPending ? t("loading") : t("downloadPdf")}
               </button>
             </div>
+            </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {editing && (

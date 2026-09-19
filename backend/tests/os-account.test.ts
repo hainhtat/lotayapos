@@ -53,6 +53,7 @@ describe("simplified OS account", () => {
     await prisma.osAccountPayment.deleteMany({ where: { id: { in: payments.map(p => p.id) } } });
     await prisma.journalLine.deleteMany({ where: { entryId: { in: journalIds } } });
     await prisma.journalEntry.deleteMany({ where: { id: { in: journalIds } } });
+    await prisma.cashbookDay.deleteMany({ where: { hubId } });
     await prisma.osBatchObligation.deleteMany({ where: { batchId: { in: [oldBatch, newBatch] } } });
     await prisma.batch.deleteMany({ where: { id: { in: [oldBatch, newBatch] } } });
     await prisma.user.delete({ where: { id: userId } }); await prisma.onlineShop.delete({ where: { id: shopId } }); await prisma.hub.delete({ where: { id: hubId } });

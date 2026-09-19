@@ -39,33 +39,37 @@ Domain modules may depend on shared authorization, dates, ledger posting, and ca
 
 ```text
 backend/src/services/finance/
-  authorization.ts
   rider-settlements.ts
-  rider-outstanding.ts
   os-settlements.ts
+  os-settlement-drafts.ts
+  os-settlement-components.ts
   os-returns.ts
   expenses.ts
   cashbook-postings.ts
   cashbook-close.ts
-  ledger-summary.ts
-  settlement-calculations.ts
+  cashbook-policy.ts
+  cashbook-rules.ts
 backend/src/validators/finance/
   rider-settlements.ts
   os-settlements.ts
+  os-settlement-routes.ts
+  os-accounts.ts
+  os-returns.ts
+  ledger.ts
   cashbook.ts
   expenses.ts
 ```
 
 ### Migration slices
 
-1. **Shared seams** — settlement calculations and finance authorization/hub scope. Status: complete, pending relocation into the final folder structure.
-2. **OS settlement lifecycle** — move preview, drafts, posting, listing, amendment, reversal, and their private helpers as one cohesive module. Do not separate pure helpers from the command flow merely to reduce line count.
-3. **OS returns** — move pending-return queries, individual/bulk receipt, replay/idempotency logic, and return journal integration.
-4. **Rider accounting** — move outstanding aggregation, preview/declaration/posting, salary/commission application, receipt history, and mismatch rules.
-5. **Cashbook** — split posting commands from close/approve/reopen workflow; expenses own their categories, queries, and posting command.
-6. **Ledger summary** — isolate the aggregate read model.
-7. **Validation and callers** — move validators; update controllers and other services to import the owning modules directly.
-8. **Remove the monolith** — delete `finance.service.ts`. A short-lived re-export barrel is allowed during slices 2–7, but contains no implementation and is deleted before Phase 1 closes.
+1. **Shared seams** — complete: settlement calculations, finance authorization/hub scope, cashbook-open policy, and wallet validation have dedicated owners.
+2. **OS settlement lifecycle** — complete: preview/post/list/amend/reverse and saved-draft editing are separated into cohesive modules with shared component rules.
+3. **OS returns** — complete: pending-return queries, individual/bulk receipt, replay/idempotency logic, and return journals live in `os-returns.ts`.
+4. **Rider accounting** — complete: outstanding aggregation, preview/declaration/posting, salary/commission application, receipt history, and mismatch rules live in `rider-settlements.ts`.
+5. **Cashbook** — complete: posting commands, close/approve/reopen, shared policy/rules, and expenses have distinct owners.
+6. **Ledger summary** — complete: HTTP ledger reports continue to use the established `ledger.service.ts` owner; the unused duplicate extracted module was removed.
+7. **Validation and callers** — complete: Finance validators are grouped by feature, and controllers/services import owning modules directly.
+8. **Remove the monolith** — complete: `finance.service.ts` and all production/test imports were removed without a compatibility barrel.
 
 ### Finance acceptance gates
 

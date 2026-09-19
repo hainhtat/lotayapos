@@ -14,7 +14,8 @@ export const ALL_MANIFEST_STATUSES = [
   "RETURNED",
 ] as const;
 
-export type ManifestStatusKey = "toDeliver" | "all" | (typeof ALL_MANIFEST_STATUSES)[number];
+export type ManifestStatus = (typeof ALL_MANIFEST_STATUSES)[number];
+export type ManifestStatusKey = "toDeliver" | "all" | ManifestStatus;
 export type ManifestDatePreset = "all" | DatePreset | "custom";
 
 export const MANIFEST_STATUS_FILTERS: ManifestStatusKey[] = [
@@ -55,7 +56,8 @@ export function manifestDateRange(preset: ManifestDatePreset, from: string, to: 
 
 export function buildManifestBody(input: {
   riderIds: string[];
-  status: ManifestStatusKey;
+  statuses?: readonly ManifestStatus[];
+  status?: ManifestStatusKey;
   datePreset: ManifestDatePreset;
   dateFrom: string;
   dateTo: string;
@@ -63,7 +65,7 @@ export function buildManifestBody(input: {
 }) {
   return {
     ...(input.riderIds.length ? { riderIds: input.riderIds } : {}),
-    statuses: manifestStatusList(input.status),
+    statuses: input.statuses?.length ? [...new Set(input.statuses)] : manifestStatusList(input.status ?? "toDeliver"),
     ...manifestDateRange(input.datePreset, input.dateFrom, input.dateTo, input.now),
   };
 }

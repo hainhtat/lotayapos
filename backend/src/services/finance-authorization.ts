@@ -33,8 +33,8 @@ export async function assertFinanceReadActor(actor: FinanceActor) {
 }
 
 async function resolveHubFromUser(user: { role: string; hubId: string | null }, requestedHubId?: string) {
-  if (user.role === "SUPERADMIN") {
-    if (!requestedHubId) throw new ApiError(400, "HUB_REQUIRED", "Superadmin must select a hub");
+  if (user.role === "SUPERADMIN" || (user.role === "AUDITOR" && !user.hubId)) {
+    if (!requestedHubId) throw new ApiError(400, "HUB_REQUIRED", "Select a hub");
     const hub = await prisma.hub.findUnique({ where: { id: requestedHubId }, select: { id: true } });
     if (!hub) throw new ApiError(404, "HUB_NOT_FOUND", "Hub not found");
     return hub.id;

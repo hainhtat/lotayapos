@@ -697,7 +697,9 @@ describe("OperationsPage", () => {
     });
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Download manifest" }));
-    expect(await screen.findByRole("dialog", { name: "Download manifest" })).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Download manifest" });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
     await waitFor(() => {
       const call = apiMock.mock.calls.find(([path]) => path === "/operations/parcels/manifest/preview");
       expect(call?.[1]).toEqual(expect.objectContaining({ method: "POST" }));

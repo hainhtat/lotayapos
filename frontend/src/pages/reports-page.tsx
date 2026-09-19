@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@/app/auth";
 import { DeliveryStatusPanel, type ManifestPreviewData } from "@/components/delivery-status-panel";
+import { ManifestStatusSelect } from "@/components/manifest-status-select";
 import { DetailedReportsPanel } from "@/components/detailed-reports-panel";
 import { ProfitCompositionChart } from "@/components/profit-composition-chart";
 import { api, apiRaw } from "@/lib/api";
@@ -14,10 +15,9 @@ import { ledgerAccounts, type LedgerReport } from "@/lib/ledger";
 import {
   buildManifestBody,
   MANIFEST_DATE_PRESETS,
-  MANIFEST_STATUS_FILTERS,
-  manifestStatusLabelKey,
+  ALL_MANIFEST_STATUSES,
   type ManifestDatePreset,
-  type ManifestStatusKey,
+  type ManifestStatus,
 } from "@/lib/manifest-filters";
 
 type Overview = { totalParcels: number; delivered: number; pendingReturn: number; cashCollected: number; grossProfit: number };
@@ -76,7 +76,7 @@ export function ReportsPage() {
   const [draft, setDraft] = useState({ from: "", to: "", account: "" });
   const [filters, setFilters] = useState(draft);
   const [riderIds, setRiderIds] = useState<string[]>([]);
-  const [status, setStatus] = useState<ManifestStatusKey>("all");
+  const [statuses, setStatuses] = useState<ManifestStatus[]>([...ALL_MANIFEST_STATUSES]);
   const [datePreset, setDatePreset] = useState<ManifestDatePreset>("today");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -114,8 +114,8 @@ export function ReportsPage() {
     enabled: canViewProfit && Boolean(profitFilters.from && profitFilters.to) && (user?.role !== "SUPERADMIN" || Boolean(profitFilters.hubId)),
   });
   const manifestBody = useMemo(
-    () => buildManifestBody({ riderIds, status, datePreset, dateFrom, dateTo }),
-    [riderIds, status, datePreset, dateFrom, dateTo],
+    () => buildManifestBody({ riderIds, statuses, datePreset, dateFrom, dateTo }),
+    [riderIds, statuses, datePreset, dateFrom, dateTo],
   );
   const delivery = useQuery({
     queryKey: ["delivery-status", manifestBody],
@@ -148,7 +148,6 @@ export function ReportsPage() {
   ];
   const dailyWallets=(Array.isArray(riderReceipts.data)?riderReceipts.data:[]).reduce((totals,row)=>{const receipts=row.receipts??row.settlements??(row.settlement?[row.settlement]:[]);for(const receipt of receipts)for(const line of receipt.lines??[]){if(line.wallet==="CASH")totals.cash+=line.amount;else if(line.wallet==="KBZ_PAY")totals.kbzPay+=line.amount;else if(line.wallet==="WAVE_PAY")totals.wavePay+=line.amount;}return totals;},{cash:0,kbzPay:0,wavePay:0});
   const riders = masters.data?.riders ?? [];
-  const statusLabel = (key: ManifestStatusKey) => t(manifestStatusLabelKey(key));
   const dateLabel = (key: ManifestDatePreset) => (key === "all" ? t("allDates") : key === "custom" ? t("customRange") : t(key));
 
   return (
@@ -319,17 +318,8 @@ export function ReportsPage() {
             </label>
           </div>
         )}
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <label className="text-xs font-bold text-slate-500">
-            {t("status")}
-            <select aria-label={t("status")} value={status} onChange={(e) => setStatus(e.target.value as ManifestStatusKey)} className={`${control} mt-1 w-full`}>
-              {MANIFEST_STATUS_FILTERS.map((key) => (
-                <option key={key} value={key}>
-                  {statusLabel(key)}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div className="mt-4 grid gap-3">
+          <ManifestStatusSelect id="report-statuses" value={statuses} onChange={setStatuses} />
           <label className="text-xs font-bold text-slate-500">
             {t("rider")}
             <select

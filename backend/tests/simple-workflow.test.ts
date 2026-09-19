@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "../src/config/database.js";
 import { rescheduleParcels } from "../src/services/parcel.service.js";
 import { bulkAssignParcels, getBatchDetail, listBatches } from "../src/services/operations.service.js";
-import { receiveOsReturnsBulk } from "../src/services/finance.service.js";
+import { receiveOsReturnsBulk } from "../src/services/finance/os-returns.js";
 
 describe("simple dispatch and physical OS handover", () => {
   const suffix = randomUUID(), hubId = `flow-${suffix}`, shopId = `shop-${suffix}`, batchId = `batch-${suffix}`;
@@ -36,6 +36,7 @@ describe("simple dispatch and physical OS handover", () => {
     await prisma.rider.delete({ where: { id: riderId } });
     await prisma.user.deleteMany({ where: { id: { in: [actor.id, riderUserId] } } });
     await prisma.onlineShop.delete({ where: { id: shopId } });
+    await prisma.cashbookDay.deleteMany({ where: { hubId } });
     await prisma.hub.delete({ where: { id: hubId } });
   });
   const parcel = (status: string) => prisma.parcel.create({ data: { batchId, trackingNumber: randomUUID(), customerName: "Fixture", address: "Fixture", codAmount: 1000, status } });

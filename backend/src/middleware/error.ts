@@ -5,6 +5,8 @@ export const errorHandler: ErrorRequestHandler = (error,req,res,_next) => {
   const oversized = error?.type === "entity.too.large" || error?.status === 413;
   const err = error instanceof ApiError ? error : oversized
     ? new ApiError(413, "PAYLOAD_TOO_LARGE", "The upload is too large")
+    : error?.code === "P2034"
+    ? new ApiError(409, "RETRYABLE_CONFLICT", "The record changed concurrently; retry the request")
     : new ApiError(500,"INTERNAL_ERROR","An unexpected error occurred");
   res.status(err.status).json({ success:false, error:{ code:err.code, message:err.message, details:err.details, requestId:req.requestId } });
 };

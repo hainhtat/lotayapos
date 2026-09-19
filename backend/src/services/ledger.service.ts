@@ -2,7 +2,7 @@ import { prisma } from "../config/database.js";
 import { ApiError } from "../utils/api-error.js";
 import type { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
-import { assertCashbookOpen } from "./finance.service.js";
+import { assertCashbookOpen } from "./finance/cashbook-policy.js";
 import { resolveCommissionRateBps } from "../utils/commission.js";
 import { env } from "../config/env.js";
 import { businessDateUtcBoundary, nextCalendarDate } from "../utils/business-date.js";

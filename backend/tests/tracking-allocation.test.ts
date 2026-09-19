@@ -67,6 +67,7 @@ describe("bulk parcel tracking allocation", () => {
     await prisma.user.deleteMany({ where: { id: dispatcherId } });
     await prisma.onlineShop.deleteMany({ where: { id: shopId } });
     await prisma.cashbookDay.deleteMany({ where: { hubId } });
+    await prisma.cashbookDay.deleteMany({ where: { hubId } });
     await prisma.hub.deleteMany({ where: { id: hubId } });
   });
 

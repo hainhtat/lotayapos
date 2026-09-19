@@ -15,7 +15,7 @@ function run(args, environment = env) {
 try {
   run(["prisma", "migrate", "deploy"]);
   run(["prisma", "generate"]);
-  run(["jest", "--runInBand", "tests/ledger-summary.test.ts", "tests/os-account.test.ts", "tests/os-history.test.ts", "tests/tracking-allocation.test.ts", "tests/automatic-advances.test.ts", "tests/simple-workflow.test.ts", "--setupFilesAfterEnv", "./tests/postgres-teardown.ts"]);
+  run(["jest", "--runInBand", "tests/ledger-summary.test.ts", "tests/os-account.test.ts", "tests/os-history.test.ts", "tests/tracking-allocation.test.ts", "tests/automatic-advances.test.ts", "tests/simple-workflow.test.ts", "tests/cashbook-posting-workflow.test.ts", "--setupFilesAfterEnv", "./tests/postgres-teardown.ts"]);
 } finally {
   run(["prisma", "generate", "--schema", "prisma/schema.prisma"], { ...env, DATABASE_PROVIDER: "sqlite", DATABASE_URL: "file:./dev.db", DIRECT_DATABASE_URL: "" });
 }

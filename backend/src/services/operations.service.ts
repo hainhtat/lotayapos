@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { env } from "../config/env.js";
 import type { Prisma } from "@prisma/client";
 import { ApiError } from "../utils/api-error.js";
-import { assertCashbookOpen } from "./finance.service.js";
+import { assertCashbookOpen } from "./finance/cashbook-policy.js";
 import { buildRiderCommissionLines, buildRiderReceivableRecognitionLines, calculateCommissionAmount, journalEntryIsUnreversed, nextVersionedJournalSourceId } from "./parcel.service.js";
 import { accountRows, postedAdvanceByBatch, syncBatchObligation } from "./os-account.service.js";
 import { resolveCommissionRateBps } from "../utils/commission.js";
@@ -681,6 +681,8 @@ export type ManifestQuery = {
 
 export function summarizeManifestParcels(parcels: Array<{ status: string; codAmount: number; deliveryFee?: number | null }>) {
   const count = (status: string) => parcels.filter((parcel) => parcel.status === status).length;
+  const totalCod = parcels.reduce((sum, parcel) => sum + parcel.codAmount, 0);
+  const totalFees = parcels.reduce((sum, parcel) => sum + (parcel.deliveryFee ?? 0), 0);
   return {
     parcelCount: parcels.length,
     delivered: count("DELIVERED"),
@@ -689,8 +691,9 @@ export function summarizeManifestParcels(parcels: Array<{ status: string; codAmo
     rejected: count("REJECTED"),
     pendingReturn: count("PENDING_RETURN"),
     toDeliver: parcels.filter((parcel) => ["CREATED", "PICKED_UP", "ASSIGNED", "OUT_FOR_DELIVERY"].includes(parcel.status)).length,
-    totalCod: parcels.reduce((sum, parcel) => sum + parcel.codAmount, 0),
-    totalFees: parcels.reduce((sum, parcel) => sum + (parcel.deliveryFee ?? 0), 0),
+    totalCod,
+    totalFees,
+    totalAmount: totalCod + totalFees,
   };
 }
 

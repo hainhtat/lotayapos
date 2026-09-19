@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../config/database.js";
 import { ApiError } from "../utils/api-error.js";
-import { assertCashbookOpen } from "./finance.service.js";
+import { assertCashbookOpen } from "./finance/cashbook-policy.js";
 
 type Actor = { id: string; role: string };
 type Db = Prisma.TransactionClient | typeof prisma;

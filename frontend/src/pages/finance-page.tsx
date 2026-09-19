@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -45,6 +45,7 @@ function WalletAdjustmentDialog({ wallet, currentBalance, hubs, onClose, onSaved
   const [hubId, setHubId] = useState(hubs.length === 1 ? hubs[0].id : "");
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");
+  const idempotencyKey = useRef(crypto.randomUUID());
   const actualAmount = Number(actual);
   const difference = Number.isInteger(actualAmount) && actualAmount >= 0 ? actualAmount - currentBalance : null;
   const requiresHub = user?.role === "SUPERADMIN";
@@ -53,7 +54,7 @@ function WalletAdjustmentDialog({ wallet, currentBalance, hubs, onClose, onSaved
       if (difference === null || difference === 0) throw new Error(t("invalidAmount"));
       if (reason.trim().length < 3) throw new Error(t("walletAdjustmentReasonRequired"));
       if (requiresHub && !hubId) throw new Error(t("selectHubBeforeWalletAdjustment"));
-      return api("/finance/cashbook/adjustments", { method: "POST", body: JSON.stringify({ businessDate, ...(hubId ? { hubId } : {}), wallet, amount: Math.abs(difference), direction: difference > 0 ? "INCREASE" : "DECREASE", reason: reason.trim() }) });
+      return api("/finance/cashbook/adjustments", { method: "POST", body: JSON.stringify({ businessDate, ...(hubId ? { hubId } : {}), wallet, amount: Math.abs(difference), direction: difference > 0 ? "INCREASE" : "DECREASE", reason: reason.trim(), idempotencyKey: idempotencyKey.current }) });
     },
     onSuccess: async () => {
       await Promise.all(["ledger", "dashboard", "operations-batches"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));

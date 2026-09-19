@@ -9,7 +9,7 @@ import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { syncBatchObligation } from "./os-account.service.js";
 import { acquireBatchMutationLock } from "./operations.service.js";
-import { assertCashbookOpen } from "./finance.service.js";
+import { assertCashbookOpen } from "./finance/cashbook-policy.js";
 import { assertBalancedLines, buildPartialReturnAdjustmentLines, buildPartialReturnCollectionLines, calculateLinkedDeliveryAmounts, calculatePartialReturnAmounts, reverseJournalEntryInTx } from "./ledger.service.js";
 
 export { resolveCommissionRateBps };

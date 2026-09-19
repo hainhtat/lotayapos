@@ -49,4 +49,14 @@ describe("manifest filters", () => {
       }),
     ).toMatchObject({ dateFrom: "2026-08-01", dateTo: "2026-08-07" });
   });
+
+  it("sends the selected statuses once in their selected order", () => {
+    expect(buildManifestBody({
+      riderIds: [],
+      statuses: ["DELIVERED", "FAILED", "DELIVERED"],
+      datePreset: "all",
+      dateFrom: "",
+      dateTo: "",
+    })).toEqual({ statuses: ["DELIVERED", "FAILED"] });
+  });
 });

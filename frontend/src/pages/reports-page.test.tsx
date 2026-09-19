@@ -192,6 +192,21 @@ describe("ReportsPage", () => {
     });
   });
 
+  it("previews a report with multiple selected statuses and displays row and summary totals", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReportsPageUnderTest /></QueryClientProvider>);
+    fireEvent.change(screen.getByLabelText("Choose a report"), { target: { value: "delivery" } });
+    fireEvent.click(await screen.findByRole("button", { name: "To deliver" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Delivered" }));
+    await waitFor(() => {
+      const calls = apiMock.mock.calls.filter(([path]) => path === "/operations/parcels/manifest/preview");
+      const body = JSON.parse(String(calls.at(-1)?.[1]?.body ?? "{}")) as { statuses?: string[] };
+      expect(body.statuses).toEqual(["ASSIGNED", "OUT_FOR_DELIVERY", "PICKED_UP", "DELIVERED"]);
+    });
+    expect(await screen.findByText("26,500")).toBeInTheDocument();
+    expect(screen.getByText(/Rider fee: 1,500 MMK · Total: 26,500 MMK/)).toBeInTheDocument();
+  });
+
   it("retries daily delivery status after a preview failure", async () => {
     apiMock.mockImplementation((path: string) => {
       if (path === "/master-data/dashboard") {

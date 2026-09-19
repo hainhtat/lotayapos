@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "../config/database.js";
 import { env } from "../config/env.js";
 import { ApiError } from "../utils/api-error.js";
-import { summarizeRiderOutstandingThroughDate } from "./finance.service.js";
+import { summarizeRiderOutstandingThroughDate } from "./finance/rider-settlements.js";
 import { accountRows } from "./os-account.service.js";
 
 type Actor = { id: string; role: string };

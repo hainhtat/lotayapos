@@ -40,6 +40,7 @@ describe("automatic batch advance recording", () => {
     await prisma.user.deleteMany({ where: { id: { in: [admin.id, dispatcher.id, operationsManager.id] } } });
     await prisma.onlineShop.delete({ where: { id: shopId } });
     await prisma.cashbookDay.deleteMany({ where: { hubId } });
+    await prisma.cashbookDay.deleteMany({ where: { hubId } });
     await prisma.hub.delete({ where: { id: hubId } });
   });
   const input = () => ({ shopId, hubId, pickupDate: "2037-01-01", batchName: "Automatic advance", advancePaid: 1000000, wallets: { cash: 400000, kbzPay: 350000, wavePay: 250000 }, idempotencyKey: `auto-${suffix}` });

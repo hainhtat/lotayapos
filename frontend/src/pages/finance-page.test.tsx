@@ -68,7 +68,7 @@ describe("FinancePage",()=>{
     await user.click(within(dialog).getByRole("button", { name: "Record adjustment" }));
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/finance/cashbook/adjustments", expect.objectContaining({ method: "POST" })));
     const call = apiMock.mock.calls.find(([path]) => path === "/finance/cashbook/adjustments")!;
-    expect(JSON.parse(call[1].body)).toMatchObject({ hubId: "hub-1", wallet: "CASH", amount: 25000, direction: "INCREASE", reason: "Counted cash after pending returns" });
+    expect(JSON.parse(call[1].body)).toMatchObject({ hubId: "hub-1", wallet: "CASH", amount: 25000, direction: "INCREASE", reason: "Counted cash after pending returns", idempotencyKey: expect.any(String) });
   });
 
   it("hides posting actions when batch advances are already posted", async () => {

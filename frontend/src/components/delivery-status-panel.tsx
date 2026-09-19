@@ -34,6 +34,7 @@ export type ManifestPreviewSummary = {
   toDeliver: number;
   totalCod: number;
   totalFees: number;
+  totalAmount?: number;
 };
 
 export type ManifestPreviewData = {
@@ -88,7 +89,7 @@ export function DeliveryStatusPanel({
         ))}
       </div>
       <p className="text-sm text-slate-500">
-        {t("cod")}: {preview.summary.totalCod.toLocaleString()} MMK · {t("fee")}: {preview.summary.totalFees.toLocaleString()} MMK
+        {t("cod")}: {preview.summary.totalCod.toLocaleString()} MMK · {t("riderFee")}: {preview.summary.totalFees.toLocaleString()} MMK · {t("total")}: {(preview.summary.totalAmount ?? preview.summary.totalCod + preview.summary.totalFees).toLocaleString()} MMK
       </p>
       <div className="max-h-[28rem] overflow-auto rounded-xl border border-slate-200 dark:border-white/10">
         <table className="w-full min-w-[860px] text-left text-sm">
@@ -102,6 +103,7 @@ export function DeliveryStatusPanel({
               <th className="px-3 py-2">{t("status")}</th>
               <th className="px-3 py-2 text-right">{t("cod")}</th>
               <th className="px-3 py-2 text-right">{t("fee")}</th>
+              <th className="px-3 py-2 text-right">{t("total")}</th>
             </tr>
           </thead>
           <tbody>
@@ -116,6 +118,7 @@ export function DeliveryStatusPanel({
                   <td className="px-3 py-2">{t(manifestStatusLabelKey(parcel.status as ManifestStatusKey))}</td>
                   <td className="px-3 py-2 text-right">{parcel.codAmount.toLocaleString()}</td>
                   <td className="px-3 py-2 text-right">{(parcel.deliveryFee ?? 0).toLocaleString()}</td>
+                  <td className="px-3 py-2 text-right font-bold">{(parcel.codAmount + (parcel.deliveryFee ?? 0)).toLocaleString()}</td>
                 </tr>
               )),
             )}

@@ -1,4 +1,10 @@
-import { addWalletAmounts, assertCashbookOpen, buildCashbookAdjustmentLines, buildExpenseLines, buildOpeningBalanceLines, buildRiderSettlementReceivableLines, buildWalletTransferLines, calculateDailySalaryDeduction, calculateOsSettlementNet, calculateRecognitionTotals, calculateRiderSettlementAmounts, calculateRiderSettlementTotals, calculateWalletBalances, calculateWalletReconciliationVariance, combineRiderOutstandingAggregates, cumulativeReceiptPosition, isOsSettlementCodCovered, osBatchComponents, returnedAdvanceContribution, settlementWalletMismatch } from "../src/services/finance.service.js";
+import { assertCashbookOpen } from "../src/services/finance/cashbook-policy.js";
+import { buildCashbookAdjustmentLines, buildOpeningBalanceLines, buildWalletTransferLines } from "../src/services/finance/cashbook-postings.js";
+import { calculateWalletBalances, calculateWalletReconciliationVariance } from "../src/services/finance/cashbook-close.js";
+import { calculateOsSettlementNet, isOsSettlementCodCovered, osBatchComponents, returnedAdvanceContribution } from "../src/services/finance/os-settlements.js";
+import { addWalletAmounts, combineRiderOutstandingAggregates, cumulativeReceiptPosition, settlementWalletMismatch } from "../src/services/finance/rider-settlements.js";
+import { buildRiderSettlementReceivableLines, calculateDailySalaryDeduction, calculateRecognitionTotals, calculateRiderSettlementAmounts, calculateRiderSettlementTotals } from "../src/services/rider-settlement-calculations.js";
+import { buildExpenseLines } from "../src/services/finance/expenses.js";
 import { buildRiderReceivableRecognitionLines } from "../src/services/parcel.service.js";
 import { ApiError } from "../src/utils/api-error.js";
 import { batchMutationLockMode, buildManifestFilenameSuffix, buildPickupAdvanceJournalLines, bulkAssignParcels, calculateReturnExtension, hubCalendarDaysAfter, isAssignmentEligible, manifestStatusesLabel, pickupAdvancePostingDisposition, sanitizeManifestFilenamePart, summarizeManifestParcels, yangonBusinessDate } from "../src/services/operations.service.js";
@@ -550,6 +556,7 @@ describe("bulk dispatch and manifest rules", () => {
       toDeliver: 1,
       totalCod: 30000,
       totalFees: 5000,
+      totalAmount: 35000,
     });
   });
   test("only unassigned created or picked-up parcels are dispatchable", () => {
