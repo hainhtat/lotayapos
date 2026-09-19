@@ -74,8 +74,8 @@ export function AppShell() {
   const location = useLocation();
   const canSeeAlerts = ["SUPERADMIN", "OPERATIONS_MANAGER"].includes(user?.role ?? "");
   return (
-    <div className="min-h-screen bg-[#f6f7f9] text-[#101318] dark:bg-[#111315] dark:text-white">
-      <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r border-black/5 bg-white px-5 py-6 dark:border-white/10 dark:bg-[#181a1d] lg:flex">
+    <div className="min-h-screen bg-[var(--color-canvas)] text-[var(--color-text-primary)]">
+      <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r border-black/5 bg-white px-5 py-6 dark:border-[var(--color-border)] dark:bg-[var(--color-surface)] lg:flex">
         <div className="flex items-center gap-3 px-2">
           <div className="grid h-10 w-10 place-items-center rounded-2xl bg-[#1598ef] text-xl font-bold text-white">✦</div>
           <span className="font-display text-2xl font-bold tracking-tight">LOTAYA</span>
@@ -106,7 +106,7 @@ export function AppShell() {
       </aside>
       <MobileNav role={user?.role} />
       <main className="lg:pl-64">
-        <header className="flex h-20 items-center justify-between border-b border-black/5 bg-white/80 px-6 backdrop-blur dark:border-white/10 dark:bg-[#181a1d]/80 lg:px-10">
+        <header className="flex h-20 items-center justify-between border-b border-black/5 bg-white/80 px-6 backdrop-blur dark:border-[var(--color-border)] dark:bg-[color-mix(in_srgb,var(--color-surface)_88%,transparent)] lg:px-10">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[.18em] text-[#1598ef]">LOTAYA ERP</p>
             <p className="font-display text-lg font-bold">{t("today")}</p>
