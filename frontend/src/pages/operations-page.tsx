@@ -806,7 +806,27 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
         {[["", "all"], ["to-assign", "queueToAssign"], ["with-riders", "queueWithRiders"], ["rescheduled", "queueRescheduled"], ["return-to-os", "queueReturnToOs"], ["overdue", "queueOverdue"]].map(([value, label]) => <button key={value} type="button" aria-pressed={filters.queue === value} onClick={() => { setPage(1); setSelected([]); const next = { ...emptyFilters, batchId: filters.batchId, queue: value }; setFilters(next); setSearchParams(dispatchFiltersToSearch(next), { replace: true }); }} className={`rounded-lg px-3 py-2 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${filters.queue === value ? "bg-sky-600 text-white" : "bg-white text-slate-600 dark:bg-white/5 dark:text-slate-200"}`}>{t(label)}</button>)}
       </nav>}
       {filters.queue === "return-to-os" && <div className="mt-3 flex flex-wrap items-center gap-2"><button type="button" disabled={!returnListEligible} onClick={() => { returnListPreview.refetch(); setReturnListOpen(true); }} className={`${control} font-bold disabled:opacity-40`}><Download size={14} className="mr-1 inline" />{t("generateOsReturnList")}</button>{selected.length > 0 && !returnListEligible && <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("returnListEligibilityHelp")}</p>}</div>}
-      {["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "DISPATCHER"].includes(user?.role ?? "") && <button type="button" disabled={!selected.length || selected.length > 50} onClick={() => { confirmReturns.reset(); setReturnOpen(true); }} className={`${control} mt-3 font-bold disabled:opacity-40`}>{t("confirmReturnedToOs")}</button>}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "DISPATCHER"].includes(user?.role ?? "") && (
+          <button
+            type="button"
+            disabled={!selected.length || selected.length > 50}
+            onClick={() => {
+              confirmReturns.reset();
+              setReturnOpen(true);
+            }}
+            className={`${control} font-bold disabled:opacity-40`}
+          >
+            {t("confirmReturnedToOs")}
+          </button>
+        )}
+        {workspace === "returns" && canPaidToOsHandover && (
+          <button type="button" onClick={openPaidToOsList} className={`${control} font-bold`}>
+            <Download size={14} className="mr-1 inline" />
+            {t("generatePaidToOsHandover")}
+          </button>
+        )}
+      </div>
 
       {(overdueUnsent.data?.total ?? 0) > 0 && (
         <section className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/30">
@@ -1023,16 +1043,6 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
             <Download size={14} className="mr-1 inline" />
             {t("downloadManifest")}
           </button>
-          {workspace === "dispatch" && canPaidToOsHandover && (
-            <button
-              type="button"
-              onClick={openPaidToOsList}
-              className="rounded-md border border-[#1598ef] px-3 py-1.5 text-xs font-bold text-[#0787df]"
-            >
-              <Download size={14} className="mr-1 inline" />
-              {t("generatePaidToOsHandover")}
-            </button>
-          )}
           <button
             type="button"
             disabled={Boolean(linkValidation) || selected.length !== selectedParcels.length || link.isPending}
@@ -1135,19 +1145,6 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
           </div>
         )}
           </>
-        )}
-
-        {workspace === "dispatch" && canPaidToOsHandover && !canDispatchEdit && (
-          <div className="mt-3 flex flex-wrap items-end gap-2 rounded-lg bg-slate-50 p-2 dark:bg-white/5">
-            <button
-              type="button"
-              onClick={openPaidToOsList}
-              className="rounded-md border border-[#1598ef] px-3 py-1.5 text-xs font-bold text-[#0787df]"
-            >
-              <Download size={14} className="mr-1 inline" />
-              {t("generatePaidToOsHandover")}
-            </button>
-          </div>
         )}
 
         {selected.length > 0 && linkValidation && (

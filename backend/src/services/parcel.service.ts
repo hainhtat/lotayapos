@@ -1075,3 +1075,129 @@ export async function bulkUpdateStatus(inputs: StatusUpdateInput[], actor: Actor
     return updated;
   });
 }
+
+async function hasActiveFeeReceivable(tx: Prisma.TransactionClient, parcelId: string) {
+  const entries = await tx.journalEntry.findMany({
+    where: {
+      sourceType: "OS_PAID_TO_OS_FEE_RECEIVABLE",
+      OR: [{ sourceId: parcelId }, { sourceId: { startsWith: `${parcelId}:` } }],
+    },
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+  });
+  for (const entry of entries) {
+    if (await journalEntryIsUnreversed(tx, entry.id)) return true;
+  }
+  return false;
+}
+
+/**
+ * Backfill fee-only rider receivables for paid-to-OS DELIVERED parcels that were
+ * posted before OS_PAID_TO_OS_FEE_RECEIVABLE existed (fee excluded from OS credit).
+ * Posts against the current hub business date so Expected Today surfaces the amount.
+ */
+export async function backfillMissingPaidToOsFeeReceivables(options?: {
+  trackingNumbers?: string[];
+  dryRun?: boolean;
+}) {
+  const trackingFilter = options?.trackingNumbers?.filter(Boolean) ?? [];
+  const candidates = await prisma.parcel.findMany({
+    where: {
+      status: "DELIVERED",
+      collectionMode: "PAID_BY_OS",
+      paidToOsFeeIncluded: false,
+      deliveryFee: { gt: 0 },
+      riderId: { not: null },
+      linkGroupId: null,
+      ...(trackingFilter.length ? { trackingNumber: { in: trackingFilter } } : {}),
+    },
+    select: {
+      id: true,
+      trackingNumber: true,
+      deliveryFee: true,
+      riderId: true,
+      rider: { select: { payModel: true, commissionRateBps: true } },
+      batch: { select: { hubId: true } },
+      ways: {
+        where: { outcome: "DELIVERED" },
+        orderBy: [{ completedAt: "desc" }, { startedAt: "desc" }],
+        take: 1,
+        select: { commissionAmount: true },
+      },
+    },
+  });
+
+  const businessDate = new Date();
+  businessDate.setUTCHours(0, 0, 0, 0);
+  const posted: Array<{ trackingNumber: string; deliveryFee: number; commissionAmount: number; receivableAmount: number }> = [];
+  const skipped: Array<{ trackingNumber: string; reason: string }> = [];
+
+  for (const parcel of candidates) {
+    const already = await prisma.$transaction(async (tx) => hasActiveFeeReceivable(tx, parcel.id));
+    if (already) {
+      skipped.push({ trackingNumber: parcel.trackingNumber, reason: "fee_receivable_exists" });
+      continue;
+    }
+    if (!parcel.riderId) {
+      skipped.push({ trackingNumber: parcel.trackingNumber, reason: "no_rider" });
+      continue;
+    }
+    const deliveryFee = parcel.deliveryFee ?? 0;
+    const rateBps = resolveCommissionRateBps(parcel.rider);
+    const commissionAmount =
+      parcel.ways[0]?.commissionAmount ?? calculateCommissionAmount(deliveryFee, rateBps);
+    const receivableAmount = deliveryFee - commissionAmount;
+    if (receivableAmount < 0) {
+      skipped.push({ trackingNumber: parcel.trackingNumber, reason: "invalid_commission" });
+      continue;
+    }
+    if (options?.dryRun) {
+      posted.push({ trackingNumber: parcel.trackingNumber, deliveryFee, commissionAmount, receivableAmount });
+      continue;
+    }
+    const hubId = parcel.batch.hubId;
+    if (!hubId) {
+      skipped.push({ trackingNumber: parcel.trackingNumber, reason: "no_hub" });
+      continue;
+    }
+    const didPost = await serializableTransaction(async (tx) => {
+      if (await hasActiveFeeReceivable(tx, parcel.id)) return false;
+      // Ensure commission payable exists so fee-receivable lines clear it.
+      const commissionSourceId = await nextRiderCommissionSourceId(tx, parcel.id);
+      if (commissionSourceId && commissionAmount > 0) {
+        await assertCashbookOpen(tx, businessDate, hubId);
+        await tx.journalEntry.create({
+          data: {
+            sourceType: "RIDER_COMMISSION",
+            sourceId: commissionSourceId,
+            hubId,
+            businessDate,
+            description: `Backfill rider commission for ${parcel.trackingNumber}`,
+            lines: { create: buildRiderCommissionLines(commissionAmount) },
+          },
+        });
+      }
+      const feeReceivableSourceId = await nextVersionedJournalSourceId(tx, "OS_PAID_TO_OS_FEE_RECEIVABLE", parcel.id);
+      if (!feeReceivableSourceId) return false;
+      await recognizeRiderReceivable(tx, {
+        sourceType: "OS_PAID_TO_OS_FEE_RECEIVABLE",
+        sourceId: feeReceivableSourceId,
+        riderId: parcel.riderId!,
+        hubId,
+        businessDate,
+        codAmount: 0,
+        deliveryFee,
+        commissionAmount,
+        description: `Backfill paid-to-OS fee receivable for ${parcel.trackingNumber}`,
+      });
+      return true;
+    });
+    if (didPost) {
+      posted.push({ trackingNumber: parcel.trackingNumber, deliveryFee, commissionAmount, receivableAmount });
+    } else {
+      skipped.push({ trackingNumber: parcel.trackingNumber, reason: "fee_receivable_exists" });
+    }
+  }
+
+  return { scanned: candidates.length, posted, skipped, dryRun: Boolean(options?.dryRun) };
+}

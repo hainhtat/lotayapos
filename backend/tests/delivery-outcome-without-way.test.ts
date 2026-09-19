@@ -2,6 +2,7 @@ import request from "supertest";
 import { app } from "../src/app.js";
 import { prisma } from "../src/config/database.js";
 import { signAccessToken } from "../src/utils/jwt.js";
+import { backfillMissingPaidToOsFeeReceivables } from "../src/services/parcel.service.js";
 
 describe("OUT_FOR_DELIVERY to DELIVERED without open delivery way", () => {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
@@ -18,6 +19,7 @@ describe("OUT_FOR_DELIVERY to DELIVERED without open delivery way", () => {
   const parcelConflictWayId = `ofd-parcel-conflict-${suffix}`;
   const parcelReuseWayId = `ofd-parcel-reuse-${suffix}`;
   const parcelOfdSupersedeId = `ofd-parcel-ofd-super-${suffix}`;
+  const parcelLegacyFeeId = `ofd-parcel-legacy-fee-${suffix}`;
   const otherRiderId = `ofd-other-rider-${suffix}`;
   const otherRiderUserId = `ofd-other-rider-user-${suffix}`;
 
@@ -193,10 +195,68 @@ describe("OUT_FOR_DELIVERY to DELIVERED without open delivery way", () => {
     await prisma.deliveryWay.create({
       data: { parcelId: parcelOfdSupersedeId, riderId: otherRiderId, commissionRate: 4000, startedAt: new Date("2026-08-13T06:30:00.000Z") },
     });
+    // Legacy paid-to-OS: credit + commission posted, fee receivable missing (pre-fix).
+    await prisma.parcel.create({
+      data: {
+        id: parcelLegacyFeeId,
+        batchId,
+        trackingNumber: `OFD-LEGACY-FEE-${suffix}`,
+        customerName: "Legacy Fee Customer",
+        address: "8 Road",
+        codAmount: 50000,
+        deliveryFee: 4000,
+        advanceAmount: 0,
+        status: "DELIVERED",
+        collectionMode: "PAID_BY_OS",
+        paidToOsFeeIncluded: false,
+        riderId,
+      },
+    });
+    await prisma.deliveryWay.create({
+      data: {
+        parcelId: parcelLegacyFeeId,
+        riderId,
+        commissionRate: 4000,
+        commissionAmount: 1600,
+        outcome: "DELIVERED",
+        completedAt: new Date("2026-08-14T10:00:00.000Z"),
+      },
+    });
+    const legacyBusinessDate = new Date("2026-08-14T00:00:00.000Z");
+    await prisma.journalEntry.create({
+      data: {
+        sourceType: "OS_PAID_TO_OS_CREDIT",
+        sourceId: parcelLegacyFeeId,
+        hubId,
+        businessDate: legacyBusinessDate,
+        description: "Legacy paid-to-OS credit",
+        lines: {
+          create: [
+            { account: "OS_COD_PAYABLE", debit: 50000, credit: 0 },
+            { account: "OS_BATCH_COD_CLEARING", debit: 0, credit: 50000 },
+          ],
+        },
+      },
+    });
+    await prisma.journalEntry.create({
+      data: {
+        sourceType: "RIDER_COMMISSION",
+        sourceId: parcelLegacyFeeId,
+        hubId,
+        businessDate: legacyBusinessDate,
+        description: "Legacy commission",
+        lines: {
+          create: [
+            { account: "RIDER_COMMISSION_EXPENSE", debit: 1600, credit: 0 },
+            { account: "RIDER_COMMISSION_PAYABLE", debit: 0, credit: 1600 },
+          ],
+        },
+      },
+    });
   });
 
   afterAll(async () => {
-    const parcelIds = [parcelMissingWayId, parcelPaidToOsId, parcelPaidToOsFeeId, parcelMismatchWayId, parcelConflictWayId, parcelReuseWayId, parcelOfdSupersedeId];
+    const parcelIds = [parcelMissingWayId, parcelPaidToOsId, parcelPaidToOsFeeId, parcelMismatchWayId, parcelConflictWayId, parcelReuseWayId, parcelOfdSupersedeId, parcelLegacyFeeId];
     await prisma.alert.deleteMany({ where: { parcelId: { in: parcelIds } } });
     await prisma.statusHistory.deleteMany({ where: { parcelId: { in: parcelIds } } });
     await prisma.deliveryWay.deleteMany({ where: { parcelId: { in: parcelIds } } });
@@ -500,5 +560,43 @@ describe("OUT_FOR_DELIVERY to DELIVERED without open delivery way", () => {
     expect(open).toHaveLength(1);
     expect(open[0]?.riderId).toBe(riderId);
     expect(superseded).toHaveLength(1);
+  });
+
+  test("backfills missing paid-to-OS fee receivable for legacy deliveries", async () => {
+    const before = await prisma.riderReceivableRecognition.findFirst({
+      where: { sourceType: "OS_PAID_TO_OS_FEE_RECEIVABLE", sourceId: { startsWith: parcelLegacyFeeId } },
+    });
+    expect(before).toBeNull();
+
+    const result = await backfillMissingPaidToOsFeeReceivables({
+      trackingNumbers: [`OFD-LEGACY-FEE-${suffix}`],
+    });
+    expect(result.posted).toEqual([
+      expect.objectContaining({
+        trackingNumber: `OFD-LEGACY-FEE-${suffix}`,
+        deliveryFee: 4000,
+        commissionAmount: 1600,
+        receivableAmount: 2400,
+      }),
+    ]);
+
+    const recognition = await prisma.riderReceivableRecognition.findUnique({
+      where: { sourceType_sourceId: { sourceType: "OS_PAID_TO_OS_FEE_RECEIVABLE", sourceId: parcelLegacyFeeId } },
+    });
+    expect(recognition).toMatchObject({
+      riderId,
+      codAmount: 0,
+      deliveryFee: 4000,
+      commissionAmount: 1600,
+      receivableAmount: 2400,
+    });
+
+    const again = await backfillMissingPaidToOsFeeReceivables({
+      trackingNumbers: [`OFD-LEGACY-FEE-${suffix}`],
+    });
+    expect(again.posted).toEqual([]);
+    expect(again.skipped).toEqual([
+      expect.objectContaining({ trackingNumber: `OFD-LEGACY-FEE-${suffix}`, reason: "fee_receivable_exists" }),
+    ]);
   });
 });

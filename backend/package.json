@@ -20,6 +20,7 @@
     "db:deploy": "prisma migrate deploy",
     "db:deploy:postgresql": "DATABASE_PROVIDER=postgresql prisma migrate deploy --schema prisma/schema.postgresql.prisma",
     "audit:os-cutover": "tsx src/scripts/audit-os-cutover.ts",
+    "backfill:paid-to-os-fee": "tsx src/scripts/backfill-paid-to-os-fee-receivable.ts",
     "provision:superadmin": "tsx src/scripts/provision-superadmin.ts",
     "seed:locations": "tsx src/scripts/seed-myanmar-locations.ts"
   },

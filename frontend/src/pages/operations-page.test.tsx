@@ -716,7 +716,7 @@ describe("OperationsPage", () => {
     });
   });
 
-  it("opens the Paid to OS handover modal and previews with today's date range", async () => {
+  it("opens the Paid to OS handover modal from the returns workspace with today's date range", async () => {
     mockParcelList([]);
     apiMock.mockImplementation((path: string) => {
       if (path === "/master-data") {
@@ -754,7 +754,7 @@ describe("OperationsPage", () => {
       }
       return Promise.resolve({ data: [] });
     });
-    renderPage();
+    renderReturnsPage();
     fireEvent.click(await screen.findByRole("button", { name: "Paid to OS handover" }));
     const dialog = await screen.findByRole("dialog", { name: "Paid to OS handover" });
     expect(dialog).toBeInTheDocument();
@@ -780,11 +780,11 @@ describe("OperationsPage", () => {
     expect(within(dialog).getByText("Aung Aung · 1 parcels")).toBeInTheDocument();
   });
 
-  it("does not show Paid to OS handover on the returns workspace", async () => {
+  it("does not show Paid to OS handover on the dispatch workspace", async () => {
     mockParcelList([]);
     apiMock.mockResolvedValue({ data: [] });
-    renderReturnsPage();
-    expect(await screen.findByRole("heading", { name: "Return to OS" })).toBeInTheDocument();
+    renderPage();
+    expect(await screen.findByRole("button", { name: "To assign" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Paid to OS handover" })).not.toBeInTheDocument();
   });
 });
