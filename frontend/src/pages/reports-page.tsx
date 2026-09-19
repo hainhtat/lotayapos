@@ -6,6 +6,7 @@ import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@/app/auth";
 import { DeliveryStatusPanel, type ManifestPreviewData } from "@/components/delivery-status-panel";
 import { DetailedReportsPanel } from "@/components/detailed-reports-panel";
+import { ProfitCompositionChart } from "@/components/profit-composition-chart";
 import { api, apiRaw } from "@/lib/api";
 import { hubBusinessDate } from "@/lib/business-date";
 import { resolveManifestPdfFilename } from "@/lib/content-disposition";
@@ -247,6 +248,12 @@ export function ReportsPage() {
                   </div>
                 ))}
               </div>
+              <ProfitCompositionChart
+                deliveryFeeRevenue={profit.data.components.deliveryFeeRevenue}
+                riderCompensationCost={profit.data.components.riderCompensationCost}
+                expenseCost={profit.data.components.expenses.cost}
+                adjustmentContribution={profit.data.components.adjustments.contribution}
+              />
               <dl className="mt-4 grid gap-2 rounded-xl bg-slate-50 p-4 text-sm sm:grid-cols-2 dark:bg-white/5">
                 <div className="flex justify-between gap-3"><dt>{t("riderCommissionCost")}</dt><dd>{money(profit.data.components.riderCommissionCost)}</dd></div>
                 <div className="flex justify-between gap-3"><dt>{t("riderSalaryCost")}</dt><dd>{money(profit.data.components.riderSalaryCost)}</dd></div>

@@ -19,6 +19,7 @@ import {
   type ManifestDatePreset,
   type ManifestStatusKey,
 } from "@/lib/manifest-filters";
+import { dispatchFiltersFromSearch, dispatchFiltersToSearch, emptyDispatchFilters, type DispatchFilters as Filters } from "@/lib/dispatch-filters";
 
 type Parcel = {
   id: string;
@@ -57,20 +58,6 @@ type BatchSummary = {
   shop: { name: string };
   parcels: Array<{ status: string }>;
 };
-type Filters = {
-  queue: string;
-  shopId: string;
-  batchId: string;
-  riderId: string;
-  assignmentStatus: string;
-  township: string;
-  trackingNumber: string;
-  orderId: string;
-  customerName: string;
-  status: string;
-  from: string;
-  to: string;
-};
 type MasterData = {
   shops?: Array<{ id: string; name: string }>;
   riders: Array<{ id: string; user: { name: string }; hub?: { name: string } | null }>;
@@ -86,20 +73,7 @@ type ReasonCode = {
 };
 type OsReturnListPreview = { parcelCount: number; totalCod: number; parcels: Array<{ id?: string; trackingNumber: string; orderId?: string | null; customerName: string; address?: string | null; codAmount: number; status?: string; reasonCode?: string | null; batch?: { label?: string; shop?: { name?: string } } }> };
 
-const emptyFilters: Filters = {
-  queue: "",
-  shopId: "",
-  batchId: "",
-  riderId: "",
-  assignmentStatus: "",
-  township: "",
-  trackingNumber: "",
-  orderId: "",
-  customerName: "",
-  status: "",
-  from: "",
-  to: "",
-};
+const emptyFilters=emptyDispatchFilters;
 const ALL_STATUSES = [
   "CREATED",
   "PICKED_UP",
@@ -147,14 +121,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
   const queryClient = useQueryClient();
   const canDispatchEdit = ["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"].includes(user?.role ?? "");
   const workspaceQueue = workspace === "returns" ? "return-to-os" : "";
-  const [filters, setFilters] = useState<Filters>(() => ({
-    ...emptyFilters,
-    queue: workspaceQueue,
-    ...Object.fromEntries(
-      (Object.keys(emptyFilters) as Array<keyof Filters>).map((key) => [key, searchParams.get(key) ?? ""]),
-    ),
-    ...(workspaceQueue ? { queue: workspaceQueue } : {}),
-  }));
+  const [filters, setFilters] = useState<Filters>(() => dispatchFiltersFromSearch(searchParams,workspaceQueue));
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<string[]>([]);
   const [riderId, setRiderId] = useState("");
@@ -211,10 +178,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
   const selectionScope = useRef("");
 
   useEffect(() => {
-    const next = Object.fromEntries(
-      (Object.keys(emptyFilters) as Array<keyof Filters>).map((key) => [key, searchParams.get(key) ?? ""]),
-    ) as Filters;
-    if (workspaceQueue) next.queue = workspaceQueue;
+    const next=dispatchFiltersFromSearch(searchParams,workspaceQueue);
     setFilters((current) =>
       (Object.keys(next) as Array<keyof Filters>).every((key) => current[key] === next[key]) ? current : next,
     );
@@ -760,7 +724,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
       </div>
 
       {workspace === "dispatch" && <nav aria-label={t("dispatchWorkQueues")} className="mt-5 flex flex-wrap gap-2">
-        {[["", "all"], ["to-assign", "queueToAssign"], ["with-riders", "queueWithRiders"], ["rescheduled", "queueRescheduled"], ["return-to-os", "queueReturnToOs"], ["overdue", "queueOverdue"]].map(([value, label]) => <button key={value} type="button" aria-pressed={filters.queue === value} onClick={() => { setPage(1); setSelected([]); const next = { ...emptyFilters, batchId: filters.batchId, queue: value }; setFilters(next); setSearchParams(Object.fromEntries(Object.entries(next).filter(([, entry]) => entry)), { replace: true }); }} className={`rounded-lg px-3 py-2 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${filters.queue === value ? "bg-sky-600 text-white" : "bg-white text-slate-600 dark:bg-white/5 dark:text-slate-200"}`}>{t(label)}</button>)}
+        {[["", "all"], ["to-assign", "queueToAssign"], ["with-riders", "queueWithRiders"], ["rescheduled", "queueRescheduled"], ["return-to-os", "queueReturnToOs"], ["overdue", "queueOverdue"]].map(([value, label]) => <button key={value} type="button" aria-pressed={filters.queue === value} onClick={() => { setPage(1); setSelected([]); const next = { ...emptyFilters, batchId: filters.batchId, queue: value }; setFilters(next); setSearchParams(dispatchFiltersToSearch(next), { replace: true }); }} className={`rounded-lg px-3 py-2 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${filters.queue === value ? "bg-sky-600 text-white" : "bg-white text-slate-600 dark:bg-white/5 dark:text-slate-200"}`}>{t(label)}</button>)}
       </nav>}
       {filters.queue === "return-to-os" && <div className="mt-3 flex flex-wrap items-center gap-2"><button type="button" disabled={!returnListEligible} onClick={() => { returnListPreview.refetch(); setReturnListOpen(true); }} className={`${control} font-bold disabled:opacity-40`}><Download size={14} className="mr-1 inline" />{t("generateOsReturnList")}</button>{selected.length > 0 && !returnListEligible && <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("returnListEligibilityHelp")}</p>}</div>}
       {["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "DISPATCHER"].includes(user?.role ?? "") && <button type="button" disabled={!selected.length || selected.length > 50} onClick={() => { confirmReturns.reset(); setReturnOpen(true); }} className={`${control} mt-3 font-bold disabled:opacity-40`}>{t("confirmReturnedToOs")}</button>}
