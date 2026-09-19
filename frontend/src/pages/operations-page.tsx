@@ -195,7 +195,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
   const [rescheduleReason, setRescheduleReason] = useState("");
   const [returnOpen, setReturnOpen] = useState(false);
   const [returnListOpen, setReturnListOpen] = useState(false);
-  const [paidToOsListOpen, setPaidToOsListOpen] = useState(false);
+  const [includePaidToOsHandover, setIncludePaidToOsHandover] = useState(false);
   const [paidToOsDateFrom, setPaidToOsDateFrom] = useState(hubBusinessDate());
   const [paidToOsDateTo, setPaidToOsDateTo] = useState(hubBusinessDate());
   const [paidToOsShopId, setPaidToOsShopId] = useState("");
@@ -538,7 +538,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
   );
   const paidToOsListPreview = useQuery({
     queryKey: ["paid-to-os-handover-preview", paidToOsHandoverBody],
-    enabled: paidToOsListOpen,
+    enabled: returnListOpen && includePaidToOsHandover && canPaidToOsHandover,
     queryFn: () =>
       api<PaidToOsHandoverPreview>("/operations/parcels/paid-to-os/preview", {
         method: "POST",
@@ -559,7 +559,6 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
       link.download = resolveManifestPdfFilename(response.headers.get("Content-Disposition"));
       link.click();
       URL.revokeObjectURL(url);
-      setPaidToOsListOpen(false);
       setMessage(t("paidToOsHandoverDownloaded"));
     },
     onError: (error) => setMessage(error instanceof Error ? error.message : t("loadError")),
@@ -724,13 +723,14 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
     setManifestDateTo("");
     setManifestOpen(true);
   };
-  const openPaidToOsList = () => {
+  const openOsReturnList = () => {
     const today = hubBusinessDate();
     setPaidToOsDateFrom(today);
     setPaidToOsDateTo(today);
     setPaidToOsShopId("");
     setPaidToOsRiderId("");
-    setPaidToOsListOpen(true);
+    setIncludePaidToOsHandover(canPaidToOsHandover && !returnListEligible);
+    setReturnListOpen(true);
   };
   const toggleManifestRider = (id: string) =>
     setManifestRiderIds((current) => (current.includes(id) ? current.filter((rider) => rider !== id) : [...current, id]));
@@ -805,7 +805,22 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
       {workspace === "dispatch" && <nav aria-label={t("dispatchWorkQueues")} className="mt-5 flex flex-wrap gap-2">
         {[["", "all"], ["to-assign", "queueToAssign"], ["with-riders", "queueWithRiders"], ["rescheduled", "queueRescheduled"], ["return-to-os", "queueReturnToOs"], ["overdue", "queueOverdue"]].map(([value, label]) => <button key={value} type="button" aria-pressed={filters.queue === value} onClick={() => { setPage(1); setSelected([]); const next = { ...emptyFilters, batchId: filters.batchId, queue: value }; setFilters(next); setSearchParams(dispatchFiltersToSearch(next), { replace: true }); }} className={`rounded-lg px-3 py-2 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${filters.queue === value ? "bg-sky-600 text-white" : "bg-white text-slate-600 dark:bg-white/5 dark:text-slate-200"}`}>{t(label)}</button>)}
       </nav>}
-      {filters.queue === "return-to-os" && <div className="mt-3 flex flex-wrap items-center gap-2"><button type="button" disabled={!returnListEligible} onClick={() => { returnListPreview.refetch(); setReturnListOpen(true); }} className={`${control} font-bold disabled:opacity-40`}><Download size={14} className="mr-1 inline" />{t("generateOsReturnList")}</button>{selected.length > 0 && !returnListEligible && <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("returnListEligibilityHelp")}</p>}</div>}
+      {filters.queue === "return-to-os" && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={!returnListEligible && !canPaidToOsHandover}
+            onClick={openOsReturnList}
+            className={`${control} font-bold disabled:opacity-40`}
+          >
+            <Download size={14} className="mr-1 inline" />
+            {t("generateOsReturnList")}
+          </button>
+          {selected.length > 0 && !returnListEligible && (
+            <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("returnListEligibilityHelp")}</p>
+          )}
+        </div>
+      )}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "DISPATCHER"].includes(user?.role ?? "") && (
           <button
@@ -820,13 +835,8 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
             {t("confirmReturnedToOs")}
           </button>
         )}
-        {workspace === "returns" && canPaidToOsHandover && (
-          <button type="button" onClick={openPaidToOsList} className={`${control} font-bold`}>
-            <Download size={14} className="mr-1 inline" />
-            {t("generatePaidToOsHandover")}
-          </button>
-        )}
       </div>
+
 
       {(overdueUnsent.data?.total ?? 0) > 0 && (
         <section className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/30">
@@ -1919,135 +1929,192 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
         </div></ModalPortal>
       )}
       {failedDecision && <ModalPortal><div role="dialog" aria-modal="true" aria-labelledby="failed-decision-title" className="fixed inset-0 z-[100] grid place-items-center bg-black/55 p-4"><section className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl dark:bg-[#181a1d]"><div className="flex items-start justify-between gap-3"><div><h2 id="failed-decision-title" className="text-xl font-bold">{t("failedDeliveryNextStep")}</h2><p className="mt-2 text-sm text-slate-500">{t("failedDeliveryNextStepHelp", { tracking: failedDecision.trackingNumber })}</p></div><button type="button" aria-label={t("close")} onClick={()=>setFailedDecision(null)} className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10"><X size={18}/></button></div><label className="mt-4 block text-xs font-bold text-slate-500">{t("reason")}<textarea aria-label={t("failedDecisionReason")} required minLength={3} value={failedDecisionReason} onChange={event=>setFailedDecisionReason(event.target.value)} className={`${control} mt-1 w-full`}/></label><div className="mt-5 grid gap-3"><button type="button" disabled={decideFailed.isPending||failedDecisionReason.trim().length<3} onClick={()=>decideFailed.mutate({parcel:failedDecision,action:"RETRY_TOMORROW"})} className="rounded-xl border border-sky-200 p-4 text-left font-bold text-sky-800 disabled:opacity-40 dark:border-sky-800 dark:text-sky-200">{t("tryAgainTomorrow")}</button><button type="button" disabled={decideFailed.isPending||failedDecisionReason.trim().length<3} onClick={()=>decideFailed.mutate({parcel:failedDecision,action:"RESCHEDULE",plannedDeliveryDate:rescheduleDate})} className="rounded-xl border border-slate-200 p-4 text-left font-bold disabled:opacity-40 dark:border-white/10">{t("rescheduleDate")}</button><button type="button" disabled={decideFailed.isPending||failedDecisionReason.trim().length<3} onClick={()=>decideFailed.mutate({parcel:failedDecision,action:"RETURN_TO_OS"})} className="rounded-xl border border-amber-300 p-4 text-left font-bold text-amber-800 disabled:opacity-40 dark:border-amber-800 dark:text-amber-200">{t("returnToOs")}</button></div><label className="mt-4 block text-xs font-bold text-slate-500">{t("rescheduleDate")}<input aria-label={t("rescheduleDate")} type="date" value={rescheduleDate} onChange={event=>setRescheduleDate(event.target.value)} className={`${control} mt-1 w-full`}/></label>{decideFailed.isError&&<p role="alert" className="mt-3 text-sm text-rose-600">{decideFailed.error instanceof Error?decideFailed.error.message:t("loadError")}</p>}<p className="mt-4 text-xs text-slate-500">{t("cancelledDeliveryHelp")}</p></section></div></ModalPortal>}
-      {returnListOpen && <ModalPortal><div role="dialog" aria-modal="true" aria-labelledby="return-list-title" className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-black/55 p-4"><section className="my-6 w-full max-w-3xl rounded-2xl bg-white p-6 shadow-xl dark:bg-[#181a1d]"><div className="flex items-start justify-between gap-3"><div><h2 id="return-list-title" className="font-display text-xl font-bold">{t("osReturnList")}</h2><p className="mt-1 text-sm text-slate-500">{t("osReturnListHelp")}</p></div><button type="button" aria-label={t("close")} onClick={()=>setReturnListOpen(false)} className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10"><X size={18}/></button></div>{returnListPreview.isLoading?<p className="py-8 text-center">{t("loading")}</p>:returnListPreview.isError?<div className="py-8 text-center"><p role="alert" className="text-rose-600">{t("returnListPreviewError")}</p><button type="button" onClick={()=>void returnListPreview.refetch()} className="mt-3 text-sm font-bold text-sky-700">{t("retry")}</button></div>:<><p className="mt-4 rounded-xl bg-sky-50 p-3 text-sm dark:bg-sky-950/50">{t("returnListSummary",{count:returnListPreview.data?.parcelCount??0,amount:money(returnListPreview.data?.totalCod??0)})}</p><div className="mt-4 max-h-80 overflow-auto rounded-xl border dark:border-white/10"><table className="w-full text-left text-sm"><thead><tr className="border-b text-xs uppercase text-slate-500"><th className="p-3">{t("tracking")}</th><th className="p-3">{t("merchant")}</th><th className="p-3">{t("customer")}</th><th className="p-3">{t("status")}</th><th className="p-3">{t("reasonCode")}</th><th className="p-3 text-right">{t("cod")}</th></tr></thead><tbody>{returnListPreview.data?.parcels.map(parcel=><tr key={parcel.id??parcel.trackingNumber} className="border-b dark:border-white/10"><td className="p-3 font-mono">{parcel.trackingNumber}</td><td className="p-3">{parcel.batch?.shop?.name??"—"}</td><td className="p-3">{parcel.customerName}</td><td className="p-3">{parcel.status?.replaceAll("_"," ")??"—"}</td><td className="p-3">{parcel.reasonCode??"—"}</td><td className="p-3 text-right">{money(parcel.codAmount)}</td></tr>)}</tbody></table></div><p className="mt-3 text-xs text-slate-500">{t("returnListNoPostingHelp")}</p><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={()=>setReturnListOpen(false)} className={control}>{t("close")}</button><button type="button" disabled={downloadReturnList.isPending||!returnListPreview.data?.parcelCount} onClick={()=>downloadReturnList.mutate()} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{t(downloadReturnList.isPending?"loading":"downloadPdf")}</button></div></>}</section></div></ModalPortal>}
-      {paidToOsListOpen && (
+      {returnListOpen && (
         <ModalPortal>
-          <div role="dialog" aria-modal="true" aria-labelledby="paid-to-os-list-title" className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-black/55 p-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="return-list-title" className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-black/55 p-4">
             <section className="my-6 w-full max-w-3xl rounded-2xl bg-white p-6 shadow-xl dark:bg-[#181a1d]">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h2 id="paid-to-os-list-title" className="font-display text-xl font-bold">{t("paidToOsHandover")}</h2>
-                  <p className="mt-1 text-sm text-slate-500">{t("paidToOsHandoverHelp")}</p>
+                  <h2 id="return-list-title" className="font-display text-xl font-bold">{t("osReturnList")}</h2>
+                  <p className="mt-1 text-sm text-slate-500">{t("osReturnListHelp")}</p>
                 </div>
-                <button type="button" aria-label={t("close")} onClick={() => setPaidToOsListOpen(false)} className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10">
+                <button type="button" aria-label={t("close")} onClick={() => setReturnListOpen(false)} className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10">
                   <X size={18} />
                 </button>
               </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <label className="text-xs font-bold text-slate-500">
-                  {t("dateFrom")}
+
+              {canPaidToOsHandover && (
+                <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 p-4 text-sm dark:border-white/10">
                   <input
-                    aria-label={t("dateFrom")}
-                    type="date"
-                    value={paidToOsDateFrom}
-                    onChange={(event) => setPaidToOsDateFrom(event.target.value)}
-                    className={`${control} mt-1 w-full`}
+                    aria-label={t("includePaidToOsHandover")}
+                    type="checkbox"
+                    checked={includePaidToOsHandover}
+                    onChange={(event) => setIncludePaidToOsHandover(event.target.checked)}
+                    className="mt-0.5 h-4 w-4"
                   />
+                  <span>
+                    <span className="block font-bold">{t("includePaidToOsHandover")}</span>
+                    <span className="mt-1 block text-slate-500">{t("includePaidToOsHandoverHelp")}</span>
+                  </span>
                 </label>
-                <label className="text-xs font-bold text-slate-500">
-                  {t("dateTo")}
-                  <input
-                    aria-label={t("dateTo")}
-                    type="date"
-                    value={paidToOsDateTo}
-                    onChange={(event) => setPaidToOsDateTo(event.target.value)}
-                    className={`${control} mt-1 w-full`}
-                  />
-                </label>
-                <label className="text-xs font-bold text-slate-500">
-                  {t("onlineShop")}
-                  <select
-                    aria-label={t("onlineShop")}
-                    value={paidToOsShopId}
-                    onChange={(event) => setPaidToOsShopId(event.target.value)}
-                    className={`${control} mt-1 w-full`}
-                  >
-                    <option value="">{t("all")}</option>
-                    {masters.data?.shops?.map((shop) => (
-                      <option key={shop.id} value={shop.id}>{shop.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs font-bold text-slate-500">
-                  {t("rider")}
-                  <select
-                    aria-label={t("rider")}
-                    value={paidToOsRiderId}
-                    onChange={(event) => setPaidToOsRiderId(event.target.value)}
-                    className={`${control} mt-1 w-full`}
-                  >
-                    <option value="">{t("all")}</option>
-                    {riders.map((rider) => (
-                      <option key={rider.id} value={rider.id}>{rider.user.name}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              {paidToOsListPreview.isLoading ? (
+              )}
+
+              {!returnListEligible ? (
+                <p className="mt-4 text-sm text-slate-500">{t("returnListNeedsSelection")}</p>
+              ) : returnListPreview.isLoading ? (
                 <p className="py-8 text-center">{t("loading")}</p>
-              ) : paidToOsListPreview.isError ? (
+              ) : returnListPreview.isError ? (
                 <div className="py-8 text-center">
-                  <p role="alert" className="text-rose-600">{t("paidToOsHandoverPreviewError")}</p>
-                  <button type="button" onClick={() => void paidToOsListPreview.refetch()} className="mt-3 text-sm font-bold text-sky-700">{t("retry")}</button>
+                  <p role="alert" className="text-rose-600">{t("returnListPreviewError")}</p>
+                  <button type="button" onClick={() => void returnListPreview.refetch()} className="mt-3 text-sm font-bold text-sky-700">{t("retry")}</button>
                 </div>
               ) : (
                 <>
                   <p className="mt-4 rounded-xl bg-sky-50 p-3 text-sm dark:bg-sky-950/50">
-                    {t("paidToOsHandoverSummary", {
-                      count: paidToOsListPreview.data?.parcelCount ?? 0,
-                      cod: money(paidToOsListPreview.data?.totalCod ?? 0),
-                      fees: money(paidToOsListPreview.data?.totalFees ?? 0),
-                    })}
+                    {t("returnListSummary", { count: returnListPreview.data?.parcelCount ?? 0, amount: money(returnListPreview.data?.totalCod ?? 0) })}
                   </p>
-                  {(paidToOsListPreview.data?.parcelCount ?? 0) === 0 ? (
-                    <p className="mt-4 py-6 text-center text-sm text-slate-500">{t("paidToOsHandoverEmpty")}</p>
-                  ) : (
-                    <div className="mt-4 max-h-80 space-y-3 overflow-auto">
-                      {(paidToOsListPreview.data?.sections ?? []).map((section) => (
-                        <div key={`${section.riderName}-${section.parcels[0]?.trackingNumber ?? "empty"}`} className="rounded-xl border dark:border-white/10">
-                          <p className="border-b px-3 py-2 text-xs font-bold uppercase tracking-wide text-slate-500 dark:border-white/10">
-                            {t("paidToOsHandoverSection", { rider: section.riderName, count: section.parcels.length })}
-                          </p>
-                          <table className="w-full text-left text-sm">
-                            <thead>
-                              <tr className="border-b text-xs uppercase text-slate-500 dark:border-white/10">
-                                <th className="p-3">{t("tracking")}</th>
-                                <th className="p-3">{t("merchant")}</th>
-                                <th className="p-3">{t("customer")}</th>
-                                <th className="p-3 text-right">{t("cod")}</th>
-                                <th className="p-3 text-right">{t("fee")}</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {section.parcels.map((parcel) => (
-                                <tr key={parcel.id ?? parcel.trackingNumber} className="border-b dark:border-white/10">
-                                  <td className="p-3 font-mono">{parcel.trackingNumber}</td>
-                                  <td className="p-3">{parcel.shopName ?? "—"}</td>
-                                  <td className="p-3">{parcel.customerName}</td>
-                                  <td className="p-3 text-right">{money(parcel.codAmount)}</td>
-                                  <td className="p-3 text-right">{money(parcel.paidToOsFeeIncluded ? parcel.deliveryFee ?? 0 : 0)}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <p className="mt-3 text-xs text-slate-500">{t("paidToOsHandoverNoPostingHelp")}</p>
-                  <div className="mt-5 flex justify-end gap-2">
-                    <button type="button" onClick={() => setPaidToOsListOpen(false)} className={control}>{t("close")}</button>
-                    <button
-                      type="button"
-                      disabled={downloadPaidToOsList.isPending || !paidToOsListPreview.data?.parcelCount}
-                      onClick={() => downloadPaidToOsList.mutate()}
-                      className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
-                    >
-                      {t(downloadPaidToOsList.isPending ? "loading" : "downloadPdf")}
-                    </button>
+                  <div className="mt-4 max-h-64 overflow-auto rounded-xl border dark:border-white/10">
+                    <table className="w-full text-left text-sm">
+                      <thead>
+                        <tr className="border-b text-xs uppercase text-slate-500">
+                          <th className="p-3">{t("tracking")}</th>
+                          <th className="p-3">{t("merchant")}</th>
+                          <th className="p-3">{t("customer")}</th>
+                          <th className="p-3">{t("status")}</th>
+                          <th className="p-3">{t("reasonCode")}</th>
+                          <th className="p-3 text-right">{t("cod")}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {returnListPreview.data?.parcels.map((parcel) => (
+                          <tr key={parcel.id ?? parcel.trackingNumber} className="border-b dark:border-white/10">
+                            <td className="p-3 font-mono">{parcel.trackingNumber}</td>
+                            <td className="p-3">{parcel.batch?.shop?.name ?? "—"}</td>
+                            <td className="p-3">{parcel.customerName}</td>
+                            <td className="p-3">{parcel.status?.replaceAll("_", " ") ?? "—"}</td>
+                            <td className="p-3">{parcel.reasonCode ?? "—"}</td>
+                            <td className="p-3 text-right">{money(parcel.codAmount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
+                  <p className="mt-3 text-xs text-slate-500">{t("returnListNoPostingHelp")}</p>
                 </>
               )}
+
+              {includePaidToOsHandover && canPaidToOsHandover && (
+                <div className="mt-6 border-t border-slate-200 pt-5 dark:border-white/10">
+                  <h3 className="font-display text-base font-bold">{t("paidToOsHandover")}</h3>
+                  <p className="mt-1 text-sm text-slate-500">{t("paidToOsHandoverHelp")}</p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <label className="text-xs font-bold text-slate-500">
+                      {t("dateFrom")}
+                      <input aria-label={t("dateFrom")} type="date" value={paidToOsDateFrom} onChange={(event) => setPaidToOsDateFrom(event.target.value)} className={`${control} mt-1 w-full`} />
+                    </label>
+                    <label className="text-xs font-bold text-slate-500">
+                      {t("dateTo")}
+                      <input aria-label={t("dateTo")} type="date" value={paidToOsDateTo} onChange={(event) => setPaidToOsDateTo(event.target.value)} className={`${control} mt-1 w-full`} />
+                    </label>
+                    <label className="text-xs font-bold text-slate-500">
+                      {t("onlineShop")}
+                      <select aria-label={t("onlineShop")} value={paidToOsShopId} onChange={(event) => setPaidToOsShopId(event.target.value)} className={`${control} mt-1 w-full`}>
+                        <option value="">{t("all")}</option>
+                        {masters.data?.shops?.map((shop) => (
+                          <option key={shop.id} value={shop.id}>{shop.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-xs font-bold text-slate-500">
+                      {t("rider")}
+                      <select aria-label={t("rider")} value={paidToOsRiderId} onChange={(event) => setPaidToOsRiderId(event.target.value)} className={`${control} mt-1 w-full`}>
+                        <option value="">{t("all")}</option>
+                        {riders.map((rider) => (
+                          <option key={rider.id} value={rider.id}>{rider.user.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  {paidToOsListPreview.isLoading ? (
+                    <p className="py-8 text-center">{t("loading")}</p>
+                  ) : paidToOsListPreview.isError ? (
+                    <div className="py-8 text-center">
+                      <p role="alert" className="text-rose-600">{t("paidToOsHandoverPreviewError")}</p>
+                      <button type="button" onClick={() => void paidToOsListPreview.refetch()} className="mt-3 text-sm font-bold text-sky-700">{t("retry")}</button>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="mt-4 rounded-xl bg-sky-50 p-3 text-sm dark:bg-sky-950/50">
+                        {t("paidToOsHandoverSummary", {
+                          count: paidToOsListPreview.data?.parcelCount ?? 0,
+                          cod: money(paidToOsListPreview.data?.totalCod ?? 0),
+                          fees: money(paidToOsListPreview.data?.totalFees ?? 0),
+                        })}
+                      </p>
+                      {(paidToOsListPreview.data?.parcelCount ?? 0) === 0 ? (
+                        <p className="mt-4 py-6 text-center text-sm text-slate-500">{t("paidToOsHandoverEmpty")}</p>
+                      ) : (
+                        <div className="mt-4 max-h-64 space-y-3 overflow-auto">
+                          {(paidToOsListPreview.data?.sections ?? []).map((section) => (
+                            <div key={`${section.riderName}-${section.parcels[0]?.trackingNumber ?? "empty"}`} className="rounded-xl border dark:border-white/10">
+                              <p className="border-b px-3 py-2 text-xs font-bold uppercase tracking-wide text-slate-500 dark:border-white/10">
+                                {t("paidToOsHandoverSection", { rider: section.riderName, count: section.parcels.length })}
+                              </p>
+                              <table className="w-full text-left text-sm">
+                                <thead>
+                                  <tr className="border-b text-xs uppercase text-slate-500 dark:border-white/10">
+                                    <th className="p-3">{t("tracking")}</th>
+                                    <th className="p-3">{t("merchant")}</th>
+                                    <th className="p-3">{t("customer")}</th>
+                                    <th className="p-3 text-right">{t("cod")}</th>
+                                    <th className="p-3 text-right">{t("fee")}</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {section.parcels.map((parcel) => (
+                                    <tr key={parcel.id ?? parcel.trackingNumber} className="border-b dark:border-white/10">
+                                      <td className="p-3 font-mono">{parcel.trackingNumber}</td>
+                                      <td className="p-3">{parcel.shopName ?? "—"}</td>
+                                      <td className="p-3">{parcel.customerName}</td>
+                                      <td className="p-3 text-right">{money(parcel.codAmount)}</td>
+                                      <td className="p-3 text-right">{money(parcel.paidToOsFeeIncluded ? parcel.deliveryFee ?? 0 : 0)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <p className="mt-3 text-xs text-slate-500">{t("paidToOsHandoverNoPostingHelp")}</p>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-5 flex flex-wrap justify-end gap-2">
+                <button type="button" onClick={() => setReturnListOpen(false)} className={control}>{t("close")}</button>
+                {returnListEligible && (
+                  <button
+                    type="button"
+                    disabled={downloadReturnList.isPending || !returnListPreview.data?.parcelCount}
+                    onClick={() => downloadReturnList.mutate()}
+                    className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
+                  >
+                    {t(downloadReturnList.isPending ? "loading" : "downloadReturnPdf")}
+                  </button>
+                )}
+                {includePaidToOsHandover && canPaidToOsHandover && (
+                  <button
+                    type="button"
+                    disabled={downloadPaidToOsList.isPending || !paidToOsListPreview.data?.parcelCount}
+                    onClick={() => downloadPaidToOsList.mutate()}
+                    className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
+                  >
+                    {t(downloadPaidToOsList.isPending ? "loading" : "downloadPaidToOsPdf")}
+                  </button>
+                )}
+              </div>
             </section>
           </div>
         </ModalPortal>

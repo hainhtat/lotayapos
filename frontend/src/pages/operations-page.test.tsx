@@ -716,7 +716,7 @@ describe("OperationsPage", () => {
     });
   });
 
-  it("opens the Paid to OS handover modal from the returns workspace with today's date range", async () => {
+  it("includes Paid to OS handover from the OS return list modal on returns", async () => {
     mockParcelList([]);
     apiMock.mockImplementation((path: string) => {
       if (path === "/master-data") {
@@ -755,10 +755,12 @@ describe("OperationsPage", () => {
       return Promise.resolve({ data: [] });
     });
     renderReturnsPage();
-    fireEvent.click(await screen.findByRole("button", { name: "Paid to OS handover" }));
-    const dialog = await screen.findByRole("dialog", { name: "Paid to OS handover" });
+    fireEvent.click(await screen.findByRole("button", { name: "Generate OS return list" }));
+    const dialog = await screen.findByRole("dialog", { name: "OS return list" });
     expect(dialog).toBeInTheDocument();
     expect(dialog.parentElement).toBe(document.body);
+    // No return selection: Paid to OS is included by default.
+    expect(within(dialog).getByLabelText("Include Paid to OS handover")).toBeChecked();
     await waitFor(() => {
       const call = apiMock.mock.calls.find(([path]) => path === "/operations/parcels/paid-to-os/preview");
       expect(call?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
@@ -778,13 +780,23 @@ describe("OperationsPage", () => {
     expect(await within(dialog).findByText("TRK-PAID")).toBeInTheDocument();
     expect(within(dialog).getByText("1 parcels · COD 50,000 MMK · fees 3,000 MMK")).toBeInTheDocument();
     expect(within(dialog).getByText("Aung Aung · 1 parcels")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Download Paid to OS PDF" })).toBeInTheDocument();
   });
 
-  it("does not show Paid to OS handover on the dispatch workspace", async () => {
+  it("does not show a standalone Paid to OS handover button on dispatch", async () => {
     mockParcelList([]);
     apiMock.mockResolvedValue({ data: [] });
     renderPage();
     expect(await screen.findByRole("button", { name: "To assign" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Paid to OS handover" })).not.toBeInTheDocument();
+  });
+
+  it("opens Paid to OS only through Generate OS return list on returns", async () => {
+    mockParcelList([]);
+    apiMock.mockResolvedValue({ data: [] });
+    renderReturnsPage();
+    expect(await screen.findByRole("heading", { name: "Return to OS" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Paid to OS handover" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate OS return list" })).toBeEnabled();
   });
 });
