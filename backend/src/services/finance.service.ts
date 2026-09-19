@@ -14,7 +14,9 @@ import {
   sumUnreversedDebitsToOsSettlementOffsetByParcel,
 } from "./os-advance.js";
 import { buildRiderSettlementReceivableLines, calculateDailySalaryDeduction, calculateRecognitionTotals, calculateRiderSettlementAmounts } from "./rider-settlement-calculations.js";
+import { assertFinanceActor, assertFinanceReadActor, isFinanceRole, resolveFinanceHub, resolveFinanceListHub, type FinanceActor } from "./finance-authorization.js";
 export { buildRiderSettlementReceivableLines, calculateDailySalaryDeduction, calculateRecognitionTotals, calculateRiderSettlementAmounts, calculateRiderSettlementTotals } from "./rider-settlement-calculations.js";
+export type { FinanceActor } from "./finance-authorization.js";
 
 function businessDay(value: string) {
   const date = new Date(value);
@@ -38,45 +40,6 @@ function assertWallets(input: {
       "INVALID_WALLET_AMOUNT",
       "Wallet amounts must be non-negative integers",
     );
-}
-const financeRoles = ["SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER"];
-const financeReadRoles = ["SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER", "AUDITOR"];
-export type FinanceActor = { id: string; role: string };
-
-async function assertFinanceActor(actor: FinanceActor) {
-  const user = await prisma.user.findUnique({
-    where: { id: actor.id },
-    select: { role: true, active: true, hubId: true },
-  });
-  if (
-    !user ||
-    !user.active ||
-    user.role !== actor.role ||
-    !financeRoles.includes(user.role)
-  )
-    throw new ApiError(403, "FORBIDDEN", "Active finance scope required");
-  return user;
-}
-
-async function assertReturnHandoverActor(actor: FinanceActor) {
-  const user = await prisma.user.findUnique({ where: { id: actor.id }, select: { role: true, active: true, hubId: true } });
-  if (!user || !user.active || user.role !== actor.role || !financeRoles.includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Active finance scope required");
-  return user;
-}
-
-async function assertFinanceReadActor(actor: FinanceActor) {
-  const user = await prisma.user.findUnique({
-    where: { id: actor.id },
-    select: { role: true, active: true, hubId: true },
-  });
-  if (
-    !user ||
-    !user.active ||
-    user.role !== actor.role ||
-    !financeReadRoles.includes(user.role)
-  )
-    throw new ApiError(403, "FORBIDDEN", "Active finance read scope required");
-  return user;
 }
 
 async function assertRiderScope(riderId: string, actor: FinanceActor) {
@@ -117,7 +80,7 @@ async function resolveSettlementRider(
       );
     return user.rider;
   }
-  if (!financeRoles.includes(user.role) || !requestedRiderId)
+  if (!isFinanceRole(user.role) || !requestedRiderId)
     throw new ApiError(
       403,
       "FORBIDDEN",
@@ -870,19 +833,6 @@ export async function updateOsSettlementDraft(
   }, { isolationLevel: "Serializable" });
 }
 
-function supportsOrgWideFinanceRead(user: { role: string; hubId: string | null }) {
-  return user.role === "SUPERADMIN" || (user.role === "AUDITOR" && !user.hubId);
-}
-
-async function resolveFinanceListHub(actor: FinanceActor, requestedHubId?: string) {
-  const user = await assertFinanceReadActor(actor);
-  if (supportsOrgWideFinanceRead(user)) {
-    if (requestedHubId) return resolveFinanceHubForRead(actor, requestedHubId);
-    return undefined;
-  }
-  return resolveFinanceHubForRead(actor, requestedHubId);
-}
-
 function receiveOsReturnHistoryNote(input: {
   idempotencyKey: string;
   businessDate: string;
@@ -1030,7 +980,7 @@ export async function receiveOsReturn(
   actor: FinanceActor,
   transaction?: Prisma.TransactionClient,
 ) {
-  const user = await assertReturnHandoverActor(actor);
+  const user = await assertFinanceActor(actor);
   const date = businessDay(input.businessDate);
   const idempotencyKey = input.idempotencyKey.trim();
 
@@ -1208,7 +1158,7 @@ export async function receiveOsReturn(
 }
 
 export async function receiveOsReturnsBulk(input: { parcelIds: string[]; businessDate: string; idempotencyKey: string }, actor: FinanceActor) {
-  const user = await assertReturnHandoverActor(actor);
+  const user = await assertFinanceActor(actor);
   const ids = [...new Set(input.parcelIds)].sort();
   if (!ids.length || ids.length > 50 || ids.length !== input.parcelIds.length) throw new ApiError(400, "INVALID_PARCEL_SELECTION", "Select between 1 and 50 distinct parcels");
   const hash = createHash("sha256").update(JSON.stringify({ ids, businessDate: input.businessDate, actorId: actor.id })).digest("hex");
@@ -1422,33 +1372,6 @@ export async function assertCashbookOpen(
   });
   if (day?.closedAt)
     throw new ApiError(409, "DAY_CLOSED", "Cashbook day is already closed");
-}
-
-async function resolveHubFromUser(
-  user: { role: string; hubId: string | null },
-  requestedHubId?: string,
-) {
-  if (user.role === "SUPERADMIN") {
-    if (!requestedHubId)
-      throw new ApiError(400, "HUB_REQUIRED", "Superadmin must select a hub");
-    const hub = await prisma.hub.findUnique({
-      where: { id: requestedHubId },
-      select: { id: true },
-    });
-    if (!hub) throw new ApiError(404, "HUB_NOT_FOUND", "Hub not found");
-    return hub.id;
-  }
-  if (!user.hubId || (requestedHubId && requestedHubId !== user.hubId))
-    throw new ApiError(403, "FORBIDDEN", "Hub is outside your scope");
-  return user.hubId;
-}
-
-async function resolveFinanceHub(actor: FinanceActor, requestedHubId?: string) {
-  return resolveHubFromUser(await assertFinanceActor(actor), requestedHubId);
-}
-
-async function resolveFinanceHubForRead(actor: FinanceActor, requestedHubId?: string) {
-  return resolveHubFromUser(await assertFinanceReadActor(actor), requestedHubId);
 }
 
 export function calculateWalletBalances(

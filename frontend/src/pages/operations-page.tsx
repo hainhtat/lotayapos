@@ -143,6 +143,8 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
   const [partial, setPartial] = useState<Parcel | null>(null);
   const [deliveryChoice, setDeliveryChoice] = useState<Parcel | null>(null);
   const [paidToOs, setPaidToOs] = useState<Parcel | null>(null);
+  const [bulkDeliveryChoice, setBulkDeliveryChoice] = useState(false);
+  const [bulkPaidToOs, setBulkPaidToOs] = useState(false);
   const [includeDeliveryFee, setIncludeDeliveryFee] = useState(false);
   const [editing, setEditing] = useState<Parcel | null>(null);
   const [historyParcel,setHistoryParcel]=useState<{id:string;trackingNumber:string}|null>(null);
@@ -593,7 +595,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
   });
 
   const applyStatusBulk = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (delivery?: { collectionMode: "PAID_BY_OS" | "CASH_RECEIPT_EXCEPTION"; paidToOsIncludeDeliveryFee?: boolean }) => {
       if (!bulkStatus || bulkStatus === "PARTIAL" || !selectedParcels.length) return 0;
       if ((bulkStatus === "FAILED" || bulkStatus === "REJECTED") && !bulkReasonCode) {
         throw new Error(t("reasonRequired"));
@@ -610,6 +612,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
           parcelIds,
           status: bulkStatus,
           note,
+          ...(bulkStatus === "DELIVERED" ? delivery : {}),
           ...((bulkStatus === "FAILED" || bulkStatus === "REJECTED") && bulkReasonCode
             ? { reasonCode: bulkReasonCode }
             : {}),
@@ -622,6 +625,8 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
       setBulkStatus("");
       setBulkReasonCode("");
       setBulkOverrideNote("");
+      setBulkDeliveryChoice(false);
+      setBulkPaidToOs(false);
       setMessage(t("multiEditStatusApplied", { count }));
       await invalidateParcels();
     },
@@ -1038,7 +1043,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
                 applyStatusBulk.isPending ||
                 ((bulkStatus === "FAILED" || bulkStatus === "REJECTED") && !bulkReasonCode)
               }
-              onClick={() => applyStatusBulk.mutate()}
+              onClick={() => bulkStatus === "DELIVERED" ? setBulkDeliveryChoice(true) : applyStatusBulk.mutate(undefined)}
               className="rounded-md border border-[#1598ef] px-2.5 py-1 text-[11px] font-bold text-[#0787df] disabled:opacity-50"
             >
               {applyStatusBulk.isPending ? t("loading") : t("applyStatus")}
@@ -1686,6 +1691,33 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
             </div>
             <div className="mt-6 flex justify-end"><button type="button" onClick={() => setDeliveryChoice(null)} className={control}>{t("cancel")}</button></div>
           </div>
+        </div>
+      )}
+
+      {bulkDeliveryChoice && (
+        <div role="dialog" aria-modal="true" aria-labelledby="bulk-delivery-choice-title" className="fixed inset-0 z-20 grid place-items-center overflow-y-auto bg-black/40 p-4">
+          <div className="relative my-6 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-[#181a1d]">
+            <button type="button" aria-label={t("close")} onClick={() => setBulkDeliveryChoice(false)} className="absolute right-4 top-4 rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10"><X size={18}/></button>
+            <h2 id="bulk-delivery-choice-title" className="font-display text-xl font-bold">{t("recordDelivered")}</h2>
+            <p className="mt-2 text-sm text-slate-500">{t("recordDeliveredHelp")}</p>
+            <div className="mt-5 grid gap-3">
+              <button type="button" onClick={() => { setBulkDeliveryChoice(false); applyStatusBulk.mutate({ collectionMode: "CASH_RECEIPT_EXCEPTION" }); }} disabled={applyStatusBulk.isPending} className="rounded-xl border border-[#1598ef] p-4 text-left hover:bg-sky-50 disabled:opacity-50 dark:hover:bg-sky-950/30"><span className="block font-bold text-[#0787df]">{t("deliveredRiderCollected")}</span><span className="mt-1 block text-sm text-slate-500">{t("deliveredRiderCollectedHelp")}</span></button>
+              <button type="button" onClick={() => { setBulkDeliveryChoice(false); setBulkPaidToOs(true); setIncludeDeliveryFee(false); }} className="rounded-xl border border-slate-200 p-4 text-left hover:bg-slate-50 dark:border-white/10 dark:hover:bg-white/5"><span className="block font-bold">{t("deliveredPaidToOs")}</span><span className="mt-1 block text-sm text-slate-500">{t("deliveredPaidToOsHelp")}</span></button>
+            </div>
+            <div className="mt-6 flex justify-end"><button type="button" onClick={() => setBulkDeliveryChoice(false)} className={control}>{t("cancel")}</button></div>
+          </div>
+        </div>
+      )}
+
+      {bulkPaidToOs && (
+        <div role="dialog" aria-modal="true" aria-labelledby="bulk-paid-to-os-title" className="fixed inset-0 z-20 grid place-items-center overflow-y-auto bg-black/40 p-4">
+          <form onSubmit={(event) => { event.preventDefault(); applyStatusBulk.mutate({ collectionMode: "PAID_BY_OS", paidToOsIncludeDeliveryFee: includeDeliveryFee }); }} className="relative my-6 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-[#181a1d]">
+            <button type="button" aria-label={t("close")} onClick={() => setBulkPaidToOs(false)} className="absolute right-4 top-4 rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10"><X size={18}/></button>
+            <h2 id="bulk-paid-to-os-title" className="font-display text-xl font-bold">{t("deliveredPaidToOs")}</h2>
+            <p className="mt-2 text-sm text-slate-500">{t("deliveredPaidToOsHelp")}</p>
+            <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 p-4 text-sm dark:border-white/10"><input aria-label={t("includeFullDeliveryFee")} type="checkbox" checked={includeDeliveryFee} onChange={(event) => setIncludeDeliveryFee(event.target.checked)} className="mt-0.5 h-4 w-4"/><span><span className="block font-bold">{t("includeFullDeliveryFee")}</span></span></label>
+            <div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setBulkPaidToOs(false)} className={control}>{t("cancel")}</button><button type="submit" disabled={applyStatusBulk.isPending} className="rounded-lg bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{applyStatusBulk.isPending ? t("loading") : t("confirmDeliveredPaidToOs")}</button></div>
+          </form>
         </div>
       )}
 

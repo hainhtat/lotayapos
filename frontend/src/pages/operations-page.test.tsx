@@ -470,6 +470,32 @@ describe("OperationsPage", () => {
     expect(apiMock.mock.calls.filter(([path]) => /^\/parcels\/[^/]+\/status$/.test(path))).toHaveLength(0);
   });
 
+  it("requires a collection mode before bulk-changing parcels to delivered", async () => {
+    mockParcelList([
+      { id: "parcel-1", trackingNumber: "TRK-1", customerName: "One", address: "A", status: "OUT_FOR_DELIVERY", codAmount: 1000, batch: { label: "Batch", shop: { name: "Shop" } }, rider: { id: "rider-1", user: { name: "Rider" } } },
+    ]);
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/master-data") return Promise.resolve({ data: { riders: [{ id: "rider-1", user: { name: "Rider" } }] } });
+      if (path === "/operations/batches" || path === "/master-data/reason-codes") return Promise.resolve({ data: [] });
+      if (path === "/parcels/bulk-status") return Promise.resolve({ data: { updatedCount: 1, parcels: [] } });
+      return Promise.resolve({ data: [] });
+    });
+    renderPage();
+    await screen.findByText("TRK-1");
+    fireEvent.click(screen.getByRole("checkbox", { name: /select TRK-1/i }));
+    fireEvent.change(screen.getByLabelText("Apply status"), { target: { value: "DELIVERED" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply status" }));
+
+    expect(apiMock.mock.calls.some(([path]) => path === "/parcels/bulk-status")).toBe(false);
+    const dialog = screen.getByRole("dialog", { name: "Record delivery" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Rider collected from customer/ }));
+
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/parcels/bulk-status", {
+      method: "POST",
+      body: JSON.stringify({ parcelIds: ["parcel-1"], status: "DELIVERED", note: "Ops correction", collectionMode: "CASH_RECEIPT_EXCEPTION" }),
+    }));
+  });
+
   it("reassigns an eligible parcel via inline rider select", async () => {
     const parcel = {
       id: "parcel-1",
