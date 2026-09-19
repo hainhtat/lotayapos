@@ -8,6 +8,7 @@ import { canAccessRoute, roleHome } from "@/lib/role-access";
 const AppShell = lazy(() => import("@/components/app-shell").then((module) => ({ default: module.AppShell })));
 const Dashboard = lazy(() => import("@/pages/dashboard").then((module) => ({ default: module.Dashboard })));
 const OperationsPage = lazy(() => import("@/pages/operations-page").then((module) => ({ default: module.OperationsPage })));
+const OperationsReturnsPage = lazy(() => import("@/pages/operations-returns-page").then((module) => ({ default: module.OperationsReturnsPage })));
 const BatchesPage = lazy(() => import("@/pages/batches-page").then((module) => ({ default: module.BatchesPage })));
 const FinancePage = lazy(() => import("@/pages/finance-page").then((module) => ({ default: module.FinancePage })));
 const SettingsPage = lazy(() => import("@/pages/settings-page").then((module) => ({ default: module.SettingsPage })));
@@ -61,9 +62,18 @@ export const router = createBrowserRouter([
           { path: "operations", element: <OperationsRedirect /> },
           { path: "operations/batches", element: lazyElement(<BatchesPage />) },
           { path: "operations/dispatch", element: lazyElement(<OperationsPage />) },
+          { path: "operations/returns", element: lazyElement(<OperationsReturnsPage />) },
           { path: "finance", element: lazyElement(<FinancePage />) },
+          { path: "finance/overview", element: lazyElement(<FinancePage />) },
+          { path: "finance/settlements", element: lazyElement(<FinancePage />) },
+          { path: "finance/expenses", element: lazyElement(<FinancePage />) },
           { path: "reports", element: lazyElement(<ReportsPage />) },
-          { path: "settings", element: lazyElement(<SettingsPage />) },
+          { path: "settings", element: <Navigate to="/settings/locations" replace /> },
+          { path: "settings/locations", element: lazyElement(<SettingsPage section="locations" />) },
+          { path: "settings/shops", element: lazyElement(<SettingsPage section="shops" />) },
+          { path: "settings/riders", element: lazyElement(<SettingsPage section="riders" />) },
+          { path: "settings/reason-codes", element: lazyElement(<SettingsPage section="reason-codes" />) },
+          { path: "settings/users", element: lazyElement(<SettingsPage section="users" />) },
           { path: "profile", element: lazyElement(<ProfilePage />) },
         ],
       },

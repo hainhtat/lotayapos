@@ -8,6 +8,7 @@ import {
   LogOut,
   Moon,
   Package,
+  RotateCcw,
   Settings,
   Sun,
   WalletCards,
@@ -20,6 +21,7 @@ const links = [
   { to: "/", label: "home", icon: LayoutDashboard },
   { to: "/operations/batches", label: "allBatches", icon: Layers },
   { to: "/operations/dispatch", label: "dispatchQueue", icon: Package },
+  { to: "/operations/returns", label: "returnToOs", icon: RotateCcw },
   { to: "/finance", label: "finance", icon: WalletCards },
   { to: "/reports", label: "reports", icon: BarChart3 },
 ];
@@ -32,6 +34,7 @@ const rolesByPath: Record<string,string[]> = {
   "/": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER","AUDITOR"],
   "/operations/batches": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER"],
   "/operations/dispatch": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER","AUDITOR"],
+  "/operations/returns": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER","AUDITOR"],
   "/finance": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","AUDITOR"],
   "/reports": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","AUDITOR"],
   "/settings": ["SUPERADMIN","OPERATIONS_MANAGER"],
@@ -85,7 +88,7 @@ export function AppShell() {
             </NavLink>
           ))}
           {rolesByPath["/settings"].includes(user?.role??"") && <div className="mt-auto">
-            <NavLink to="/settings" className={navClass}>
+            <NavLink to="/settings/locations" className={navClass}>
               <Settings size={19} />
               {t("settings")}
             </NavLink>

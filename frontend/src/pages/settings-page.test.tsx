@@ -1,28 +1,31 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import "@/i18n";
-import { SettingsPage } from "./settings-page";
+import { SettingsPage, type SettingsSection } from "./settings-page";
 
 const apiMock = vi.hoisted(() => vi.fn());
+const notifySuccessMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", () => ({ api: apiMock }));
+vi.mock("@/lib/notifications", () => ({ notifySuccess: notifySuccessMock }));
 vi.mock("@/app/auth", () => ({ useAuth: () => ({ user: { id: "admin-1", role: "OPERATIONS_MANAGER" } }) }));
 
-function renderPage() {
+function renderPage(section: SettingsSection) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><SettingsPage /></QueryClientProvider>);
+  return render(<MemoryRouter initialEntries={[`/settings/${section}`]}><QueryClientProvider client={client}><SettingsPage section={section} /></QueryClientProvider></MemoryRouter>);
 }
 
 describe("SettingsPage", () => {
-  beforeEach(() => apiMock.mockImplementation((path: string) => {
+  beforeEach(() => { notifySuccessMock.mockReset(); apiMock.mockImplementation((path: string) => {
     if (path === "/master-data") return Promise.resolve({ data: { hubs: [{ id: "hub-1", name: "Main Hub" }], shops: [], zones: [], riders: [] } });
     if (path === "/master-data/locations/townships") return Promise.resolve({ data: [] });
     if (path === "/master-data/reason-codes") return Promise.resolve({ data: [{ id: "reason-1", code: "NO_ANSWER", labelEn: "No answer", labelMy: "မကိုင်", outcome: "FAILED", noteRequired: false, active: true }] });
     return Promise.resolve({ data: { id: "new" } });
-  }));
+  }); });
 
   it("keeps invalid rider submission disabled and sends a complete valid rider", async () => {
-    renderPage();
+    renderPage("riders");
     const add = await screen.findByRole("button", { name: "Add rider" });
     expect(add).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "New Rider" } });
@@ -48,6 +51,7 @@ describe("SettingsPage", () => {
         }),
       }),
     );
+    await waitFor(() => expect(notifySuccessMock).toHaveBeenCalledWith("Saved successfully"));
   });
 
   it("patches rider pay fields from the edit form", async () => {
@@ -74,7 +78,7 @@ describe("SettingsPage", () => {
       if (path === "/master-data/reason-codes") return Promise.resolve({ data: [] });
       return Promise.resolve({ data: { id: "ok" } });
     });
-    renderPage();
+    renderPage("riders");
     await screen.findByText("Ada Rider");
     fireEvent.click(screen.getByRole("button", { name: "Edit pay" }));
     fireEvent.change(screen.getAllByLabelText("Pay model")[1]!, { target: { value: "SALARY" } });
@@ -89,7 +93,7 @@ describe("SettingsPage", () => {
   });
 
   it("creates and deactivates configured exception reasons", async () => {
-    renderPage();
+    renderPage("reason-codes");
     await screen.findByText("No answer");
     fireEvent.change(screen.getByLabelText("Reason code"), { target: { value: "customer short" } });
     fireEvent.change(screen.getByLabelText("English label"), { target: { value: "Customer short-paid" } });
@@ -98,5 +102,12 @@ describe("SettingsPage", () => {
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/master-data/reason-codes", { method: "POST", body: JSON.stringify({ code: "CUSTOMER_SHORT", labelEn: "Customer short-paid", labelMy: "ငွေလျော့ပေး", outcome: "PARTIAL", noteRequired: false }) }));
     fireEvent.click(screen.getByRole("button", { name: "Deactivate NO_ANSWER" }));
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/master-data/reason-codes/reason-1", { method: "PATCH", body: JSON.stringify({ active: false }) }));
+  });
+
+  it("shows one deep-linkable settings workspace at a time", async () => {
+    renderPage("shops");
+    expect(await screen.findByRole("heading", { name: "Online shops" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Riders" })).not.toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Settings sections" })).toBeInTheDocument();
   });
 });

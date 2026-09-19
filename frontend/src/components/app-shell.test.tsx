@@ -16,7 +16,7 @@ vi.mock("@/app/theme", () => ({
 }));
 
 describe("AppShell operations navigation", () => {
-  it("exposes All batches and Dispatch queue as primary nav items", () => {
+  it("exposes the focused operations workspaces as primary nav items", () => {
     render(
       <MemoryRouter>
         <AppShell />
@@ -26,6 +26,7 @@ describe("AppShell operations navigation", () => {
     const nav = screen.getByRole("navigation", { name: "Primary navigation" });
     expect(nav.querySelector('a[href="/operations/batches"]')).toHaveTextContent("All batches");
     expect(nav.querySelector('a[href="/operations/dispatch"]')).toHaveTextContent("Dispatch queue");
+    expect(nav.querySelector('a[href="/operations/returns"]')).toHaveTextContent("Return to OS");
     expect(nav.querySelector('a[href="/operations"]')).toBeNull();
   });
 });

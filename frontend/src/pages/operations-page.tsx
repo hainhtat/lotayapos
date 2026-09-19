@@ -140,17 +140,20 @@ function formatPickupDate(parcel: Parcel) {
   return parcel.batch.label;
 }
 
-export function OperationsPage() {
+export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispatch" | "returns" }) {
   const { t, i18n } = useTranslation();
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const canDispatchEdit = ["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"].includes(user?.role ?? "");
+  const workspaceQueue = workspace === "returns" ? "return-to-os" : "";
   const [filters, setFilters] = useState<Filters>(() => ({
     ...emptyFilters,
+    queue: workspaceQueue,
     ...Object.fromEntries(
       (Object.keys(emptyFilters) as Array<keyof Filters>).map((key) => [key, searchParams.get(key) ?? ""]),
     ),
+    ...(workspaceQueue ? { queue: workspaceQueue } : {}),
   }));
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<string[]>([]);
@@ -211,10 +214,11 @@ export function OperationsPage() {
     const next = Object.fromEntries(
       (Object.keys(emptyFilters) as Array<keyof Filters>).map((key) => [key, searchParams.get(key) ?? ""]),
     ) as Filters;
+    if (workspaceQueue) next.queue = workspaceQueue;
     setFilters((current) =>
       (Object.keys(next) as Array<keyof Filters>).every((key) => current[key] === next[key]) ? current : next,
     );
-  }, [searchParams]);
+  }, [searchParams, workspaceQueue]);
 
   const debouncedTextFilters=useDebouncedValue({trackingNumber:filters.trackingNumber,orderId:filters.orderId,customerName:filters.customerName,township:filters.township},350);
   const queryFilters={...filters,...debouncedTextFilters};
@@ -739,8 +743,8 @@ export function OperationsPage() {
     <div className="mx-auto max-w-[1600px]">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="font-display text-3xl font-bold">{t("dispatchQueue")}</h1>
-          <p className="mt-1 text-sm text-slate-500">{t("dispatchQueueDescription")}</p>
+          <h1 className="font-display text-3xl font-bold">{t(workspace === "returns" ? "returnToOsWorkspace" : "dispatchQueue")}</h1>
+          <p className="mt-1 text-sm text-slate-500">{t(workspace === "returns" ? "returnToOsWorkspaceDescription" : "dispatchQueueDescription")}</p>
         </div>
         <button
           type="button"
@@ -755,9 +759,9 @@ export function OperationsPage() {
         </button>
       </div>
 
-      <nav aria-label={t("dispatchWorkQueues")} className="mt-5 flex flex-wrap gap-2">
+      {workspace === "dispatch" && <nav aria-label={t("dispatchWorkQueues")} className="mt-5 flex flex-wrap gap-2">
         {[["", "all"], ["to-assign", "queueToAssign"], ["with-riders", "queueWithRiders"], ["rescheduled", "queueRescheduled"], ["return-to-os", "queueReturnToOs"], ["overdue", "queueOverdue"]].map(([value, label]) => <button key={value} type="button" aria-pressed={filters.queue === value} onClick={() => { setPage(1); setSelected([]); const next = { ...emptyFilters, batchId: filters.batchId, queue: value }; setFilters(next); setSearchParams(Object.fromEntries(Object.entries(next).filter(([, entry]) => entry)), { replace: true }); }} className={`rounded-lg px-3 py-2 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${filters.queue === value ? "bg-sky-600 text-white" : "bg-white text-slate-600 dark:bg-white/5 dark:text-slate-200"}`}>{t(label)}</button>)}
-      </nav>
+      </nav>}
       {filters.queue === "return-to-os" && <div className="mt-3 flex flex-wrap items-center gap-2"><button type="button" disabled={!returnListEligible} onClick={() => { returnListPreview.refetch(); setReturnListOpen(true); }} className={`${control} font-bold disabled:opacity-40`}><Download size={14} className="mr-1 inline" />{t("generateOsReturnList")}</button>{selected.length > 0 && !returnListEligible && <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("returnListEligibilityHelp")}</p>}</div>}
       {["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "DISPATCHER"].includes(user?.role ?? "") && <button type="button" disabled={!selected.length || selected.length > 50} onClick={() => { confirmReturns.reset(); setReturnOpen(true); }} className={`${control} mt-3 font-bold disabled:opacity-40`}>{t("confirmReturnedToOs")}</button>}
 

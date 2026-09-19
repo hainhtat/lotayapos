@@ -1,6 +1,6 @@
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLocation, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowUpRight, WalletCards, X } from "lucide-react";
 import { OsCashbookOverview } from "@/components/os-cashbook-overview";
@@ -29,7 +29,8 @@ type Wallet = "CASH" | "KBZ_PAY" | "WAVE_PAY";
 const control =
   "rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#1598ef] dark:border-white/10 dark:bg-[#121416]";
 
-function resolveFinanceTab(searchParams: URLSearchParams, hash: string): FinanceTab {
+function resolveFinanceTab(searchParams: URLSearchParams, hash: string, pathname = ""): FinanceTab {
+  if (pathname.endsWith("/settlements")) return "settlements";
   if (searchParams.get("tab") === "settlements") return "settlements";
   if (hash === "#os-settlements" || hash === "#os-pending-returns" || hash === "#rider-outstanding") return "settlements";
   return "overview";
@@ -69,8 +70,9 @@ export function FinancePage() {
   const { t } = useTranslation();
   const { user } = useAuth();
   const location = useLocation();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [tab, setTab] = useState<FinanceTab>(() => resolveFinanceTab(searchParams, location.hash));
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<FinanceTab>(() => resolveFinanceTab(searchParams, location.hash, location.pathname));
   const [filters, setFilters] = useState<LedgerFilters>({ from: "", to: "", account: "" });
   const [draftFilters, setDraftFilters] = useState(filters);
   const [showFilters, setShowFilters] = useState(false);
@@ -95,18 +97,16 @@ export function FinancePage() {
   const hubs = useQuery({ queryKey: ["master-data", "hubs"], queryFn: () => api<{ hubs: Hub[] }>("/master-data").then((response) => response.data.hubs), enabled: user?.role === "SUPERADMIN" });
 
   useEffect(() => {
-    setTab(resolveFinanceTab(searchParams, location.hash));
-  }, [searchParams, location.hash]);
+    setTab(resolveFinanceTab(searchParams, location.hash, location.pathname));
+  }, [searchParams, location.hash, location.pathname]);
 
   const selectTab = (next: FinanceTab) => {
     setTab(next);
     const params = new URLSearchParams(searchParams);
     if (next === "overview") params.delete("tab");
     else params.set("tab", "settlements");
-    setSearchParams(params, { replace: true });
-    if (next === "overview" && (location.hash === "#os-settlements" || location.hash === "#os-pending-returns" || location.hash === "#rider-outstanding")) {
-      window.history.replaceState(null, "", `${location.pathname}${params.toString() ? `?${params}` : ""}`);
-    }
+    const pathname = location.pathname.startsWith("/finance/") ? `/finance/${next === "overview" ? "overview" : "settlements"}` : location.pathname;
+    navigate({ pathname, search: params.toString() ? `?${params}` : "" }, { replace: true });
   };
 
   const walletBalance = (name: string) => currentBalances.data?.find((line) => line.account === name)?.balance ?? 0;

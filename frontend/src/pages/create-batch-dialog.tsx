@@ -7,6 +7,7 @@ import { ApiError, api } from "@/lib/api";
 import { useRef, useState } from "react";
 import { useAuth } from "@/app/auth";
 import { hubBusinessDate } from "@/lib/business-date";
+import { notifySuccess } from "@/lib/notifications";
 
 type Shop = { id: string; name: string };
 type Hub = { id: string; name: string };
@@ -55,7 +56,7 @@ export function CreateBatchDialog({ shops, hubs, onClose }: { shops: Shop[]; hub
   const create = useMutation({
     mutationFn: (values: Values) => { request.current ??= JSON.stringify({ shopId: values.shopId, pickupDate: values.pickupDate, batchName: values.batchName, advancePaid: canPay ? safeAmount(values.requestedAdvance) : 0, wallets: { cash: canPay ? safeAmount(values.cash) : 0, kbzPay: canPay ? safeAmount(values.kbzPay) : 0, wavePay: canPay ? safeAmount(values.wavePay) : 0 }, idempotencyKey: idempotencyKey.current, ...(values.hubId ? { hubId: values.hubId } : {}) }); persistRequest(request.current); return api<CreatedBatch>("/operations/batches", { method: "POST", body: request.current }); },
     onError: error => { sending.current = false; if (error instanceof ApiError && error.status && error.status >= 400 && error.status < 500) { forgetRequest(); request.current = null; idempotencyKey.current = `batch-${crypto.randomUUID()}`; setLocked(false); } else setLocked(true); },
-    onSuccess: async ({ data }) => { forgetRequest(); await Promise.all(["dashboard", "operations-batches", "ledger", "os-accounts"].map(key => queryClient.invalidateQueries({ queryKey: [key] }))); navigate(`/batches/${data.id}`); },
+    onSuccess: async ({ data }) => { forgetRequest(); notifySuccess(t("batchCreated")); await Promise.all(["dashboard", "operations-batches", "ledger", "os-accounts"].map(key => queryClient.invalidateQueries({ queryKey: [key] }))); navigate(`/batches/${data.id}`); },
   });
   return <div className="fixed inset-0 z-30 grid place-items-center overflow-y-auto bg-black/50 p-4"><div role="dialog" aria-modal="true" aria-labelledby="batch-title" className="w-full max-w-2xl rounded-3xl bg-white p-6 text-slate-950 shadow-2xl dark:bg-[#181a1d] dark:text-white">
     <div className="flex items-center justify-between"><div><h2 id="batch-title" className="font-display text-2xl font-bold">{t("createBatch")}</h2><p className="mt-1 text-sm text-slate-500">{t("createBatchDescription")}</p></div><button disabled={locked || create.isPending} aria-label={t("cancel")} onClick={onClose}><X /></button></div>

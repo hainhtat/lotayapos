@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import "@/i18n";
 import { datePresetRange } from "@/lib/date-presets";
 import { manifestStatusList } from "@/lib/manifest-filters";
@@ -10,6 +11,15 @@ const apiMock = vi.hoisted(() => vi.fn());
 const apiRawMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", () => ({ api: apiMock, apiRaw: apiRawMock }));
 vi.mock("@/app/auth", () => ({ useAuth: () => ({ user: { id: "finance-1", role: "FINANCE" } }) }));
+
+function ReportsPageUnderTest({ initialEntry = "/reports" }: { initialEntry?: string }) {
+  return <MemoryRouter initialEntries={[initialEntry]}><ReportsPage /><LocationProbe /></MemoryRouter>;
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <output aria-label="location">{`${location.pathname}${location.search}`}</output>;
+}
 
 describe("ReportsPage", () => {
   beforeEach(() => {
@@ -75,15 +85,23 @@ describe("ReportsPage", () => {
     });
   });
 
+  it("restores a shared report selection from the URL", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReportsPageUnderTest initialEntry="/reports?report=ledger" /></QueryClientProvider>);
+    expect(await screen.findByRole("heading", { name: "Financial report" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Choose a report")).toHaveValue("ledger");
+  });
+
   it("shows operational totals and runs a filtered ledger report", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
-        <ReportsPage />
+        <ReportsPageUnderTest />
       </QueryClientProvider>,
     );
     expect(await screen.findByText("12")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Choose a report"), { target: { value: "ledger" } });
+    expect(screen.getByLabelText("location")).toHaveTextContent("/reports?report=ledger");
     const financialSection = screen.getByRole("heading", { name: "Financial report" }).closest("section")!;
     fireEvent.change(within(financialSection).getByLabelText("From date"), { target: { value: "2026-08-01" } });
     fireEvent.change(within(financialSection).getByLabelText("Account"), { target: { value: "WALLET_CASH" } });
@@ -102,7 +120,7 @@ describe("ReportsPage", () => {
       return Promise.resolve({ data: { accounts: [], entries: [], totalDebit: 0, totalCredit: 0, difference: 0, balanced: true } });
     });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}><ReportsPage /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><ReportsPageUnderTest /></QueryClientProvider>);
 
     const section = await screen.findByText("Rider receipts today");
     const receiptSection = section.closest("section")!;
@@ -114,7 +132,7 @@ describe("ReportsPage", () => {
 
   it("shows a transparent profit breakdown and journal drilldown", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}><ReportsPage /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><ReportsPageUnderTest /></QueryClientProvider>);
 
     fireEvent.change(screen.getByLabelText("Choose a report"), { target: { value: "profit" } });
     expect(await screen.findByRole("heading", { name: "Profit breakdown" })).toBeInTheDocument();
@@ -127,7 +145,7 @@ describe("ReportsPage", () => {
 
   it("switches detailed report tabs and downloads supported CSV", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}><ReportsPage /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><ReportsPageUnderTest /></QueryClientProvider>);
     fireEvent.change(screen.getByLabelText("Choose a report"), { target: { value: "operations" } });
     expect(await screen.findByText("Status transitions")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Returns" }));
@@ -140,7 +158,7 @@ describe("ReportsPage", () => {
 
   it("renders simplified OS account balances without legacy settlement arithmetic", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}><ReportsPage /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><ReportsPageUnderTest /></QueryClientProvider>);
     fireEvent.change(screen.getByLabelText("Choose a report"), { target: { value: "operations" } });
     fireEvent.click(screen.getByRole("tab", { name: "OS statements" }));
     expect(await screen.findByText("Finalized September")).toBeInTheDocument();
@@ -153,7 +171,7 @@ describe("ReportsPage", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
-        <ReportsPage />
+        <ReportsPageUnderTest />
       </QueryClientProvider>,
     );
     fireEvent.change(screen.getByLabelText("Choose a report"), { target: { value: "delivery" } });
@@ -193,7 +211,7 @@ describe("ReportsPage", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
-        <ReportsPage />
+        <ReportsPageUnderTest />
       </QueryClientProvider>,
     );
     fireEvent.change(screen.getByLabelText("Choose a report"), { target: { value: "delivery" } });

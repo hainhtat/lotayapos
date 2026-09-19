@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import { api, apiRaw } from "@/lib/api";
 import { ParcelFieldHistory } from "@/components/parcel-field-history";
+import { BatchWorkspaceSummary } from "@/components/batch-workspace-summary";
 import { useAuth } from "@/app/auth";
 
 type Location = { id: string; code?: string; nameEn: string; nameMy?: string };
@@ -690,48 +691,7 @@ function BatchDetailContent() {
 
   return (
     <div className="mx-auto max-w-[1600px]">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-bold text-[#0787df]">{batch.data?.shop.name}</p>
-          <h1 className="font-display text-3xl font-bold">{batch.data?.label ?? t("batchDetail")}</h1>
-          <p className="mt-2 max-w-2xl text-sm text-slate-500">{t("batchEntryDescription")}</p>
-        </div>
-        <div className="text-right">{!batch.data?.automaticAccounting && (batch.data?.finalizedAt?<span className="rounded-full bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{t("finalized")}</span>:canFinalize&&<button type="button" disabled={!savedParcels.length} onClick={()=>setConfirmFinalize(true)} className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{t("finalizeBatch")}</button>)}</div>
-      </div>
-      <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl border border-black/5 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
-          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{t("savedParcels")}</p>
-          <p className="mt-2 font-display text-2xl font-bold">{savedParcels.length.toLocaleString()}</p>
-        </div>
-        <div className="rounded-2xl border border-black/5 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
-          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{t("totalCodFromOs")}</p>
-          <p className="mt-2 font-display text-2xl font-bold">{(batch.data?.totalCod ?? 0).toLocaleString()} MMK</p>
-        </div>
-        <div className="rounded-2xl border border-black/5 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
-          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{t("totalAdvancePaid")}</p>
-          <p className="mt-2 font-display text-2xl font-bold">{(batch.data?.advancePaid ?? 0).toLocaleString()} MMK</p>
-        </div>
-        <div
-          className={`rounded-2xl border bg-white p-5 shadow-sm dark:bg-[#181a1d] ${
-            remainingToOs < 0
-              ? "border-amber-200 dark:border-amber-900/60"
-              : "border-black/5 dark:border-white/10"
-          }`}
-        >
-          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{t("remainingToOs")}</p>
-          <p
-            className={`mt-2 font-display text-2xl font-bold ${
-              remainingToOs < 0 ? "text-amber-700 dark:text-amber-300" : ""
-            }`}
-          >
-            {batch.data?.balanceError ? "—" : `${remainingToOs.toLocaleString()} MMK`}
-          </p>
-          <p className="mt-2 text-xs text-slate-500">{t("remainingToOsHint")}</p>
-          {batch.data?.balanceError ? <p role="alert" className="mt-2 text-sm text-amber-700">{batch.data.balanceError}</p> : <p className="mt-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
-            {t("batchAccountBreakdown", { cod: (batch.data?.totalCod ?? 0).toLocaleString(), advance: (batch.data?.advancePostedAmount ?? batch.data?.advancePaid ?? 0).toLocaleString(), paid: (batch.data?.paymentPaid ?? 0).toLocaleString(), returns: returnedCod.toLocaleString(), historical: (batch.data?.historicalSettledAmount ?? 0).toLocaleString(), adjustment: (batch.data?.openingAdjustment ?? 0).toLocaleString() })}
-          </p>}
-        </div>
-      </div>
+      <BatchWorkspaceSummary shopName={batch.data?.shop.name} label={batch.data?.label} finalized={!batch.data?.automaticAccounting&&Boolean(batch.data?.finalizedAt)} canFinalize={!batch.data?.automaticAccounting&&canFinalize} parcelCount={savedParcels.length} totalCod={batch.data?.totalCod??0} advancePaid={batch.data?.advancePaid??0} remainingToOs={remainingToOs} balanceError={batch.data?.balanceError} accountBreakdown={t("batchAccountBreakdown",{cod:(batch.data?.totalCod??0).toLocaleString(),advance:(batch.data?.advancePostedAmount??batch.data?.advancePaid??0).toLocaleString(),paid:(batch.data?.paymentPaid??0).toLocaleString(),returns:returnedCod.toLocaleString(),historical:(batch.data?.historicalSettledAmount??0).toLocaleString(),adjustment:(batch.data?.openingAdjustment??0).toLocaleString()})} onFinalize={()=>setConfirmFinalize(true)} />
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex rounded-xl border border-slate-200 p-1 dark:border-white/10">
           <button

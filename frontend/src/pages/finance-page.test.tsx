@@ -34,6 +34,12 @@ describe("FinancePage",()=>{
     return Promise.resolve({data:ledgerReport});
   })});
 
+  it("opens the canonical settlement route on the settlement workspace", async () => {
+    renderPage("/finance/settlements");
+    expect(await screen.findByRole("tab", { name: "OS & riders" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: "OS & riders" })).toBeInTheDocument();
+  });
+
   it("renders wallet cards from ledger balances",async()=>{
     renderPage();
     await waitFor(()=>expect(within(screen.getByText("Cash wallet").parentElement!).getByText("100,000 MMK")).toBeInTheDocument());

@@ -5,6 +5,8 @@ import { api } from "@/lib/api";
 import { ReasonCodesSection } from "./reason-codes-section";
 import { UserAdminSection } from "./user-admin-section";
 import { useAuth } from "@/app/auth";
+import { NavLink } from "react-router-dom";
+import { notifySuccess } from "@/lib/notifications";
 
 type Hub = { id: string; name: string };
 type Shop = { id: string; name: string };
@@ -74,7 +76,17 @@ type Township = {
 const control =
   "rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-[#1598ef] dark:border-white/10 dark:bg-[#121416] dark:text-slate-100";
 
-export function SettingsPage() {
+export type SettingsSection = "locations" | "shops" | "riders" | "reason-codes" | "users";
+
+const settingsSections: Array<{ section: SettingsSection; label: string }> = [
+  { section: "locations", label: "settingsLocations" },
+  { section: "shops", label: "onlineShops" },
+  { section: "riders", label: "riders" },
+  { section: "reason-codes", label: "reasonCodeManagement" },
+  { section: "users", label: "settingsUsers" },
+];
+
+export function SettingsPage({ section = "locations" }: { section?: SettingsSection }) {
   const { t, i18n } = useTranslation();
   const { user } = useAuth();
   const qc = useQueryClient();
@@ -102,6 +114,7 @@ export function SettingsPage() {
       api(`/master-data/${path}`, { method, body: JSON.stringify(body) }),
     onSuccess: async () => {
       setMessage(t("saved", { defaultValue: "Saved" }));
+      notifySuccess(t("saved", { defaultValue: "Saved" }));
       setEditingRiderId(null);
       await qc.invalidateQueries({ queryKey: ["master-data"] });
     },
@@ -115,6 +128,7 @@ export function SettingsPage() {
       }),
     onSuccess: async () => {
       setMessage(t("deliveryFeesUpdated", { count: selectedTownships.length }));
+      notifySuccess(t("deliveryFeesUpdated", { count: selectedTownships.length }));
       setSelectedTownships([]);
       await qc.invalidateQueries({ queryKey: ["locations", "townships"] });
     },
@@ -179,6 +193,9 @@ export function SettingsPage() {
     <div className="mx-auto max-w-[1200px]">
       <h1 className="font-display text-3xl font-bold">{t("settings")}</h1>
       <p className="mt-2 text-slate-500">{t("masterData", { defaultValue: "Operational master data" })}</p>
+      <nav aria-label={t("settingsSections")} className="mt-6 flex gap-2 overflow-x-auto pb-1">
+        {settingsSections.filter((item) => item.section !== "users" || user?.role === "SUPERADMIN").map((item) => <NavLink key={item.section} to={`/settings/${item.section}`} className={({isActive})=>`whitespace-nowrap rounded-xl px-4 py-2 text-sm font-bold ${isActive?"bg-[#eaf6ff] text-[#0787df] dark:bg-[#133044]":"bg-white text-slate-500 hover:bg-slate-50 dark:bg-white/5"}`}>{t(item.label)}</NavLink>)}
+      </nav>
       {message && <p role="status" className="mt-4 rounded-xl bg-[#eaf6ff] p-3 text-sm font-semibold text-[#0787df]">{message}</p>}
       {query.isLoading ? (
         <p className="mt-6">{t("loading")}</p>
@@ -188,7 +205,7 @@ export function SettingsPage() {
         </button>
       ) : (
         <div className="mt-8 grid gap-6 lg:grid-cols-2">
-          <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d]">
+          <section hidden={section !== "locations"} className="rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d] lg:col-span-2">
             <h2 className="font-display text-lg font-bold">{t("hubsAndZones", { defaultValue: "Hubs and zones" })}</h2>
             <div className="mt-4 flex gap-2">
               <input aria-label={t("newHubName")} value={hub} onChange={(e) => setHub(e.target.value)} className={`${control} flex-1`} placeholder={t("newHubName")} />
@@ -241,7 +258,7 @@ export function SettingsPage() {
               ))}
             </ul>
           </section>
-          <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d]">
+          <section hidden={section !== "shops"} className="rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d] lg:col-span-2">
             <h2 className="font-display text-lg font-bold">{t("onlineShops", { defaultValue: "Online shops" })}</h2>
             <div className="mt-4 flex gap-2">
               <input aria-label={t("shopName")} value={shop} onChange={(e) => setShop(e.target.value)} className={`${control} flex-1`} placeholder={t("shopName")} />
@@ -264,7 +281,7 @@ export function SettingsPage() {
               ))}
             </ul>
           </section>
-          <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d] lg:col-span-2">
+          <section hidden={section !== "riders"} className="rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d] lg:col-span-2">
             <h2 className="font-display text-lg font-bold">{t("riders", { defaultValue: "Riders" })}</h2>
             <div className="mt-4 grid gap-2 md:grid-cols-3 xl:grid-cols-4">
               <input aria-label={t("name", { defaultValue: "Name" })} value={rider.name} onChange={(e) => setRider((v) => ({ ...v, name: e.target.value }))} className={control} placeholder={t("name", { defaultValue: "Name" })} />
@@ -420,7 +437,7 @@ export function SettingsPage() {
               ))}
             </div>
           </section>
-          <section className="rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d] lg:col-span-2">
+          <section hidden={section !== "locations"} className="rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d] lg:col-span-2">
             <h2 className="font-display text-lg font-bold">{t("deliveryFeeEditor")}</h2>
             <p className="mt-1 text-sm text-slate-500">{t("deliveryFeeEditorDescription")}</p>
             <div className="mt-4 grid gap-3 md:grid-cols-[2fr_1fr_auto]">
@@ -462,8 +479,8 @@ export function SettingsPage() {
               ))}
             </ul>
           </section>
-          <ReasonCodesSection />
-          {user?.role === "SUPERADMIN" && <UserAdminSection hubs={query.data?.hubs ?? []} />}
+          {section === "reason-codes" && <ReasonCodesSection />}
+          {section === "users" && user?.role === "SUPERADMIN" && <UserAdminSection hubs={query.data?.hubs ?? []} />}
         </div>
       )}
     </div>

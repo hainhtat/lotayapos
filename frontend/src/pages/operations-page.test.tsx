@@ -43,11 +43,25 @@ function renderPage(initialEntry = "/operations/dispatch") {
   );
 }
 
+function renderReturnsPage() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<MemoryRouter initialEntries={["/operations/returns"]}><QueryClientProvider client={queryClient}><OperationsPage workspace="returns" /></QueryClientProvider></MemoryRouter>);
+}
+
 describe("OperationsPage", () => {
   beforeEach(() => {
     authState.role = "OPERATIONS_MANAGER";
     apiMock.mockReset();
     apiRawMock.mockReset();
+  });
+
+  it("opens the dedicated returns workspace with the server return queue locked in", async () => {
+    mockParcelList([]);
+    apiMock.mockResolvedValue({ data: [] });
+    renderReturnsPage();
+    expect(screen.getByRole("heading", { name: "Return to OS" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Dispatch work queues" })).not.toBeInTheDocument();
+    await waitFor(() => expect(apiRawMock).toHaveBeenCalledWith(expect.stringMatching(/^\/parcels\?queue=return-to-os/)));
   });
 
   it("uses server queues for rescheduled and overdue parcels without hiding assigned overdue work", async () => {

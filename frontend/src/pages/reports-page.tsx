@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Download, FileBarChart, PackageCheck, RotateCcw, TrendingUp, Wallet } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@/app/auth";
 import { DeliveryStatusPanel, type ManifestPreviewData } from "@/components/delivery-status-panel";
 import { DetailedReportsPanel } from "@/components/detailed-reports-panel";
@@ -67,7 +68,10 @@ const chip = (active: boolean) =>
 export function ReportsPage() {
   const { t } = useTranslation();
   const { user } = useAuth();
-  const [reportView, setReportView] = useState<ReportView>("overview");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const reportParam = searchParams.get("report");
+  const initialReport: ReportView = ["overview", "profit", "operations", "delivery", "ledger"].includes(reportParam ?? "") ? reportParam as ReportView : "overview";
+  const [reportView, setReportView] = useState<ReportView>(initialReport);
   const [draft, setDraft] = useState({ from: "", to: "", account: "" });
   const [filters, setFilters] = useState(draft);
   const [riderIds, setRiderIds] = useState<string[]>([]);
@@ -77,6 +81,17 @@ export function ReportsPage() {
   const [dateTo, setDateTo] = useState("");
   const [profitDraft, setProfitDraft] = useState({ from: today(), to: today(), hubId: "" });
   const [profitFilters, setProfitFilters] = useState(profitDraft);
+  useEffect(() => {
+    const next = searchParams.get("report");
+    if (next && ["overview", "profit", "operations", "delivery", "ledger"].includes(next)) setReportView(next as ReportView);
+  }, [searchParams]);
+  const selectReport = (next: ReportView) => {
+    setReportView(next);
+    const params = new URLSearchParams(searchParams);
+    if (next === "overview") params.delete("report");
+    else params.set("report", next);
+    setSearchParams(params, { replace: true });
+  };
   const qs = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString();
   const overview = useQuery({ queryKey: ["report-overview"], queryFn: () => api<Overview>("/master-data/dashboard").then((r) => r.data) });
   const canViewRiderReceipts=["SUPERADMIN","FINANCE","OPERATIONS_MANAGER"].includes(user?.role??"");
@@ -141,7 +156,7 @@ export function ReportsPage() {
       <p className="mt-2 text-slate-500">{t("reportsDescription")}</p>
       <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
         <label className="text-sm font-bold" htmlFor="report-view">{t("reportType")}</label>
-        <select id="report-view" value={reportView} onChange={(event) => setReportView(event.target.value as ReportView)} className={`${control} mt-2 w-full sm:max-w-sm`}>
+        <select id="report-view" value={reportView} onChange={(event) => selectReport(event.target.value as ReportView)} className={`${control} mt-2 w-full sm:max-w-sm`}>
           <option value="overview">{t("reportOverview")}</option>
           {canViewProfit && <option value="profit">{t("profitBreakdown")}</option>}
           {canViewProfit && <option value="operations">{t("operationalReports")}</option>}
