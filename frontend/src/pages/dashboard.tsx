@@ -17,6 +17,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { CreateBatchDialog } from "./create-batch-dialog";
 import { useAuth } from "@/app/auth";
+import { AnimatedNumber } from "@/components/animated-number";
 
 type MasterData = { hubs: Array<{ id: string; name: string }>; shops: Array<{ id: string; name: string }> };
 type Batch = { id: string; label: string; pickupDate: string; shop: { name: string }; parcels: Array<{ status: string }> };
@@ -50,6 +51,14 @@ type Metric = {
   icon: ComponentType<{ className?: string; size?: number }>;
   to?: string;
   tone?: "default" | "warning" | "danger";
+};
+
+const priorityMetricKeys: Record<string, string[]> = {
+  SUPERADMIN: ["riderOutstandingTotal", "unsettledOsBatches", "overdueUnsent", "deliveryAlerts"],
+  OPERATIONS_MANAGER: ["overdueUnsent", "returnsDue", "deliveryAlerts", "riderOutstandingTotal"],
+  FINANCE: ["riderOutstandingTotal", "outstandingToOs", "walletBalances", "unsettledOsBatches"],
+  DISPATCHER: ["overdueUnsent", "totalParcels", "delivered", "returnsDue"],
+  AUDITOR: ["outstandingToOs", "walletBalances", "riderOutstandingTotal", "delivered"],
 };
 
 function normalizeOverview(value: Overview | { data: Overview }): Overview {
@@ -143,6 +152,20 @@ export function Dashboard() {
       to: "/finance",
     },
   ];
+  const priorityKeys = priorityMetricKeys[user?.role ?? ""] ?? priorityMetricKeys.SUPERADMIN;
+  const priorityMetrics = priorityKeys.map((key) => metrics.find((metric) => metric.key === key)).filter((metric): metric is Metric => Boolean(metric));
+  const secondaryMetrics = metrics.filter((metric) => !priorityKeys.includes(metric.key));
+  const metricCard = ({ key, value, detail, icon: Icon, to, tone }: Metric, index: number) => <button
+    key={key}
+    onClick={() => to && navigate(to)}
+    style={{ animationDelay: `${Math.min(index, 3) * 55}ms` }}
+    className={`data-reveal rounded-2xl border bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1598ef] dark:bg-[#181a1d] ${tone === "danger" ? "border-rose-200 dark:border-rose-900/60" : tone === "warning" ? "border-amber-200 dark:border-amber-900/60" : "border-black/5 dark:border-white/10"}`}
+  >
+    <Icon size={21} className={tone === "danger" ? "text-rose-500" : tone === "warning" ? "text-amber-500" : "text-[#1598ef]"} />
+    <p className="mt-5 text-sm text-slate-500 dark:text-slate-400">{t(key)}</p>
+    <p className="mt-1 text-2xl font-bold tabular-nums sm:text-3xl">{typeof value === "number" ? <AnimatedNumber value={value} locale={locale} /> : value}</p>
+    {detail && <p className="mt-2 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{detail}</p>}
+  </button>;
 
   return (
     <div className="mx-auto max-w-[1400px]">
@@ -150,19 +173,11 @@ export function Dashboard() {
         <div><h1 className="font-display text-3xl font-bold lg:text-4xl">{t("welcome")}</h1><p className="mt-2 text-slate-500 dark:text-slate-400">{t("overview")}</p></div>
         {["SUPERADMIN","OPERATIONS_MANAGER","DISPATCHER"].includes(user?.role??"")&&<button onClick={() => setShowCreate(true)} className="rounded-xl bg-[#1598ef] px-4 py-3 text-sm font-bold text-white">+ {t("createBatch")}</button>}
       </div>
-      {overview.isLoading ? <p role="status" className="rounded-2xl bg-white p-8 text-center text-sm text-slate-500 shadow-sm dark:bg-[#181a1d]">{t("loadingOverview")}</p> : overview.isError ? <div role="alert" className="rounded-2xl border border-rose-200 bg-white p-8 text-center dark:border-rose-900/60 dark:bg-[#181a1d]"><p className="font-semibold text-rose-700 dark:text-rose-300">{t("overviewLoadError")}</p><button className="mt-4 rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white" onClick={() => void overview.refetch()}>{t("retry")}</button></div> : <>
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {metrics.map(({ key, value, detail, icon: Icon, to, tone }) => <button
-            key={key}
-            onClick={() => to && navigate(to)}
-            className={`rounded-2xl border bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1598ef] dark:bg-[#181a1d] ${tone === "danger" ? "border-rose-200 dark:border-rose-900/60" : tone === "warning" ? "border-amber-200 dark:border-amber-900/60" : "border-black/5 dark:border-white/10"}`}
-          >
-            <Icon size={21} className={tone === "danger" ? "text-rose-500" : tone === "warning" ? "text-amber-500" : "text-[#1598ef]"} />
-            <p className="mt-5 text-sm text-slate-500 dark:text-slate-400">{t(key)}</p>
-            <p className="mt-1 text-2xl font-bold sm:text-3xl">{value}</p>
-            {detail && <p className="mt-2 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{detail}</p>}
-          </button>)}
-        </div>
+      {overview.isLoading ? <div role="status" aria-label={t("loadingOverview")} className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{Array.from({length:4},(_,index)=><div key={index} className="h-40 animate-pulse rounded-2xl bg-slate-200/70 dark:bg-white/10" />)}</div> : overview.isError ? <div role="alert" className="rounded-2xl border border-rose-200 bg-white p-8 text-center dark:border-rose-900/60 dark:bg-[#181a1d]"><p className="font-semibold text-rose-700 dark:text-rose-300">{t("overviewLoadError")}</p><button className="mt-4 rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white" onClick={() => void overview.refetch()}>{t("retry")}</button></div> : <>
+        <section aria-labelledby="attention-heading">
+          <div className="mb-3 flex items-center justify-between"><h2 id="attention-heading" className="font-display text-lg font-bold">{t("needsAttention")}</h2><span className="text-xs text-slate-500">{t("rolePrioritized")}</span></div>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{priorityMetrics.map(metricCard)}</div>
+        </section>
 
         <div className="mt-6 grid gap-6 xl:grid-cols-[1.4fr_1fr]">
           <section className="rounded-2xl border border-black/5 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
@@ -180,6 +195,10 @@ export function Dashboard() {
             <button onClick={() => navigate("/finance")} className="mt-7 inline-flex items-center gap-2 text-sm font-bold text-[#4db7ff]">{t("viewFinanceDetails")} <Clock3 size={15} /></button>
           </section>
         </div>
+        <details className="mt-6 rounded-2xl border border-black/5 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
+          <summary className="cursor-pointer font-display font-bold">{t("moreOverviewMetrics")}</summary>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{secondaryMetrics.map(metricCard)}</div>
+        </details>
       </>}
       {showCreate && ["SUPERADMIN","OPERATIONS_MANAGER","DISPATCHER"].includes(user?.role??"") && <CreateBatchDialog shops={masters.data?.shops ?? []} hubs={masters.data?.hubs ?? []} onClose={() => setShowCreate(false)} />}
     </div>

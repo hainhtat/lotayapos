@@ -55,6 +55,7 @@ type ProfitReport = {
     lines: Array<{ id: string; account: string; debit: number; credit: number }>;
   }>;
 };
+type ReportView = "overview" | "profit" | "operations" | "delivery" | "ledger";
 
 const today = () => hubBusinessDate();
 const money = (value: number) => `${value.toLocaleString()} MMK`;
@@ -66,6 +67,7 @@ const chip = (active: boolean) =>
 export function ReportsPage() {
   const { t } = useTranslation();
   const { user } = useAuth();
+  const [reportView, setReportView] = useState<ReportView>("overview");
   const [draft, setDraft] = useState({ from: "", to: "", account: "" });
   const [filters, setFilters] = useState(draft);
   const [riderIds, setRiderIds] = useState<string[]>([]);
@@ -137,6 +139,18 @@ export function ReportsPage() {
     <div className="mx-auto max-w-[1400px]">
       <h1 className="font-display text-3xl font-bold">{t("reports")}</h1>
       <p className="mt-2 text-slate-500">{t("reportsDescription")}</p>
+      <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
+        <label className="text-sm font-bold" htmlFor="report-view">{t("reportType")}</label>
+        <select id="report-view" value={reportView} onChange={(event) => setReportView(event.target.value as ReportView)} className={`${control} mt-2 w-full sm:max-w-sm`}>
+          <option value="overview">{t("reportOverview")}</option>
+          {canViewProfit && <option value="profit">{t("profitBreakdown")}</option>}
+          {canViewProfit && <option value="operations">{t("operationalReports")}</option>}
+          <option value="delivery">{t("dailyDeliveryStatus")}</option>
+          <option value="ledger">{t("financialReport")}</option>
+        </select>
+        <p className="mt-2 text-xs text-slate-500">{t("reportPickerDescription")}</p>
+      </section>
+      {reportView === "overview" && <>
       {overview.isLoading ? (
         <p className="mt-8">{t("loading")}</p>
       ) : overview.isError ? (
@@ -156,8 +170,9 @@ export function ReportsPage() {
       )}
 
       {canViewRiderReceipts&&<section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#181a1d]"><h2 className="font-display text-base font-bold">{t("riderReceiptsToday")}</h2><dl className="mt-3 grid gap-3 sm:grid-cols-3">{(["cash","kbzPay","wavePay"] as const).map(wallet=><div key={wallet} className="rounded-xl bg-slate-50 p-3 dark:bg-white/5"><dt className="text-xs font-semibold text-slate-500">{t(wallet)}</dt><dd className="mt-1 font-bold">{(dailyWallets[wallet]??0).toLocaleString()} MMK</dd></div>)}</dl></section>}
+      </>}
 
-      {canViewProfit && (
+      {reportView === "profit" && canViewProfit && (
         <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d]">
           <div className="flex items-center gap-3">
             <TrendingUp className="text-[#1598ef]" />
@@ -245,9 +260,9 @@ export function ReportsPage() {
         </section>
       )}
 
-      {canViewProfit && <DetailedReportsPanel />}
+      {reportView === "operations" && canViewProfit && <DetailedReportsPanel />}
 
-      <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d]">
+      {reportView === "delivery" && <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d]">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="font-display text-lg font-bold">{t("dailyDeliveryStatus")}</h2>
@@ -313,9 +328,9 @@ export function ReportsPage() {
         <div className="mt-5">
           <DeliveryStatusPanel preview={delivery.data} loading={delivery.isLoading} error={delivery.isError} onRetry={() => void delivery.refetch()} />
         </div>
-      </section>
+      </section>}
 
-      <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d]">
+      {reportView === "ledger" && <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d]">
         <div className="flex items-center gap-3">
           <FileBarChart className="text-[#1598ef]" />
           <div>
@@ -374,7 +389,7 @@ export function ReportsPage() {
             </table>
           )}
         </div>
-      </section>
+      </section>}
     </div>
   );
 }

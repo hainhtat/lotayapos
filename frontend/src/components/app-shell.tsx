@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   BarChart3,
   Bell,
@@ -46,7 +46,7 @@ function MobileNav({ role }: { role?: string }) {
   return (
     <nav
       aria-label={t("mobileNavigation")}
-      className="fixed inset-x-0 bottom-0 z-40 flex justify-around border-t bg-white dark:border-white/10 dark:bg-[#181a1d] lg:hidden"
+      className="fixed inset-x-0 bottom-0 z-40 flex justify-around overflow-x-auto border-t bg-white px-1 dark:border-white/10 dark:bg-[#181a1d] lg:hidden"
     >
       {linksForRole(mobileLinks,role).map(({ to, label, icon: Icon }) => (
         <NavLink
@@ -54,10 +54,10 @@ function MobileNav({ role }: { role?: string }) {
           to={to}
           end={to === "/"}
           aria-label={t(label)}
-          className={({ isActive }) => `grid min-h-14 place-items-center ${isActive ? "text-[#0787df]" : "text-slate-500"}`}
+          className={({ isActive }) => `grid min-h-16 min-w-14 flex-1 place-items-center gap-0.5 px-1 text-[10px] font-semibold ${isActive ? "text-[#0787df]" : "text-slate-500"}`}
         >
           <Icon size={19} />
-          <span className="sr-only">{t(label)}</span>
+          <span className="max-w-16 truncate">{t(label)}</span>
         </NavLink>
       ))}
     </nav>
@@ -68,6 +68,7 @@ export function AppShell() {
   const { t, i18n } = useTranslation();
   const { user, logout } = useAuth();
   const { mode, toggle } = useTheme();
+  const location = useLocation();
   const canSeeAlerts = ["SUPERADMIN", "OPERATIONS_MANAGER"].includes(user?.role ?? "");
   return (
     <div className="min-h-screen bg-[#f6f7f9] text-[#101318] dark:bg-[#111315] dark:text-white">
@@ -141,7 +142,9 @@ export function AppShell() {
           </div>
         </header>
         <div className="p-6 lg:p-10">
-          <Outlet />
+          <div key={location.pathname} className="page-transition">
+            <Outlet />
+          </div>
         </div>
       </main>
     </div>

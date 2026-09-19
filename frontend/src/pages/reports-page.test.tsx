@@ -83,7 +83,8 @@ describe("ReportsPage", () => {
       </QueryClientProvider>,
     );
     expect(await screen.findByText("12")).toBeInTheDocument();
-    const financialSection = screen.getByText("Financial report").closest("section")!;
+    fireEvent.change(screen.getByLabelText("Choose a report"), { target: { value: "ledger" } });
+    const financialSection = screen.getByRole("heading", { name: "Financial report" }).closest("section")!;
     fireEvent.change(within(financialSection).getByLabelText("From date"), { target: { value: "2026-08-01" } });
     fireEvent.change(within(financialSection).getByLabelText("Account"), { target: { value: "WALLET_CASH" } });
     fireEvent.click(within(financialSection).getByRole("button", { name: "Run report" }));
@@ -115,7 +116,8 @@ describe("ReportsPage", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><ReportsPage /></QueryClientProvider>);
 
-    expect(await screen.findByText("Profit breakdown")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Choose a report"), { target: { value: "profit" } });
+    expect(await screen.findByRole("heading", { name: "Profit breakdown" })).toBeInTheDocument();
     expect(await screen.findByText("30,000 MMK")).toBeInTheDocument();
     expect(screen.getByText("29,000 MMK")).toBeInTheDocument();
     fireEvent.click(screen.getByText(/Delivery fees/));
@@ -126,6 +128,7 @@ describe("ReportsPage", () => {
   it("switches detailed report tabs and downloads supported CSV", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><ReportsPage /></QueryClientProvider>);
+    fireEvent.change(screen.getByLabelText("Choose a report"), { target: { value: "operations" } });
     expect(await screen.findByText("Status transitions")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Returns" }));
     expect(await screen.findByText("TRK-RETURN")).toBeInTheDocument();
@@ -138,6 +141,7 @@ describe("ReportsPage", () => {
   it("renders simplified OS account balances without legacy settlement arithmetic", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><ReportsPage /></QueryClientProvider>);
+    fireEvent.change(screen.getByLabelText("Choose a report"), { target: { value: "operations" } });
     fireEvent.click(screen.getByRole("tab", { name: "OS statements" }));
     expect(await screen.findByText("Finalized September")).toBeInTheDocument();
     expect(screen.getAllByText("30,000 MMK").length).toBeGreaterThan(0);
@@ -152,7 +156,8 @@ describe("ReportsPage", () => {
         <ReportsPage />
       </QueryClientProvider>,
     );
-    expect(await screen.findByText("Daily delivery status")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Choose a report"), { target: { value: "delivery" } });
+    expect(await screen.findByRole("heading", { name: "Daily delivery status" })).toBeInTheDocument();
     expect(await screen.findByText("LTY-001")).toBeInTheDocument();
     await waitFor(() => {
       const call = apiMock.mock.calls.find(([path]) => path === "/operations/parcels/manifest/preview");
@@ -191,6 +196,7 @@ describe("ReportsPage", () => {
         <ReportsPage />
       </QueryClientProvider>,
     );
+    fireEvent.change(screen.getByLabelText("Choose a report"), { target: { value: "delivery" } });
     fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
     await waitFor(() => {
       const previewCalls = apiMock.mock.calls.filter(([path]) => path === "/operations/parcels/manifest/preview");

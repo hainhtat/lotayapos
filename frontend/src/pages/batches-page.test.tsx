@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import "@/i18n";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import i18n from "@/i18n";
 import { BatchesPage } from "./batches-page";
 
 const apiMock = vi.hoisted(() => vi.fn());
@@ -27,6 +27,7 @@ describe("BatchesPage", () => {
     apiMock.mockReset();
     authState.role="OPERATIONS_MANAGER";
   });
+  afterEach(async () => { await i18n.changeLanguage("en"); });
 
   it("filters overdue returns and records a reasoned extension",async()=>{
     apiMock.mockImplementation((path:string,init?:RequestInit)=>{
@@ -161,6 +162,28 @@ describe("BatchesPage", () => {
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/operations/batches", expect.objectContaining({method:"POST"})));
     const body = JSON.parse(apiMock.mock.calls.find(([path]) => path === "/operations/batches")![1].body);
     expect(body).toMatchObject({advancePaid:80000, wallets:{cash:60000,kbzPay:0,wavePay:0}});
+  });
+
+  it("shows OS credit and the remaining wallet amount in Myanmar for operations managers", async () => {
+    authState.role = "OPERATIONS_MANAGER";
+    await i18n.changeLanguage("my");
+    apiMock.mockImplementation((path: string) => path === "/master-data"
+      ? Promise.resolve({data:{shops:[{id:"shop",name:"Shop"}],hubs:[{id:"hub",name:"Hub"}]}})
+      : path.startsWith("/finance/os-accounts?") ? Promise.resolve({data:{shops:[{shop:{id:"shop"},creditAvailable:20000}]}})
+      : Promise.resolve({data:[]}));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", {name:"ဘတ်ချ်အသစ် ဖန်တီးရန်"}));
+    const dialog = await screen.findByRole("dialog", {name:"ဘတ်ချ်ဖန်တီးမည်"});
+    fireEvent.change(within(dialog).getByLabelText("အွန်လိုင်းဆိုင်"), {target:{value:"shop"}});
+    fireEvent.change(within(dialog).getByLabelText("တောင်းဆိုထားသော ကြိုပေးငွေ စုစုပေါင်း"), {target:{value:"80000"}});
+
+    await waitFor(() => expect(dialog).toHaveTextContent("ရရှိနိုင်သော OS ခရက်ဒစ်: 20,000 mmk"));
+    expect(dialog).toHaveTextContent("အသုံးပြုမည့် OS ခရက်ဒစ်: 20,000 mmk");
+    expect(dialog).toHaveTextContent("ပိုက်ဆံအိတ်များမှ ပေးရန်ကျန်ငွေ: 60,000 mmk");
+    expect(within(dialog).getByLabelText("ငွေသား")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("KBZ Pay")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Wave Pay")).toBeInTheDocument();
   });
 
   it("filters History on the server and hides redundant single shop and hub filters", async () => {

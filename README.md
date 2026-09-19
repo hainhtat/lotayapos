@@ -1,257 +1,265 @@
-# Lotaya POS
+<div align="center">
+  <img src="brand%20identity/PNG/LOGO%202%20PNG/Asset%2015.png" alt="Lotaya" width="360" />
 
-**Internal COD delivery ERP** for Myanmar last-mile operations — pickup advances, rider dispatch, evening settlement, and a strict double-entry ledger.
+  <h1>Delivery operations, dispatch, and finance—in one place.</h1>
 
-English + Myanmar. Integer MMK only. Corrections via reversals, never silent edits.
+  <p>
+    Lotaya is an internal ERP and rider app for running a high-trust<br />
+    cash-on-delivery delivery business in Myanmar.
+  </p>
 
-```
-  OS pickup ──► Hub advance ──► Rider delivery ──► Customer COD
-       ▲              │                │                 │
-       │              ▼                ▼                 ▼
-  OS settlement   Ledger         Dispatch Queue      Rider app
-                  (balanced)     Manifests / PDF     Outcomes
-```
-
----
-
-## What it is
-
-Lotaya runs a **high-trust cash-on-delivery** shop: the company advances COD to Online Shops (OS) at pickup, riders collect COD and delivery fees from customers, then Finance settles riders and OS through wallets (Cash, KBZ Pay, Wave Pay).
-
-The ERP is the operational and financial source of truth. Dispatchers and ops can correct parcel status from the web; riders only see their assigned work. Every money and status change is attributable, timestamped, and reversible.
-
-**Phase 1 is internal.** Customer tracking, walk-in POS, GPS routing, and public OS portals are later phases.
-
-Phase 1 supports one Lotaya organization per deployment. Hub scoping separates
-operational access inside that organization; this release is not a shared
-multi-tenant SaaS deployment.
+  <p>
+    <img alt="Release" src="https://img.shields.io/badge/release-0.3.0-1598ef?style=flat-square" />
+    <img alt="Web" src="https://img.shields.io/badge/web-React%20%2B%20TypeScript-12b76a?style=flat-square" />
+    <img alt="API" src="https://img.shields.io/badge/API-Express%20%2B%20Prisma-7c3aed?style=flat-square" />
+    <img alt="Mobile" src="https://img.shields.io/badge/mobile-Expo-f59e0b?style=flat-square" />
+    <img alt="Languages" src="https://img.shields.io/badge/languages-English%20%7C%20Myanmar-e84c8b?style=flat-square" />
+    <img alt="License" src="https://img.shields.io/badge/license-private-334155?style=flat-square" />
+  </p>
+</div>
 
 ---
 
-## Three apps
+## What is Lotaya?
 
-| App | Who | Stack |
-| --- | --- | --- |
-| **ERP** (`frontend/`) | Superadmin, Ops, Dispatcher, Finance, Auditor | Vite, React, TypeScript, TanStack Query, shadcn/ui |
-| **API** (`backend/`) | All clients | Express, Prisma, JWT · SQLite local · PostgreSQL production |
-| **Rider** (`mobile/`) | Riders | Expo, Expo Router, React Native |
+Lotaya helps a delivery team follow every parcel—and every kyat—from pickup to final settlement.
 
----
+The business advances cash-on-delivery (COD) money to an Online Shop when parcels are collected. Riders then deliver those parcels, collect money from customers, and settle with the hub. Lotaya connects those operational steps to a strict double-entry ledger so Dispatch, Operations, Finance, and management see the same story.
 
-## Features
+In practical terms, the system answers questions such as:
 
-### Operations
+- Which parcels still need a rider?
+- What is physically with each rider right now?
+- How much should a rider return at the end of the day?
+- Which rejected parcels must go back to an Online Shop?
+- How much does the company owe an Online Shop—or have available as credit?
+- Which wallet actually received or paid the money?
 
-- **All Batches** — one batch per OS + pickup date (label like `snmd 15.08.2026`). Remaining / delivered / pending-return counts, alerts.
-- **Spreadsheet parcel entry** — paste or type rows; region first, then all townships in that region; district auto-fills. Delivery fees come from township master data.
-- **Form entry** — one-parcel modal with Next (keep adding). Switch modes without losing the draft.
-- **OS manifest PDF import** — local text extract only (no cloud OCR). Preview, then confirm into the grid. 10 MB / 50 pages / 500 rows.
-- **Dispatch Queue** — dense POS-style table: OS Order ID first, tracking secondary. Multi-select, bulk assign, inline rider/status, Partial Return, link same-address parcels.
-- **Manifests** — on-screen preview + PDF with embedded Myanmar font. Filter by rider, status, and **status activity date**.
+> [!IMPORTANT]
+> Lotaya is an **internal operations system**, not a public parcel-tracking or walk-in POS product. Customer tracking, live GPS routing, payment gateways, payroll, and an Online Shop self-service portal are outside Phase 1.
 
-### Parcel lifecycle
+## A quick look
+
+### Operations overview
+
+Daily parcel counts, rider settlement exposure, OS balances, wallet positions, return queues, alerts, and net profit are visible at a glance.
+
+![Lotaya ERP dashboard](docs/screenshots/dashboard.jpg)
+
+### Dispatch queue
+
+Dispatchers can search, filter, bulk-select, assign riders, correct statuses, reschedule deliveries, link same-address parcels, and generate manifests from one dense workspace.
+
+![Lotaya dispatch queue](docs/screenshots/dispatch-queue.jpg)
+
+### Finance workspace
+
+Finance can reconcile Online Shop balances, rider collections, Cash, KBZ Pay, and Wave Pay while retaining balanced journals and a complete audit trail.
+
+![Lotaya finance workspace](docs/screenshots/finance.jpg)
+
+## How a parcel moves through Lotaya
 
 ```mermaid
 flowchart LR
-  CREATED --> PICKED_UP --> ASSIGNED --> OFD[OUT_FOR_DELIVERY]
-  OFD --> DELIVERED
-  OFD --> PARTIAL
-  OFD --> FAILED
-  OFD --> REJECTED
-  PARTIAL --> PENDING_RETURN
-  FAILED --> PENDING_RETURN
-  REJECTED --> PENDING_RETURN
-  PENDING_RETURN --> RETURNED
+  A[Online Shop pickup] --> B[Batch & advance]
+  B --> C[Assign rider]
+  C --> D[Out for delivery]
+  D --> E[Delivered]
+  D --> F[Partial / failed / rejected]
+  F --> G[Pending return]
+  G --> H[Returned to shop]
+  E --> I[Rider settlement]
+  H --> J[OS credit]
+  I --> K[Cashbook & reports]
+
+  style A fill:#e8f5ff,stroke:#1598ef,color:#0f172a
+  style E fill:#e8fff3,stroke:#12b76a,color:#0f172a
+  style F fill:#fff4e5,stroke:#f59e0b,color:#0f172a
+  style H fill:#fce7f3,stroke:#e84c8b,color:#0f172a
+  style K fill:#f1eafe,stroke:#7c3aed,color:#0f172a
 ```
 
-- Superadmin / Operations Manager / Dispatcher may set any status from Dispatch Queue (with history).
-- Riders only post permitted delivery outcomes on **their** assigned parcels.
-- Partial / Failed / Rejected require reason codes. Reschedule reasons raise **DATE_CHANGE** alerts.
-- Partial Return requires **Actual COD Collected**; shortfall posts to the OS settlement path.
-- Pending Return defaults to **four calendar days** (hub timezone); extensions are audited.
-- Linked parcels at the same address: first parcel pays the township fee; each extra adds **1,000 MMK**. Commission uses the group fee only when **every** member is `DELIVERED`.
+Every status change records who made it, when it happened, and why. Financial corrections are made with reversals or compensating entries—never by silently rewriting posted history.
 
-### Finance & ledger
+## What is included
 
-- **Integer money** (MMK kyats). Balanced journals. Duplicate business events rejected.
-- **Pickup advance** — one `BATCH_PICKUP_ADVANCE` per batch (re-post after reversal with a versioned source id).
-- **Wallets** — Cash, KBZ Pay, Wave Pay. No single-sided transfers.
-- **OS settlement** — draft → preview → post. COD coverage check. Returned / cancelled parcels contribute returned-advance. History + reversal.
-- **OS pending returns** — Finance **Received** confirms return-to-OS (`FAILED` / `REJECTED` / `PENDING_RETURN` / `PARTIAL`) and stages recovery. Cash still moves on OS settlement, not on receive.
-- **Rider settlement** — expected remittance  
-  `COD + fees − commission − daily salary share`  
-  Split across wallets. `DELIVERED` creates a **receivable**; it is **not** proof the hub already has the cash.
-- **Cashbook day-close** — variance reason/approval, lock, Superadmin reopen with audit.
-- **Guards** — `409 MONEY_POSTED` if you leave `DELIVERED`/`PARTIAL` while money journals are live; `409 ADVANCE_POSTED` if you edit COD/township after an unreversed batch advance.
-
-### Riders
-
-Pay model is **per rider**:
-
-| Model | Compensation |
+| Area | What the team can do |
 | --- | --- |
-| `PERCENTAGE` | % of delivery fees on `DELIVERED` ways that day |
-| `SALARY` | Monthly salary; daily `floor(salary / daysInMonth)` deducted at settlement; **no** commission |
-| `SALARY_PLUS_PERCENTAGE` | Salary + percentage commission |
+| **Batches & parcels** | Create one pickup batch per shop/date, paste parcel rows, import manifest PDFs, search by tracking number or OS Order ID, and review batch totals. |
+| **Dispatch** | Bulk assign, record physical handover, reschedule, correct parcel outcomes, link same-address parcels, and export Myanmar-capable PDF manifests. |
+| **Rider app** | View assigned work, filter by township, call customers, record delivery outcomes and reasons, and see the outstanding settlement amount. |
+| **Returns** | Track failed, partial, rejected, and pending-return parcels with four-day timers, audited extensions, and return handover documents. |
+| **Finance** | Record pickup advances, settle riders and Online Shops, move money between wallets, reverse mistakes, and close each cashbook day. |
+| **Reports** | Review delivery activity, rider collections, OS accounts, ledger entries, profitability, and operational exceptions. |
+| **Administration** | Manage hubs, shops, zones, riders, users, reason codes, pay models, permissions, language, and theme. |
 
-Failed / rejected / returned / partial ways earn **zero** commission.
+### Roles
 
-**Rider app:** assigned list (OS Order ID first), township filter/sort, tap-to-call, outcomes with reasons, Partial Return actual COD, linked-group grouping, outstanding balance, English/Myanmar, light/dark.
-
-### Identity & access
-
-| Role | Typical work |
+| Role | Main responsibility |
 | --- | --- |
-| Superadmin | Users, hubs, reversals, org-wide reports |
-| Operations Manager | Batches, parcels, zones, exceptions, return extensions |
-| Dispatcher | Import, assign, manifests, status corrections |
-| Finance | Advances, OS/rider settlements, cashbook |
-| Rider | Own assignments and allowed outcomes |
-| Auditor | Read ledger, reports, history |
+| **Superadmin** | Organization-wide configuration, users, reversals, and reports |
+| **Operations Manager** | Batches, parcels, zones, exceptions, and return decisions |
+| **Dispatcher** | Parcel entry, rider assignment, status correction, and manifests |
+| **Finance** | Advances, rider/OS settlement, wallets, and day-close |
+| **Rider** | Assigned parcels and permitted delivery outcomes only |
+| **Auditor** | Read-only access to ledger, reports, and history |
 
-Login: **username or email** + password. Admin-created users (no public signup). Server-side authz, hub scope, rate-limited login. Password reset is admin-only today.
+Permissions are enforced by the API and scoped by hub. Hiding a button in the UI is not treated as authorization.
 
-### Localization & UI
+## The three applications
 
-- English / Myanmar on ERP, API messages, and rider app.
-- Light / dark / system themes.
-- Myanmar text on dispatch PDFs (Noto Sans Myanmar).
-
----
-
-## What Phase 1 does **not** include
-
-Customer-facing tracking · payment gateways · live GPS / route optimization · sticker/barcode printing · payroll/tax · OS self-service portal · walk-in counter sales.
-
-Those are later phases. Do not treat them as shipped.
-
----
-
-## Repository
-
-```
+```text
 lotaya-pos/
-├── backend/     Express API, Prisma, ledger, manifests
-├── frontend/    Vite ERP
-├── mobile/      Expo rider app
-└── PROJECT_SPEC.md   Product source of truth
+├── frontend/          Vite + React ERP for operations and finance
+├── backend/           Express + Prisma API and accounting engine
+├── mobile/            Expo / React Native rider application
+├── deploy/            Production deployment and verification tools
+└── PROJECT_SPEC.md    Product and domain source of truth
 ```
 
-`PROJECT_SPEC.md` is authoritative for domain language, permissions, ledger rules, and acceptance criteria.
+| Application | Technology | Default local address |
+| --- | --- | --- |
+| ERP web | React, TypeScript, Vite, TanStack Query, Tailwind | `http://localhost:5173` |
+| API | Express, Prisma, JWT, SQLite locally / PostgreSQL in production | `http://localhost:4000/api/v1` |
+| Rider | Expo, Expo Router, React Native, TanStack Query | Expo development server |
 
-### Version history
+## Run it locally
 
-The current ERP/API release is stored in [`VERSION`](VERSION), and every release
-is recorded in [`CHANGELOG.md`](CHANGELOG.md). Releases use Semantic Versioning:
+### Prerequisites
 
-- Patch: backward-compatible fixes.
-- Minor: backward-compatible features.
-- Major: incompatible behavior or contracts.
+- Node.js and npm
+- A terminal for each application you want to run
+- Android Studio, an Android device, or an iOS simulator only if you are working on the rider app
 
-For each release, update `VERSION`, the backend/frontend package versions and
-lockfiles, add a dated changelog entry, and tag the release as `v<version>`. The
-Rider APK has an independent version in `mobile/app.json`,
-`mobile/package.json`, and `deploy/app/version.json`; update all three together
-only when a new APK is built and published.
-
----
-
-## Local development
-
-Each app has its own `.env.example`. SQLite is the local/test database; PostgreSQL is production.
+### 1. Start the API
 
 ```bash
-# API
-cd backend && cp .env.example .env
-npm install && npm run db:generate && npm run db:migrate
-npm run provision:superadmin   # needs SUPERADMIN_* in .env
-npm run dev                    # /api/v1
+cd backend
+cp .env.example .env
+npm install
+npm run db:generate
+npm run db:migrate
+npm run seed:locations
+```
+
+Before provisioning the first administrator, set these values in `backend/.env`:
+
+```dotenv
+SUPERADMIN_NAME="Your name"
+SUPERADMIN_USERNAME="admin"
+SUPERADMIN_EMAIL="admin@example.com"
+SUPERADMIN_PASSWORD="use-a-strong-password"
+```
+
+Then create that account and start the API:
+
+```bash
+npm run provision:superadmin
+npm run dev
+```
+
+The local API uses SQLite by default, so PostgreSQL is not required for day-to-day development.
+
+### 2. Start the ERP
+
+In a second terminal:
+
+```bash
+cd frontend
+cp .env.example .env
+npm install
+npm run dev
+```
+
+Open [http://localhost:5173](http://localhost:5173) and sign in with the administrator account you just created.
+
+### 3. Start the rider app (optional)
+
+In a third terminal:
+
+```bash
+cd mobile
+cp .env.example .env
+npm install
+npx expo start
+```
+
+When testing on a physical phone, change the mobile API URL from `localhost` to the computer's LAN address so the phone can reach the API.
+
+> [!TIP]
+> A useful first tour is: **Settings → create a hub and Online Shop → create a rider → All batches → create a batch → add parcels → Dispatch queue → assign the rider**.
+
+## Everyday workflow
+
+1. **Configure the operation.** Create a hub, Online Shop, delivery zones, rider accounts, and reason codes.
+2. **Receive a pickup.** Create a dated batch, record its advance split, and add or import its parcels.
+3. **Dispatch the work.** Assign eligible parcels to riders and generate the daily manifest.
+4. **Record outcomes.** Riders—or authorized ERP staff—record delivered, partial, failed, rejected, or return outcomes.
+5. **Settle the money.** Finance compares expected rider remittance with Cash, KBZ Pay, and Wave Pay received.
+6. **Close and review.** Settle Online Shop balances, close the cashbook day, and review reports and exceptions.
+
+## Accounting rules worth knowing
+
+- Money is stored as integer MMK values, never floating-point numbers.
+- A normal `DELIVERED` event creates a rider receivable; it does **not** claim the cash is already in the hub.
+- A paid-to-OS delivery creates Online Shop credit and no rider COD debt.
+- Only successful deliveries earn percentage commission.
+- Salary-bearing rider plans deduct a daily pro-rata salary share during settlement.
+- Every journal must balance, and duplicate business events are rejected.
+- Posted money is corrected by reversal and re-posting, not destructive editing.
+- Cash, KBZ Pay, and Wave Pay are separate wallets; transfers always have two sides.
+
+The full behavior, permissions, accounting vocabulary, and acceptance criteria live in [`PROJECT_SPEC.md`](PROJECT_SPEC.md).
+
+## Quality checks
+
+Run the checks for the area you changed:
+
+```bash
+# Backend
+cd backend
+npm test
+npm run typecheck
+npm run lint
 
 # ERP
-cd frontend && cp .env.example .env
-npm install && npm run dev
+cd frontend
+npm test
+npm run typecheck
+npm run build
 
 # Rider
-cd mobile && cp .env.example .env
-npm install && npx expo start
+cd mobile
+npm test
+npm run typecheck
+npm run lint
+npm run doctor
 ```
 
-Useful scripts:
+Financial changes should also be verified against an isolated PostgreSQL database using [`backend/scripts/POSTGRES_TESTS.md`](backend/scripts/POSTGRES_TESTS.md).
 
-| Where | Command |
-| --- | --- |
-| backend | `npm test` · `npm run typecheck` · `npm run seed:locations` |
-| frontend | `npm test` · `npm run typecheck` · `npm run build` |
-| mobile | `npm test` · `npm run typecheck` · `npm run lint` · `npm run doctor` · `npm run build:apk` |
+## Releases and deployment
 
-The production Rider APK is published at `/app/lotaya-rider.apk`; `/app/` is its
-bilingual download page. `deploy.sh` updates APK metadata only when a release
-artifact exists, so a web-only deployment cannot advertise an APK that was not
-built. A release is eligible only when `releases/lotaya-rider.version` exactly
-matches the version in `mobile/app.json`.
+The ERP/API version is stored in [`VERSION`](VERSION), with release notes in [`CHANGELOG.md`](CHANGELOG.md). The Rider APK has an independent version in `mobile/app.json`, `mobile/package.json`, and `deploy/app/version.json`.
 
-Production deployment is fail-closed on TLS: provision a valid certificate at
-`/etc/letsencrypt/live/lotaya.mmds.site/{fullchain.pem,privkey.pem}` before the
-first deploy (for example with the host operator's ACME/Certbot process). The
-deploy script never opens the authenticated ERP over plain HTTP. It builds into
-`/opt/lotaya/deployments/<release>`, runs migrations only after build validation,
-atomically switches `/opt/lotaya/current`, and rolls application files back when
-the readiness probe fails. Database migrations are forward-only and require a
-separate database backup/restore plan. A Rider APK is published only when `aapt`
-or `apkanalyzer` confirms package/version metadata and `apksigner` confirms a
-non-debug signature.
+Production uses PostgreSQL behind TLS. The deployment process builds a versioned release, validates migrations, checks the database-backed readiness endpoint, switches the current release atomically, and restores application files if health checks fail. Database migrations remain forward-only, so production releases require a tested backup and restore plan.
 
-Both `lotaya.mmds.site` and `lt.mmds.site` must be covered by the certificate.
-Deployment now validates migration status, prevents overlapping deploys, and
-checks `/`, `/app/`, and the database-backed readiness endpoint through each
-local nginx HTTPS vhost. These checks verify TLS and routing without depending
-on ISP/DNS availability; they do not establish public reachability. A failure
-restores the previous Lotaya service/nginx files and application symlink. Other
-websites and bots are not restarted. Database migrations remain forward-only.
+Useful deployment checks:
 
-Before a production migration, retain an encrypted PostgreSQL backup using the
-database provider's backup system or your encrypted backup storage. A custom
-format `pg_dump` archive can be tested on an isolated PostgreSQL host with:
-
-```sh
-# PGHOST, PGPORT, PGUSER and .pgpass point to the isolated restore host.
-bash deploy/restore-drill.sh /secure/path/lotaya-backup.dump
+```bash
+bash deploy/test-deploy-contract.sh
+bash deploy/test-release-domains.sh
+bash deploy/test-rollback-release.sh
 ```
 
-The drill creates a new uniquely named database, restores atomically, checks
-migration completion and journal balance, and prints wallet totals. Compare
-those totals with the snapshot taken when the backup was made. The database
-is retained for inspection; the tool does not overwrite or drop any database.
-Use restricted storage for the decrypted archive and remove it under your
-normal backup-retention policy after the drill. A restore drill is not an
-automatic production database rollback.
+## Project status
 
-Deployment checks: `bash deploy/test-deploy-contract.sh` and
-`bash deploy/test-release-domains.sh`; exercise previous-release and first-install
-rollback with `bash deploy/test-rollback-release.sh`.
-
-Run the financial regression suite against an isolated local PostgreSQL database
-before release using [the PostgreSQL test guide](backend/scripts/POSTGRES_TESTS.md).
-The test runner applies migrations and restores the SQLite Prisma client after
-testing; do not run it concurrently with other backend tests or builds.
-
-After PostgreSQL migrations, deployment runs the read-only OS cutover audit.
-It stops the release when any migrated shop/hub balance needs reconciliation.
-A Superadmin must review and post the exact opening adjustment with a reason,
-then deploy again. To inspect a configured environment manually, run
-`cd backend && npm run audit:os-cutover`.
+Lotaya is a private internal product under active development. `PROJECT_SPEC.md` is authoritative; if implementation and documentation disagree, treat the specification as the source of truth and resolve the gap deliberately.
 
 ---
 
-## Design rules (money)
-
-1. Never store money as floats.
-2. Never edit a posted journal — reverse, then re-post.
-3. Never infer “cash in the hub” from `DELIVERED`.
-4. Never weaken authz, idempotency, or hub scope on the client.
-
----
-
-## License
-
-Private. All rights reserved.
+<div align="center">
+  <strong>Built for clear handoffs, accountable money, and calmer delivery days.</strong><br />
+  <sub>Private software · All rights reserved</sub>
+</div>

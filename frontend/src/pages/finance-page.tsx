@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -115,9 +115,20 @@ export function FinancePage() {
     const balance = walletBalance(name);
     return balance === 0 ? t("noBalance") : `${balance.toLocaleString()} MMK`;
   };
+  const walletMeaning = (name: string) => {
+    if (!currentBalances.data) return t("loading");
+    const balance = walletBalance(name);
+    return balance < 0 ? t("walletFundsOut") : balance > 0 ? t("walletFundsAvailable") : t("walletBalanced");
+  };
 
   const tabClass = (active: boolean) =>
     `rounded-xl px-4 py-2 text-sm font-bold ${active ? "bg-[#eaf6ff] text-[#0787df] dark:bg-[#133044]" : "text-slate-500 hover:bg-slate-50 dark:hover:bg-white/5"}`;
+  const moveTab = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    selectTab(tab === "overview" ? "settlements" : "overview");
+    requestAnimationFrame(() => document.getElementById(tab === "overview" ? "finance-settlements-tab" : "finance-overview-tab")?.focus());
+  };
 
   return (
     <div className="mx-auto max-w-[1400px]">
@@ -126,11 +137,11 @@ export function FinancePage() {
           <h1 className="font-display text-3xl font-bold">{t("finance")}</h1>
           <p className="mt-2 text-slate-500">{t("financeDescription")}</p>
         </div>
-        <div role="tablist" aria-label={t("financeTabs")} className="flex flex-wrap gap-2">
-          <button type="button" role="tab" aria-selected={tab === "overview"} className={tabClass(tab === "overview")} onClick={() => selectTab("overview")}>
+        <div role="tablist" aria-label={t("financeTabs")} onKeyDown={moveTab} className="flex flex-wrap gap-2">
+          <button id="finance-overview-tab" type="button" role="tab" aria-controls="finance-overview-panel" tabIndex={tab === "overview" ? 0 : -1} aria-selected={tab === "overview"} className={tabClass(tab === "overview")} onClick={() => selectTab("overview")}>
             {t("financeOverview")}
           </button>
-          <button type="button" role="tab" aria-selected={tab === "settlements"} className={tabClass(tab === "settlements")} onClick={() => selectTab("settlements")}>
+          <button id="finance-settlements-tab" type="button" role="tab" aria-controls="finance-settlements-panel" tabIndex={tab === "settlements" ? 0 : -1} aria-selected={tab === "settlements"} className={tabClass(tab === "settlements")} onClick={() => selectTab("settlements")}>
             {t("financeOsAndRiders")}
           </button>
         </div>
@@ -138,34 +149,45 @@ export function FinancePage() {
       {message && <p role="status" className="mt-5 rounded-xl bg-[#eaf6ff] p-3 text-sm font-semibold text-[#0787df]">{message}</p>}
 
       {tab === "overview" ? (
-        <>
+        <div id="finance-overview-panel" role="tabpanel" aria-labelledby="finance-overview-tab">
           <OsCashbookOverview ledger={currentBalances.data ?? []} />
-          <PostPickupAdvancesPanel
-            batches={batches.data ?? []}
-            loading={batches.isLoading}
-            error={batches.isError}
-            onRetry={() => void batches.refetch()}
-            onMessage={setMessage}
-          />
-
+          <section className="mt-6" aria-labelledby="wallet-health-heading">
+          <div className="mb-3"><h2 id="wallet-health-heading" className="font-display text-lg font-bold">{t("walletHealth")}</h2><p className="text-sm text-slate-500">{t("walletHealthDescription")}</p></div>
           <div className="mt-6 grid gap-4 sm:grid-cols-3">
             <div className="rounded-2xl bg-[#101318] p-5 text-white">
               <WalletCards className="text-[#4db7ff]" size={20} />
               <p className="mt-6 text-sm text-slate-400">{t("cashWallet")}</p>
               <p className="mt-1 font-display text-2xl font-bold">{formatBalance("WALLET_CASH")}</p>
+              <p className="mt-2 text-xs text-slate-400">{walletMeaning("WALLET_CASH")}</p>
               {user?.role === "SUPERADMIN" && <button type="button" onClick={() => setAdjustingWallet("CASH")} className="mt-3 text-xs font-bold text-[#4db7ff]">{t("walletAdjustment")}</button>}
             </div>
             <div className="rounded-2xl bg-white p-5 shadow-sm dark:bg-[#181a1d]">
               <p className="text-sm text-slate-500">{t("kbzPay")}</p>
               <p className="mt-7 font-display text-2xl font-bold">{formatBalance("WALLET_KBZ_PAY")}</p>
+              <p className="mt-2 text-xs text-slate-500">{walletMeaning("WALLET_KBZ_PAY")}</p>
               {user?.role === "SUPERADMIN" && <button type="button" onClick={() => setAdjustingWallet("KBZ_PAY")} className="mt-3 text-xs font-bold text-[#0787df]">{t("walletAdjustment")}</button>}
             </div>
             <div className="rounded-2xl bg-white p-5 shadow-sm dark:bg-[#181a1d]">
               <p className="text-sm text-slate-500">{t("wavePay")}</p>
               <p className="mt-7 font-display text-2xl font-bold">{formatBalance("WALLET_WAVE_PAY")}</p>
+              <p className="mt-2 text-xs text-slate-500">{walletMeaning("WALLET_WAVE_PAY")}</p>
               {user?.role === "SUPERADMIN" && <button type="button" onClick={() => setAdjustingWallet("WAVE_PAY")} className="mt-3 text-xs font-bold text-[#0787df]">{t("walletAdjustment")}</button>}
             </div>
           </div>
+          </section>
+
+          <details className="mt-6 rounded-2xl border border-amber-200 bg-white shadow-sm dark:border-amber-900/60 dark:bg-[#181a1d]">
+            <summary className="cursor-pointer list-none p-5 font-display font-bold">{t("reconciliationIssues")}</summary>
+            <div className="border-t border-slate-100 dark:border-white/10">
+              <PostPickupAdvancesPanel
+                batches={batches.data ?? []}
+                loading={batches.isLoading}
+                error={batches.isError}
+                onRetry={() => void batches.refetch()}
+                onMessage={setMessage}
+              />
+            </div>
+          </details>
 
           <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm dark:bg-[#181a1d]">
             <div className="flex items-center justify-between">
@@ -235,9 +257,9 @@ export function FinancePage() {
           </section>
           <CashbookExpenses />
           {adjustingWallet && <WalletAdjustmentDialog wallet={adjustingWallet} currentBalance={walletBalance(adjustingWallet === "CASH" ? "WALLET_CASH" : adjustingWallet === "KBZ_PAY" ? "WALLET_KBZ_PAY" : "WALLET_WAVE_PAY")} hubs={hubs.data ?? []} onClose={() => setAdjustingWallet(null)} onSaved={() => setMessage(t("walletAdjustmentSaved"))} />}
-        </>
+        </div>
       ) : (
-        <SettlementWorkspaces />
+        <div id="finance-settlements-panel" role="tabpanel" aria-labelledby="finance-settlements-tab"><SettlementWorkspaces /></div>
       )}
     </div>
   );

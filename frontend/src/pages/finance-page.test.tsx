@@ -199,6 +199,8 @@ describe("FinancePage",()=>{
     });
     const user = userEvent.setup();
     renderPage();
+    await waitFor(() => expect(apiMock.mock.calls.some(([path]) => path === "/finance/ledger/summary")).toBe(true));
+    const ledgerCallsBeforeSettlement = apiMock.mock.calls.filter(([path]) => path === "/finance/ledger/summary").length;
     await user.click(screen.getByRole("tab", { name: "OS & riders" }));
 
     expect(await screen.findByText("Aung Rider")).toBeInTheDocument();
@@ -208,6 +210,7 @@ describe("FinancePage",()=>{
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/finance/rider-settlements", expect.anything()));
+    await waitFor(() => expect(apiMock.mock.calls.filter(([path]) => path === "/finance/ledger/summary").length).toBeGreaterThan(ledgerCallsBeforeSettlement));
     const paymentCall = apiMock.mock.calls.find(([path]) => path === "/finance/rider-settlements")!;
     expect(paymentCall[1].method).toBe("POST");
     expect(JSON.parse(paymentCall[1].body)).toEqual({
