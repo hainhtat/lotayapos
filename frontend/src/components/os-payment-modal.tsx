@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import {useEffect,useRef} from "react";
 import type { PaymentForm } from "./os-payment-rules";
+import { ModalPortal } from "@/components/modal-portal";
 
 type Props = {
   correct:boolean; shop:string; rows:Array<{batchId:string;label:string;outstanding:number}>;
@@ -19,7 +20,7 @@ export function OsPaymentModal(p:Props) {
     return ()=>previous?.focus();
   },[]);
   const money=(value:number)=>t("paymentMoney",{amount:(Number.isFinite(value)?value:0).toLocaleString()});
-  return <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-black/55 p-4">
+  return <ModalPortal><div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-black/55 p-4">
     <form ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="os-payment-title" noValidate onKeyDown={e=>{
       if(e.key==="Escape"&&!p.pending&&!p.locked){e.preventDefault();p.close();}
       if(e.key!=="Tab")return;
@@ -47,5 +48,5 @@ export function OsPaymentModal(p:Props) {
       {p.locked&&<p role="status" className="mt-3 text-sm">{t("paymentRetryUnchanged")}</p>}
       <div className="sticky bottom-0 mt-5 flex justify-end gap-2 bg-white py-2 dark:bg-[#181a1d]"><button type="button" disabled={p.pending||p.locked} onClick={p.close} className="rounded-xl border px-4 py-2 disabled:opacity-40">{t("cancel")}</button><button disabled={p.pending||p.blockers.length>0} className="rounded-xl bg-sky-600 px-4 py-2 font-bold text-white disabled:opacity-40">{t(p.pending?"loading":p.locked?"retry":p.correct?"confirmCorrection":"save")}</button></div>
     </form>
-  </div>;
+  </div></ModalPortal>;
 }

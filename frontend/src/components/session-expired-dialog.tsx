@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import { ModalPortal } from "@/components/modal-portal";
 
 export function SessionExpiredDialog({
   identifier,
@@ -30,7 +31,7 @@ export function SessionExpiredDialog({
     void onSubmit(password);
   };
   return (
-    <div className="fixed inset-0 z-[80] grid place-items-center bg-black/55 p-4" role="presentation">
+    <ModalPortal><div className="fixed inset-0 z-[80] grid place-items-center bg-black/55 p-4" role="presentation">
       <form onSubmit={submit} className="w-full max-w-md rounded-2xl bg-white p-6 text-slate-950 shadow-2xl dark:bg-[#181a1d] dark:text-white" aria-labelledby="session-expired-title">
         <h2 id="session-expired-title" className="text-xl font-bold">{t("sessionExpiredTitle")}</h2>
         <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{t("sessionExpiredHelp")}</p>
@@ -51,6 +52,6 @@ export function SessionExpiredDialog({
           {pending ? t("loading") : t("continueSession")}
         </Button>
       </form>
-    </div>
+    </div></ModalPortal>
   );
 }

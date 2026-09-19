@@ -7,6 +7,7 @@ import { api, apiRaw } from "@/lib/api";
 import { ParcelFieldHistory } from "@/components/parcel-field-history";
 import { BatchWorkspaceSummary } from "@/components/batch-workspace-summary";
 import { useAuth } from "@/app/auth";
+import { ModalPortal } from "@/components/modal-portal";
 
 type Location = { id: string; code?: string; nameEn: string; nameMy?: string };
 type Township = Location & {
@@ -956,7 +957,7 @@ function BatchDetailContent() {
         </section>
       )}
       {formOpen && (
-        <div className="fixed inset-0 z-30 grid place-items-center overflow-y-auto bg-black/45 p-4">
+        <ModalPortal><div className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-black/45 p-4">
           <form
             role="dialog"
             aria-modal="true"
@@ -984,10 +985,10 @@ function BatchDetailContent() {
               <button disabled={!isParcelRowComplete(formDraft)} className="rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{t("addNextParcel")}</button>
             </div>
           </form>
-        </div>
+        </div></ModalPortal>
       )}
       {editing && (
-        <div className="fixed inset-0 z-30 grid place-items-center overflow-y-auto bg-black/45 p-4">
+        <ModalPortal><div className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-black/45 p-4">
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -1020,9 +1021,9 @@ function BatchDetailContent() {
               <button disabled={updateParcel.isPending} className="rounded-xl bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{updateParcel.isPending ? t("loading") : t("save")}</button>
             </div>
           </form>
-        </div>
+        </div></ModalPortal>
       )}
-      {confirmFinalize&&<div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/55 p-4"><section role="dialog" aria-modal="true" aria-labelledby="finalize-title" className="relative my-6 max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 dark:bg-[#181a1d]"><div className="sticky top-0 z-10 -mx-6 -mt-6 flex items-start justify-between bg-white px-6 pt-6 dark:bg-[#181a1d]"><h2 id="finalize-title" className="text-xl font-bold">{t("finalizeBatch")}</h2><button type="button" aria-label={t("close")} disabled={finalize.isPending} onClick={()=>setConfirmFinalize(false)} className="rounded-lg p-2 hover:bg-slate-100 disabled:opacity-40 dark:hover:bg-white/10"><X size={18}/></button></div><p className="mt-3 text-sm text-slate-500">{t("finalizeBatchExplanation",{count:savedParcels.length,cod:(batch.data?.totalCod??0).toLocaleString()})}</p><div className="mt-6 flex justify-end gap-2"><button type="button" onClick={()=>setConfirmFinalize(false)} className="rounded-xl border px-4 py-2 text-sm font-bold">{t("cancel")}</button><button type="button" disabled={finalize.isPending} onClick={()=>finalize.mutate()} className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{finalize.isPending?t("loading"):t("confirmFinalize")}</button></div></section></div>}
+      {confirmFinalize&&<ModalPortal><div className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-black/55 p-4"><section role="dialog" aria-modal="true" aria-labelledby="finalize-title" className="relative my-6 max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 dark:bg-[#181a1d]"><div className="sticky top-0 z-10 -mx-6 -mt-6 flex items-start justify-between bg-white px-6 pt-6 dark:bg-[#181a1d]"><h2 id="finalize-title" className="text-xl font-bold">{t("finalizeBatch")}</h2><button type="button" aria-label={t("close")} disabled={finalize.isPending} onClick={()=>setConfirmFinalize(false)} className="rounded-lg p-2 hover:bg-slate-100 disabled:opacity-40 dark:hover:bg-white/10"><X size={18}/></button></div><p className="mt-3 text-sm text-slate-500">{t("finalizeBatchExplanation",{count:savedParcels.length,cod:(batch.data?.totalCod??0).toLocaleString()})}</p><div className="mt-6 flex justify-end gap-2"><button type="button" onClick={()=>setConfirmFinalize(false)} className="rounded-xl border px-4 py-2 text-sm font-bold">{t("cancel")}</button><button type="button" disabled={finalize.isPending} onClick={()=>finalize.mutate()} className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{finalize.isPending?t("loading"):t("confirmFinalize")}</button></div></section></div></ModalPortal>}
       {historyParcel&&<ParcelFieldHistory parcel={historyParcel} onClose={()=>setHistoryParcel(null)}/>}
     </div>
   );

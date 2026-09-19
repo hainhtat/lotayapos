@@ -4,6 +4,7 @@ import { CheckCircle2, CircleAlert, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import { useAuth } from "@/app/auth";
+import { ModalPortal } from "@/components/modal-portal";
 
 type Batch = {
   id: string;
@@ -192,7 +193,7 @@ export function PostPickupAdvancesPanel({
       </div>
 
       {confirming && selectedBatch ? (
-        <div className="fixed inset-0 z-30 grid place-items-center bg-black/45 p-4">
+        <ModalPortal><div className="fixed inset-0 z-30 grid place-items-center bg-black/45 p-4">
           <div role="dialog" aria-modal="true" aria-labelledby="posting-title" className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl dark:bg-[#181a1d]">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -250,7 +251,7 @@ export function PostPickupAdvancesPanel({
               </button>
             </div>
           </div>
-        </div>
+        </div></ModalPortal>
       ) : null}
     </section>
   );
