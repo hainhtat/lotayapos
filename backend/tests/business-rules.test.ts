@@ -372,6 +372,7 @@ describe("parcel transitions", () => {
     expect([...MONEY_POSTED_SOURCE_TYPES]).toEqual([
       "RIDER_COMMISSION",
       "RIDER_RECEIVABLE_RECOGNITION",
+      "OS_PAID_TO_OS_FEE_RECEIVABLE",
       "PARTIAL_RETURN_COLLECTION",
       "OS_PARTIAL_RETURN_ADJUSTMENT",
       "DELIVERY_COLLECTION",
@@ -737,6 +738,17 @@ describe("bulk dispatch and manifest rules", () => {
     expect(excludedText).toContain("36,000");
     expect(excludedText).not.toContain("40,000");
     expect(includedText).toContain("40,000");
+  });
+
+  test("paid-to-OS handover PDF uses landscape title and fee-inclusion totals", async () => {
+    const parcel={trackingNumber:"LTY-PAID",orderId:"002",customerName:"Paid Customer",customerPhone:"0911111111",address:"Paid Address",codAmount:50000,deliveryFee:3000,zone:null,township:"Hlaing",status:"DELIVERED",note:"Fee with rider"};
+    const pdf=await generateDispatchManifestPdf({documentTitle:"Paid to OS Handover",noteLabel:"Fee note",sections:[{riderName:"Rider One",parcels:[{...parcel,paidToOsFeeIncluded:false}]}]});
+    const page=(await PDFDocument.load(pdf)).getPage(0);
+    expect(page.getWidth()).toBeGreaterThan(page.getHeight());
+    const text=extractPdfStrings(pdf).join(" ");
+    expect(text).toContain("Paid to OS Handover");
+    expect(text).toContain("50,000");
+    expect(text).not.toContain("53,000");
   });
 
   test("supports multi-rider sections as separate active rider sheets", async () => {

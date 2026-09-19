@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "@/i18n";
 import { datePresetRange } from "@/lib/date-presets";
+import { hubBusinessDate } from "@/lib/business-date";
 import { manifestStatusList } from "@/lib/manifest-filters";
 import { OperationsPage } from "./operations-page";
 
@@ -713,5 +714,77 @@ describe("OperationsPage", () => {
       expect(body.statuses).toEqual(manifestStatusList("toDeliver"));
       expect(body).toMatchObject(datePresetRange("today"));
     });
+  });
+
+  it("opens the Paid to OS handover modal and previews with today's date range", async () => {
+    mockParcelList([]);
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/master-data") {
+        return Promise.resolve({
+          data: {
+            shops: [{ id: "shop-1", name: "Shop One" }],
+            riders: [{ id: "rider-1", user: { name: "Aung Aung" } }],
+          },
+        });
+      }
+      if (path === "/operations/parcels/paid-to-os/preview") {
+        return Promise.resolve({
+          data: {
+            parcelCount: 1,
+            totalCod: 50000,
+            totalFees: 3000,
+            sections: [
+              {
+                riderName: "Aung Aung",
+                parcels: [
+                  {
+                    id: "parcel-paid",
+                    trackingNumber: "TRK-PAID",
+                    customerName: "Customer",
+                    shopName: "Shop One",
+                    codAmount: 50000,
+                    deliveryFee: 3000,
+                    paidToOsFeeIncluded: true,
+                  },
+                ],
+              },
+            ],
+          },
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Paid to OS handover" }));
+    const dialog = await screen.findByRole("dialog", { name: "Paid to OS handover" });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog.parentElement).toBe(document.body);
+    await waitFor(() => {
+      const call = apiMock.mock.calls.find(([path]) => path === "/operations/parcels/paid-to-os/preview");
+      expect(call?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
+      const body = JSON.parse(String(call?.[1]?.body ?? "{}")) as {
+        dateFrom?: string;
+        dateTo?: string;
+        shopId?: string;
+        riderId?: string;
+      };
+      expect(body).toEqual({
+        dateFrom: hubBusinessDate(),
+        dateTo: hubBusinessDate(),
+      });
+      expect(body.shopId).toBeUndefined();
+      expect(body.riderId).toBeUndefined();
+    });
+    expect(await within(dialog).findByText("TRK-PAID")).toBeInTheDocument();
+    expect(within(dialog).getByText("1 parcels · COD 50,000 MMK · fees 3,000 MMK")).toBeInTheDocument();
+    expect(within(dialog).getByText("Aung Aung · 1 parcels")).toBeInTheDocument();
+  });
+
+  it("does not show Paid to OS handover on the returns workspace", async () => {
+    mockParcelList([]);
+    apiMock.mockResolvedValue({ data: [] });
+    renderReturnsPage();
+    expect(await screen.findByRole("heading", { name: "Return to OS" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Paid to OS handover" })).not.toBeInTheDocument();
   });
 });

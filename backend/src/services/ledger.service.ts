@@ -284,7 +284,7 @@ async function assertOriginalScope(actor: LedgerActor, entry: { sourceType: stri
     if (!batch || batch.hubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Entry is outside your hub scope");
     return;
   }
-  if (["PICKUP_ADVANCE", "DELIVERY_COLLECTION", "PARTIAL_RETURN_COLLECTION", "OS_PARTIAL_RETURN_ADJUSTMENT", "OS_SHORTFALL", "OS_RETURN_DEDUCTION", "RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_COD"].includes(entry.sourceType)) {
+  if (["PICKUP_ADVANCE", "DELIVERY_COLLECTION", "PARTIAL_RETURN_COLLECTION", "OS_PARTIAL_RETURN_ADJUSTMENT", "OS_SHORTFALL", "OS_RETURN_DEDUCTION", "RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "OS_PAID_TO_OS_FEE_RECEIVABLE", "LINKED_RIDER_RECEIVABLE_COD"].includes(entry.sourceType)) {
     const parcelId = entry.sourceId.split(":")[0]!;
     const parcel = await prisma.parcel.findUnique({ where: { id: parcelId }, include: { batch: { select: { hubId: true } } } });
     if (!parcel || parcel.batch.hubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Entry is outside your hub scope");
@@ -350,7 +350,7 @@ async function entryInScope(entry: { sourceType: string; sourceId: string | null
     const batch = await prisma.batch.findUnique({ where: { id: batchId }, select: { hubId: true } });
     return batch?.hubId === hubId;
   }
-  if (["PICKUP_ADVANCE", "DELIVERY_COLLECTION", "PARTIAL_RETURN_COLLECTION", "OS_PARTIAL_RETURN_ADJUSTMENT", "OS_SHORTFALL", "OS_RETURN_DEDUCTION", "RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_COD"].includes(entry.sourceType)) {
+  if (["PICKUP_ADVANCE", "DELIVERY_COLLECTION", "PARTIAL_RETURN_COLLECTION", "OS_PARTIAL_RETURN_ADJUSTMENT", "OS_SHORTFALL", "OS_RETURN_DEDUCTION", "RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "OS_PAID_TO_OS_FEE_RECEIVABLE", "LINKED_RIDER_RECEIVABLE_COD"].includes(entry.sourceType)) {
     const parcelId = entry.sourceId.split(":")[0]!;
     const parcel = await prisma.parcel.findUnique({ where: { id: parcelId }, include: { batch: { select: { hubId: true } } } });
     return parcel?.batch.hubId === hubId;

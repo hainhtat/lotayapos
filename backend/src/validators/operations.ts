@@ -106,3 +106,11 @@ export const failedDecisionValidation = [
   body("note").optional().isString().trim().isLength({ max: 1000 }),
 ];
 export const returnHandoverValidation = [body("parcelIds").isArray({ min: 1, max: 500 }), body("parcelIds.*").isString().trim().notEmpty(), body("parcelIds").custom((ids: string[]) => new Set(ids).size === ids.length).withMessage("parcelIds must be unique"), body("hubId").optional().isString().trim().notEmpty()];
+
+export const paidToOsHandoverValidation = [
+  body("hubId").optional().isString().trim().notEmpty(),
+  body("shopId").optional().isString().trim().notEmpty(),
+  body("riderId").optional().isString().trim().notEmpty(),
+  body("dateFrom").optional().matches(/^\d{4}-\d{2}-\d{2}$/).withMessage("dateFrom must be YYYY-MM-DD").bail().isISO8601({ strict: true }),
+  body("dateTo").optional().matches(/^\d{4}-\d{2}-\d{2}$/).withMessage("dateTo must be YYYY-MM-DD").bail().isISO8601({ strict: true }),
+];

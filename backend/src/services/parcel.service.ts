@@ -17,7 +17,7 @@ export { resolveCommissionRateBps };
 const transitions: Record<string, string[]> = { CREATED: ["PICKED_UP"], PICKED_UP: ["ASSIGNED"], ASSIGNED: ["OUT_FOR_DELIVERY"], OUT_FOR_DELIVERY: ["DELIVERED", "PARTIAL", "FAILED", "REJECTED"], PARTIAL: ["PENDING_RETURN"], FAILED: ["PENDING_RETURN"], REJECTED: ["PENDING_RETURN"], PENDING_RETURN: ["RETURNED"] };
 export const ALL_STATUSES = ["CREATED", "PICKED_UP", "ASSIGNED", "OUT_FOR_DELIVERY", "DELIVERED", "PARTIAL", "FAILED", "REJECTED", "PENDING_RETURN", "RETURNED"] as const;
 export const MONEY_BEARING_STATUSES = ["DELIVERED", "PARTIAL"] as const;
-export const MONEY_POSTED_SOURCE_TYPES = ["RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "PARTIAL_RETURN_COLLECTION", "OS_PARTIAL_RETURN_ADJUSTMENT", "DELIVERY_COLLECTION", "OS_PAID_TO_OS_CREDIT"] as const;
+export const MONEY_POSTED_SOURCE_TYPES = ["RIDER_COMMISSION", "RIDER_RECEIVABLE_RECOGNITION", "OS_PAID_TO_OS_FEE_RECEIVABLE", "PARTIAL_RETURN_COLLECTION", "OS_PARTIAL_RETURN_ADJUSTMENT", "DELIVERY_COLLECTION", "OS_PAID_TO_OS_CREDIT"] as const;
 export const LINKED_MONEY_POSTED_SOURCE_TYPES = ["LINKED_RIDER_RECEIVABLE_RECOGNITION", "LINKED_RIDER_RECEIVABLE_COD", "LINKED_RIDER_RECEIVABLE_FEE", "LINKED_DELIVERY_COLLECTION", "LINKED_RIDER_COMMISSION", "LINKED_OS_SHORTFALL"] as const;
 export function isAllowedTransition(fromStatus: string, toStatus: string) { return transitions[fromStatus]?.includes(toStatus) ?? false; }
 export function canOverrideStatus(role: string) { return ["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"].includes(role); }
@@ -737,7 +737,18 @@ async function updateStatusInTransaction(
     throw new ApiError(400, "INVALID_COLLECTION_MODE", "Collection mode may only be recorded for a delivered parcel");
   }
   const paidToOsFeeIncluded = collectionMode === "PAID_BY_OS" && (input.paidToOsIncludeDeliveryFee ?? parcel.batch.shop.includeDeliveryFeeInOsCredit);
-    if (overrideLeavesMoneyBearingStatus(parcel.status, toStatus, overrideTransition)) {
+  if (toStatus === "DELIVERED" && collectionMode === "PAID_BY_OS") {
+    if (scope.role === "RIDER") {
+      throw new ApiError(403, "FORBIDDEN", "Paid-to-OS delivery may only be recorded from the ERP");
+    }
+    if (parcel.linkGroupId) {
+      throw new ApiError(400, "LINKED_PAID_TO_OS_UNSUPPORTED", "Paid-to-OS is not available for linked parcels");
+    }
+    if (!paidToOsFeeIncluded && !parcel.riderId && (parcel.deliveryFee ?? 0) > 0) {
+      throw new ApiError(400, "RIDER_REQUIRED_FOR_FEE", "Assign a rider before paid-to-OS when the delivery fee is not included in OS credit");
+    }
+  }
+  if (overrideLeavesMoneyBearingStatus(parcel.status, toStatus, overrideTransition)) {
       const postedMoney = await findUnreversedMoneyPostedEntry(tx, {
         parcelId: id,
         linkGroupId: parcel.linkGroupId,
@@ -898,6 +909,23 @@ async function updateStatusInTransaction(
             ] },
           } });
           await tx.osReturnCredit.create({ data: { parcelId: parcel.id, batchId: parcel.batchId, shopId: parcel.batch.shopId, hubId: parcelHubId, amount: creditAmount, codAmount: parcel.codAmount, feeAmount, kind: "PAID_TO_OS", businessDate, idempotencyKey: `paid-to-os:${creditSourceId}`, postedBy: actor.id, journalEntryId: journal.id } });
+        }
+        // Fee stays with the rider when OS credit is COD-only (non-linked, assigned).
+        if (!paidToOsFeeIncluded && (parcel.deliveryFee ?? 0) > 0) {
+          const feeReceivableSourceId = await nextVersionedJournalSourceId(tx, "OS_PAID_TO_OS_FEE_RECEIVABLE", parcel.id);
+          if (feeReceivableSourceId) {
+            await recognizeRiderReceivable(tx, {
+              sourceType: "OS_PAID_TO_OS_FEE_RECEIVABLE",
+              sourceId: feeReceivableSourceId,
+              riderId: parcel.riderId,
+              hubId: parcelHubId,
+              businessDate,
+              codAmount: 0,
+              deliveryFee: parcel.deliveryFee ?? 0,
+              commissionAmount,
+              description: `Paid-to-OS fee receivable for ${parcel.trackingNumber}`,
+            });
+          }
         }
       }
       if (toStatus === "DELIVERED" && collectionMode === "CASH_RECEIPT_EXCEPTION" && !parcel.linkGroupId) {

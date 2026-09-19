@@ -105,3 +105,30 @@ export const downloadReturnHandover: RequestHandler = async (req, res) => {
   const pdf = await generateDispatchManifestPdf({ sections: result.sections, statusesLabel: "Pending return, Rejected/cancelled", documentTitle: "Return to OS Handover", documentSubtitle: "Read-only handover record; no financial receipt is posted", footerLabel: "Lotaya Delivery - Return to OS handover", noteLabel: "Reason/note" });
   res.type("application/pdf").set("Content-Disposition", `attachment; filename="${result.filename}"`).send(pdf);
 };
+export const previewPaidToOsHandover: RequestHandler = async (req, res) => {
+  const result = await service.buildPaidToOsHandover(req.body, actor(req));
+  const parcels = result.sections.flatMap((section) => section.parcels);
+  res.json({
+    success: true,
+    data: {
+      sections: result.sections,
+      parcels,
+      parcelCount: result.parcelCount,
+      totalCod: result.totalCod,
+      totalFees: result.totalFees,
+      generatedAt: new Date().toISOString(),
+    },
+  });
+};
+export const downloadPaidToOsHandover: RequestHandler = async (req, res) => {
+  const result = await service.buildPaidToOsHandover(req.body, actor(req));
+  const pdf = await generateDispatchManifestPdf({
+    sections: result.sections,
+    statusesLabel: "Delivered — paid to OS",
+    documentTitle: "Paid to OS Handover",
+    documentSubtitle: "Read-only handover record; no financial receipt is posted",
+    footerLabel: "Lotaya Delivery - Paid to OS handover",
+    noteLabel: "Fee note",
+  });
+  res.type("application/pdf").set("Content-Disposition", `attachment; filename="${result.filename}"`).send(pdf);
+};

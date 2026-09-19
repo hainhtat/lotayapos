@@ -46,7 +46,17 @@ export type ManifestInput = {
   footerLabel?: string;
 };
 
-/** Active rider sheets retain A4 portrait; return handovers use A4 landscape. */
+function isOsHandoverDocument(title?: string) {
+  return title === "Return to OS Handover" || title === "Paid to OS Handover";
+}
+
+function handoverBrandLabel(title?: string) {
+  if (title === "Return to OS Handover") return "Return Handover";
+  if (title === "Paid to OS Handover") return "Paid to OS Handover";
+  return "Active Rider Sheet";
+}
+
+/** Active rider sheets retain A4 portrait; OS handovers use A4 landscape. */
 const PAGE_WIDTH = 595.28;
 const PAGE_HEIGHT = 841.89;
 const RETURN_PAGE_WIDTH = 841.89;
@@ -350,7 +360,7 @@ function drawRiderSheetHeader(
   documentTitle = "All Active Deliveries",
   documentSubtitle = "All remaining assigned orders combined",
 ) {
-  drawBrandBar(ctx, documentTitle === "Return to OS Handover" ? "Return Handover" : "Active Rider Sheet");
+  drawBrandBar(ctx, handoverBrandLabel(documentTitle));
   ctx.y = ctx.pageHeight - 40;
   const riderTitle = documentTitle === "All Active Deliveries";
   const title = ctx.continued
@@ -362,7 +372,7 @@ function drawRiderSheetHeader(
   ctx.y -= 11;
   drawText(ctx, `Selected statuses: ${statusesLabel}`, MARGIN_X, ctx.y, 7, false, BRAND.slate);
   ctx.y -= 11;
-  drawText(ctx, `${documentTitle === "Return to OS Handover" ? "Handover" : "Selected riders"}: ${fitManifestText(selectedRidersLabel, 90)}`, MARGIN_X, ctx.y, 7, false, BRAND.slate);
+  drawText(ctx, `${isOsHandoverDocument(documentTitle) ? "Handover" : "Selected riders"}: ${fitManifestText(selectedRidersLabel, 90)}`, MARGIN_X, ctx.y, 7, false, BRAND.slate);
   if (section.hubName) {
     ctx.y -= 11;
     drawText(ctx, `Hub: ${fitManifestText(section.hubName, 40)}`, MARGIN_X, ctx.y, 7, false, BRAND.muted);
@@ -468,7 +478,7 @@ async function buildPdfDocument(input: ManifestInput) {
   const generatedAt = input.generatedAt ?? new Date();
   const statusesLabel = input.statusesLabel ?? "Assigned, Out for delivery, Picked up";
   const sections = normalizeSections(input);
-  const returnHandover = input.documentTitle === "Return to OS Handover";
+  const returnHandover = isOsHandoverDocument(input.documentTitle);
   const pageWidth = returnHandover ? RETURN_PAGE_WIDTH : PAGE_WIDTH;
   const pageHeight = returnHandover ? RETURN_PAGE_HEIGHT : PAGE_HEIGHT;
   const cols = returnHandover ? RETURN_COLS : PORTRAIT_COLS;
@@ -500,7 +510,7 @@ async function buildPdfDocument(input: ManifestInput) {
 
   let pageIndex = 0;
   for (const section of sections) {
-    const totals = totalsFor(section.parcels, input.documentTitle === "Return to OS Handover");
+    const totals = totalsFor(section.parcels, returnHandover);
     let page = doc.addPage([pageWidth, pageHeight]);
     let ctx = pageContext(page, pageIndex, false);
     startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel, input.documentTitle, input.noteLabel, input.documentSubtitle);
@@ -511,15 +521,14 @@ async function buildPdfDocument(input: ManifestInput) {
     }
 
     for (const [index, parcel] of section.parcels.entries()) {
-      const isReturnHandover=input.documentTitle === "Return to OS Handover";
-      const drawn = drawParcelRow(ctx, parcel, index, isReturnHandover);
+      const drawn = drawParcelRow(ctx, parcel, index, returnHandover);
       if (!drawn) {
         drawFooter(ctx, input.footerLabel);
         pageIndex += 1;
         page = doc.addPage([pageWidth, pageHeight]);
         ctx = pageContext(page, pageIndex, true);
         startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel, input.documentTitle, input.noteLabel, input.documentSubtitle);
-        drawParcelRow(ctx, parcel, index, isReturnHandover);
+        drawParcelRow(ctx, parcel, index, returnHandover);
       }
     }
 

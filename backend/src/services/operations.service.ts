@@ -924,3 +924,132 @@ export async function buildReturnToOsHandover(input: { parcelIds: string[]; hubI
   });
   return { sections: [{ riderName: "Return to OS", hubName: hubId ? (await prisma.hub.findUnique({ where: { id: hubId }, select: { name: true } }))?.name : undefined, parcels: manifestParcels }], parcelCount: parcels.length, filename: `lotaya-return-to-os-${new Date().toISOString().slice(0, 10)}.pdf` };
 }
+
+export type PaidToOsHandoverQuery = {
+  hubId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  shopId?: string;
+  riderId?: string;
+};
+
+export async function buildPaidToOsHandover(input: PaidToOsHandoverQuery, actor: BatchActor) {
+  const user = await prisma.user.findUnique({ where: { id: actor.id }, select: { role: true, active: true, hubId: true } });
+  if (!user || !user.active || user.role !== actor.role || !manifestReadRoles.includes(user.role)) {
+    throw new ApiError(403, "FORBIDDEN", "You may not view paid-to-OS handovers");
+  }
+  if (user.role !== "SUPERADMIN" && input.hubId && input.hubId !== user.hubId) {
+    throw new ApiError(403, "FORBIDDEN", "Hub is outside your scope");
+  }
+  const hubId = user.role === "SUPERADMIN" ? input.hubId ?? user.hubId ?? undefined : user.hubId ?? undefined;
+  if (user.role !== "SUPERADMIN" && !hubId) throw new ApiError(403, "FORBIDDEN", "A hub scope is required for paid-to-OS handover");
+
+  const dateFrom = parseManifestDate(input.dateFrom, "dateFrom");
+  const dateTo = parseManifestDate(input.dateTo, "dateTo", true);
+  if (dateFrom && dateTo && dateFrom >= dateTo) throw new ApiError(400, "INVALID_DATE_RANGE", "dateFrom must be before dateTo");
+
+  if (input.shopId) {
+    const shop = await prisma.onlineShop.findUnique({ where: { id: input.shopId }, select: { id: true } });
+    if (!shop) throw new ApiError(404, "SHOP_NOT_FOUND", "Shop not found");
+  }
+  if (input.riderId) {
+    const rider = await prisma.rider.findUnique({
+      where: { id: input.riderId },
+      select: { id: true, hubId: true, user: { select: { active: true, role: true } } },
+    });
+    if (!rider || !rider.user.active || rider.user.role !== "RIDER") throw new ApiError(404, "RIDER_NOT_FOUND", "Active rider not found");
+    if (hubId && rider.hubId !== hubId) throw new ApiError(403, "FORBIDDEN", "Rider is outside your hub scope");
+    if (user.role !== "SUPERADMIN" && rider.hubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Rider is outside your hub scope");
+  }
+
+  const parcels = await prisma.parcel.findMany({
+    where: {
+      status: "DELIVERED",
+      collectionMode: "PAID_BY_OS",
+      ...(input.riderId ? { riderId: input.riderId } : {}),
+      ...(hubId || input.shopId
+        ? { batch: { ...(hubId ? { hubId } : {}), ...(input.shopId ? { shopId: input.shopId } : {}) } }
+        : {}),
+      ...(dateFrom || dateTo
+        ? {
+            statusHistory: {
+              some: {
+                toStatus: "DELIVERED",
+                createdAt: {
+                  ...(dateFrom ? { gte: dateFrom } : {}),
+                  ...(dateTo ? { lt: dateTo } : {}),
+                },
+              },
+            },
+          }
+        : {}),
+    },
+    select: {
+      id: true,
+      trackingNumber: true,
+      orderId: true,
+      customerName: true,
+      customerPhone: true,
+      address: true,
+      codAmount: true,
+      deliveryFee: true,
+      paidToOsFeeIncluded: true,
+      zone: true,
+      township: true,
+      status: true,
+      riderId: true,
+      rider: { select: { id: true, user: { select: { name: true } } } },
+      batch: { select: { label: true, pickupDate: true, hub: { select: { name: true } }, shop: { select: { name: true } } } },
+    },
+    orderBy: [{ riderId: "asc" }, { trackingNumber: "asc" }],
+    take: 501,
+  });
+  if (parcels.length > 500) throw new ApiError(400, "BATCH_TOO_LARGE", "Paid-to-OS handover may include at most 500 parcels");
+
+  const byRider = new Map<string, { riderName: string; hubName?: string; parcels: typeof parcels }>();
+  for (const parcel of parcels) {
+    const key = parcel.riderId ?? "unassigned";
+    const existing = byRider.get(key);
+    if (existing) {
+      existing.parcels.push(parcel);
+      continue;
+    }
+    byRider.set(key, {
+      riderName: parcel.rider?.user.name ?? "Unassigned",
+      hubName: parcel.batch.hub?.name ?? undefined,
+      parcels: [parcel],
+    });
+  }
+
+  const sections = [...byRider.values()].map((section) => ({
+    riderName: section.riderName,
+    hubName: section.hubName,
+    parcels: section.parcels.map((parcel) => ({
+      id: parcel.id,
+      trackingNumber: parcel.trackingNumber,
+      orderId: parcel.orderId,
+      customerName: parcel.customerName,
+      customerPhone: parcel.customerPhone,
+      address: parcel.address,
+      codAmount: parcel.codAmount,
+      deliveryFee: parcel.deliveryFee,
+      paidToOsFeeIncluded: parcel.paidToOsFeeIncluded,
+      zone: parcel.zone,
+      township: parcel.township,
+      status: parcel.status,
+      batchLabel: `${parcel.batch.label} (${parcel.batch.pickupDate.toISOString().slice(0, 10)})`,
+      shopName: parcel.batch.shop.name,
+      note: parcel.paidToOsFeeIncluded ? "Fee included in OS credit" : "Fee with rider",
+    })),
+  }));
+
+  const flat = sections.flatMap((section) => section.parcels);
+  const hubName = hubId ? (await prisma.hub.findUnique({ where: { id: hubId }, select: { name: true } }))?.name : undefined;
+  return {
+    sections: sections.length ? sections : [{ riderName: "Paid to OS", hubName, parcels: [] }],
+    parcelCount: flat.length,
+    totalCod: flat.reduce((sum, parcel) => sum + parcel.codAmount, 0),
+    totalFees: flat.reduce((sum, parcel) => sum + (parcel.paidToOsFeeIncluded ? parcel.deliveryFee ?? 0 : 0), 0),
+    filename: `lotaya-paid-to-os-${new Date().toISOString().slice(0, 10)}.pdf`,
+  };
+}
