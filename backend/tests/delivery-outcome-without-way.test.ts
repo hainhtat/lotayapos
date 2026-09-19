@@ -209,6 +209,7 @@ describe("OUT_FOR_DELIVERY to DELIVERED without open delivery way", () => {
       await prisma.journalLine.deleteMany({ where: { entryId: { in: entryIds } } });
       await prisma.journalEntry.deleteMany({ where: { id: { in: entryIds } } });
     }
+    await prisma.cashbookDay.deleteMany({ where: { hubId } });
     await prisma.parcel.deleteMany({ where: { id: { in: parcelIds } } });
     await prisma.batch.deleteMany({ where: { id: batchId } });
     await prisma.rider.deleteMany({ where: { id: { in: [riderId, otherRiderId] } } });

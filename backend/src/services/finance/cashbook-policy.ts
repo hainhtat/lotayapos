@@ -23,23 +23,27 @@ export async function assertCashbookOpen(
   hubId: string,
 ) {
   await lockCashbookDay(tx, date, hubId);
-  // A no-op update makes the PostgreSQL day row part of the transaction's
-  // write set. If this transaction waited behind a concurrent close,
-  // PostgreSQL must abort the stale Serializable snapshot instead of allowing
-  // a posting based on the old open state. SQLite serializes writes globally
-  // and does not need persistent rows for open days.
-  const day = env.databaseProvider === "postgresql"
-    ? await tx.cashbookDay.upsert({
-        where: { hubId_businessDate: { hubId, businessDate: date } },
-        create: { hubId, businessDate: date },
-        update: { varianceAmount: { increment: 0 } },
-        select: { closedAt: true },
-      })
-    : await tx.cashbookDay.findFirst({
-        where: { hubId, businessDate: date },
-        select: { closedAt: true },
-      });
-  if (day?.closedAt) {
+  // Touch/create the day row under the advisory lock. Prefer find+create+update
+  // over upsert so a missing unique index cannot 42P10 the whole posting path.
+  let day = await tx.cashbookDay.findFirst({
+    where: { hubId, businessDate: date },
+    select: { id: true, closedAt: true },
+  });
+  if (!day) {
+    day = await tx.cashbookDay.create({
+      data: { hubId, businessDate: date },
+      select: { id: true, closedAt: true },
+    });
+  } else if (env.databaseProvider === "postgresql") {
+    // Include the day in this transaction's write set so a concurrent close
+    // aborts a stale Serializable snapshot instead of posting against it.
+    day = await tx.cashbookDay.update({
+      where: { id: day.id },
+      data: { varianceAmount: { increment: 0 } },
+      select: { id: true, closedAt: true },
+    });
+  }
+  if (day.closedAt) {
     throw new ApiError(409, "DAY_CLOSED", "Cashbook day is already closed");
   }
 }

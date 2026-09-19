@@ -292,9 +292,31 @@ describe("cashbook close controls", () => {
   });
 
   test("rejects writes for a closed cashbook day", async () => {
-    const transaction = { cashbookDay: { findFirst: jest.fn().mockResolvedValue({ closedAt: new Date("2026-08-10T12:00:00.000Z") }) } };
+    const transaction = {
+      cashbookDay: {
+        findFirst: jest.fn().mockResolvedValue({ id: "day-1", closedAt: new Date("2026-08-10T12:00:00.000Z") }),
+        create: jest.fn(),
+        update: jest.fn(),
+      },
+    };
     await expect(assertCashbookOpen(transaction as never, new Date("2026-08-10T00:00:00.000Z"), "hub-a")).rejects.toThrow("already closed");
-    expect(transaction.cashbookDay.findFirst).toHaveBeenCalledWith({ where: { hubId: "hub-a", businessDate: new Date("2026-08-10T00:00:00.000Z") }, select: { closedAt: true } });
+    expect(transaction.cashbookDay.findFirst).toHaveBeenCalledWith({ where: { hubId: "hub-a", businessDate: new Date("2026-08-10T00:00:00.000Z") }, select: { id: true, closedAt: true } });
+    expect(transaction.cashbookDay.create).not.toHaveBeenCalled();
+  });
+
+  test("creates an open cashbook day when none exists", async () => {
+    const transaction = {
+      cashbookDay: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: "day-1", closedAt: null }),
+        update: jest.fn(),
+      },
+    };
+    await expect(assertCashbookOpen(transaction as never, new Date("2026-09-20T00:00:00.000Z"), "hub-a")).resolves.toBeUndefined();
+    expect(transaction.cashbookDay.create).toHaveBeenCalledWith({
+      data: { hubId: "hub-a", businessDate: new Date("2026-09-20T00:00:00.000Z") },
+      select: { id: true, closedAt: true },
+    });
   });
 
   test("acquires the PostgreSQL cashbook day lock through executeRaw", async () => {
