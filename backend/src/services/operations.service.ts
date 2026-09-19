@@ -97,7 +97,8 @@ export function batchMutationLockMode(databaseUrl = process.env.DATABASE_URL ?? 
 
 export async function acquireBatchMutationLock(tx: Prisma.TransactionClient, batchId: string) {
   if (batchMutationLockMode() === "POSTGRES_ADVISORY") {
-    await tx.$queryRaw<Array<{ locked: number }>>`SELECT 1::integer AS locked FROM pg_advisory_xact_lock(hashtext(${batchId}))`;
+    // $executeRaw avoids Prisma deserializing pg_advisory_xact_lock's void return.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${batchId}))`;
     return;
   }
   await tx.batch.updateMany({ where: { id: batchId }, data: { advancePaid: { increment: 0 } } });
@@ -253,22 +254,16 @@ export function formatTrackingNumber(sequence: number) {
   return `LTY-${String(sequence).padStart(3, "0")}`;
 }
 
-type TrackingSequenceClient = Pick<Prisma.TransactionClient, "$queryRaw" | "parcel">;
+type TrackingSequenceClient = Pick<Prisma.TransactionClient, "$executeRaw" | "$queryRaw" | "parcel">;
 
 export async function acquireTrackingAllocationLock(
-  client: Pick<Prisma.TransactionClient, "$queryRaw">,
+  client: Pick<Prisma.TransactionClient, "$executeRaw" | "$queryRaw">,
   provider = env.databaseProvider,
 ) {
   if (provider !== "postgresql") return;
   // Prisma's PostgreSQL adapter cannot deserialize pg_advisory_xact_lock's
-  // native void return value. Project a supported scalar while evaluating it.
-  const lock = await client.$queryRaw<Array<{ locked: number }>>`
-    SELECT 1::integer AS locked
-    FROM pg_advisory_xact_lock(1280268628)
-  `;
-  if (lock[0]?.locked !== 1) {
-    throw new ApiError(500, "TRACKING_LOCK_FAILED", "Could not acquire the tracking allocation lock");
-  }
+  // native void return via $queryRaw. $executeRaw evaluates the lock safely.
+  await client.$executeRaw`SELECT pg_advisory_xact_lock(1280268628)`;
 }
 
 async function nextTrackingSequenceStartWith(client: TrackingSequenceClient) {

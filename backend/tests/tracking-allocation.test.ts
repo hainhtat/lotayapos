@@ -124,18 +124,20 @@ describe("bulk parcel tracking allocation", () => {
 });
 
 describe("PostgreSQL tracking allocation lock", () => {
-  test("projects the advisory lock to a Prisma-supported integer", async () => {
+  test("acquires the advisory lock through executeRaw", async () => {
     let sql = "";
     const client = {
-      $queryRaw: jest.fn(async (parts: TemplateStringsArray) => {
+      $executeRaw: jest.fn(async (parts: TemplateStringsArray) => {
         sql = parts.join("");
-        return [{ locked: 1 }];
+        return 0;
       }),
+      $queryRaw: jest.fn(),
     };
 
     await acquireTrackingAllocationLock(client as never, "postgresql");
 
-    expect(sql).toContain("SELECT 1::integer AS locked");
-    expect(sql).toContain("FROM pg_advisory_xact_lock(1280268628)");
+    expect(client.$executeRaw).toHaveBeenCalled();
+    expect(sql).toContain("SELECT pg_advisory_xact_lock(1280268628)");
+    expect(client.$queryRaw).not.toHaveBeenCalled();
   });
 });

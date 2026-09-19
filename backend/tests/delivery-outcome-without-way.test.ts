@@ -11,6 +11,7 @@ describe("OUT_FOR_DELIVERY to DELIVERED without open delivery way", () => {
   const riderUserId = `ofd-rider-user-${suffix}`;
   const riderId = `ofd-rider-${suffix}`;
   const batchId = `ofd-batch-${suffix}`;
+  const parcelPaidToOsId = `ofd-parcel-paid-os-${suffix}`;
   const parcelMissingWayId = `ofd-parcel-missing-${suffix}`;
   const parcelMismatchWayId = `ofd-parcel-mismatch-${suffix}`;
   const parcelConflictWayId = `ofd-parcel-conflict-${suffix}`;
@@ -81,6 +82,20 @@ describe("OUT_FOR_DELIVERY to DELIVERED without open delivery way", () => {
         address: "1 Road",
         codAmount: 10000,
         deliveryFee: 2000,
+        advanceAmount: 0,
+        status: "OUT_FOR_DELIVERY",
+        riderId,
+      },
+    });
+    await prisma.parcel.create({
+      data: {
+        id: parcelPaidToOsId,
+        batchId,
+        trackingNumber: `OFD-PAID-OS-${suffix}`,
+        customerName: "Paid to OS Customer",
+        address: "6 Road",
+        codAmount: 164000,
+        deliveryFee: 4500,
         advanceAmount: 0,
         status: "OUT_FOR_DELIVERY",
         riderId,
@@ -166,10 +181,11 @@ describe("OUT_FOR_DELIVERY to DELIVERED without open delivery way", () => {
   });
 
   afterAll(async () => {
-    const parcelIds = [parcelMissingWayId, parcelMismatchWayId, parcelConflictWayId, parcelReuseWayId, parcelOfdSupersedeId];
+    const parcelIds = [parcelMissingWayId, parcelPaidToOsId, parcelMismatchWayId, parcelConflictWayId, parcelReuseWayId, parcelOfdSupersedeId];
     await prisma.alert.deleteMany({ where: { parcelId: { in: parcelIds } } });
     await prisma.statusHistory.deleteMany({ where: { parcelId: { in: parcelIds } } });
     await prisma.deliveryWay.deleteMany({ where: { parcelId: { in: parcelIds } } });
+    await prisma.osReturnCredit.deleteMany({ where: { parcelId: { in: parcelIds } } });
     await prisma.riderReceivableRecognition.deleteMany({
       where: {
         OR: [
@@ -246,6 +262,46 @@ describe("OUT_FOR_DELIVERY to DELIVERED without open delivery way", () => {
       where: { sourceType_sourceId: { sourceType: "RIDER_RECEIVABLE_RECOGNITION", sourceId: parcelMissingWayId } },
     });
     expect(recognition).toMatchObject({ riderId, codAmount: 10000, deliveryFee: 2000, commissionAmount: 800 });
+  });
+
+  test("posts OS credit for paid-to-OS delivery without wallet receipt", async () => {
+    const response = await request(app)
+      .post(`/api/v1/parcels/${parcelPaidToOsId}/status`)
+      .set("Authorization", `Bearer ${dispatcherToken()}`)
+      .send({
+        status: "DELIVERED",
+        collectionMode: "PAID_BY_OS",
+        paidToOsIncludeDeliveryFee: false,
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.status).toBe("DELIVERED");
+    expect(response.body.data.collectionMode).toBe("PAID_BY_OS");
+    expect(response.body.data.paidToOsFeeIncluded).toBe(false);
+
+    const credit = await prisma.osReturnCredit.findUnique({ where: { parcelId: parcelPaidToOsId } });
+    expect(credit).toMatchObject({
+      amount: 164000,
+      codAmount: 164000,
+      feeAmount: 0,
+      kind: "PAID_TO_OS",
+      status: "POSTED",
+    });
+
+    const journal = await prisma.journalEntry.findUnique({
+      where: { sourceType_sourceId: { sourceType: "OS_PAID_TO_OS_CREDIT", sourceId: parcelPaidToOsId } },
+      include: { lines: true },
+    });
+    expect(journal?.lines).toEqual(expect.arrayContaining([
+      expect.objectContaining({ account: "OS_COD_PAYABLE", debit: 164000, credit: 0 }),
+      expect.objectContaining({ account: "OS_BATCH_COD_CLEARING", debit: 0, credit: 164000 }),
+    ]));
+    expect(journal?.lines.some((line) => line.account.startsWith("WALLET_"))).toBe(false);
+
+    const receivable = await prisma.riderReceivableRecognition.findFirst({
+      where: { sourceId: { startsWith: parcelPaidToOsId } },
+    });
+    expect(receivable).toBeNull();
   });
 
   test("allows DELIVERED when open delivery way belongs to a different rider", async () => {

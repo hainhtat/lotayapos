@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Download, FileBarChart, PackageCheck, RotateCcw, TrendingUp, Wallet } from "lucide-react";
+import { Download, FileBarChart, ListFilter, PackageCheck, RotateCcw, TrendingUp, Wallet } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@/app/auth";
@@ -77,6 +77,7 @@ export function ReportsPage() {
   const [filters, setFilters] = useState(draft);
   const [riderIds, setRiderIds] = useState<string[]>([]);
   const [statuses, setStatuses] = useState<ManifestStatus[]>([...ALL_MANIFEST_STATUSES]);
+  const [appliedStatuses, setAppliedStatuses] = useState<ManifestStatus[]>([...ALL_MANIFEST_STATUSES]);
   const [datePreset, setDatePreset] = useState<ManifestDatePreset>("today");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -114,8 +115,8 @@ export function ReportsPage() {
     enabled: canViewProfit && Boolean(profitFilters.from && profitFilters.to) && (user?.role !== "SUPERADMIN" || Boolean(profitFilters.hubId)),
   });
   const manifestBody = useMemo(
-    () => buildManifestBody({ riderIds, statuses, datePreset, dateFrom, dateTo }),
-    [riderIds, statuses, datePreset, dateFrom, dateTo],
+    () => buildManifestBody({ riderIds, statuses: appliedStatuses, datePreset, dateFrom, dateTo }),
+    [riderIds, appliedStatuses, datePreset, dateFrom, dateTo],
   );
   const delivery = useQuery({
     queryKey: ["delivery-status", manifestBody],
@@ -336,6 +337,16 @@ export function ReportsPage() {
               ))}
             </select>
           </label>
+        </div>
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            onClick={() => setAppliedStatuses([...statuses])}
+            className="rounded-xl bg-[#1598ef] px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-[#0787df] focus:outline-none focus:ring-2 focus:ring-[#1598ef]/30"
+          >
+            <ListFilter size={16} className="mr-2 inline" />
+            {t("applyFilters")}
+          </button>
         </div>
         <div className="mt-5">
           <DeliveryStatusPanel preview={delivery.data} loading={delivery.isLoading} error={delivery.isError} onRetry={() => void delivery.refetch()} />

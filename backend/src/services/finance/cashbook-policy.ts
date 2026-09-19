@@ -9,9 +9,11 @@ export async function lockCashbookDay(
 ) {
   // Serialize every writer and close operation for the same hub/day in
   // PostgreSQL. SQLite already serializes writes at the database level.
+  // Use $executeRaw: pg_advisory_xact_lock returns void, and Prisma's
+  // $queryRaw cannot safely deserialize that (FROM void-fn also fails on PG).
   if (env.databaseProvider === "postgresql") {
     const lockKey = `cashbook:${hubId}:${date.toISOString().slice(0, 10)}`;
-    await tx.$queryRaw<Array<{ locked: number }>>`SELECT 1::integer AS locked FROM pg_advisory_xact_lock(hashtext(${lockKey}))`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
   }
 }
 

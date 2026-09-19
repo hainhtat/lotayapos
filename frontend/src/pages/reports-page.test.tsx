@@ -192,12 +192,23 @@ describe("ReportsPage", () => {
     });
   });
 
-  it("previews a report with multiple selected statuses and displays row and summary totals", async () => {
+  it("waits to apply multiple statuses until the filter button is clicked", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><ReportsPageUnderTest /></QueryClientProvider>);
     fireEvent.change(screen.getByLabelText("Choose a report"), { target: { value: "delivery" } });
+    expect(await screen.findByText("LTY-001")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Rider"), { target: { value: "rider-1" } });
+    await waitFor(() => {
+      const calls = apiMock.mock.calls.filter(([path]) => path === "/operations/parcels/manifest/preview");
+      const body = JSON.parse(String(calls.at(-1)?.[1]?.body ?? "{}")) as { riderIds?: string[] };
+      expect(body.riderIds).toEqual(["rider-1"]);
+    });
+    const initialPreviewCalls = apiMock.mock.calls.filter(([path]) => path === "/operations/parcels/manifest/preview").length;
     fireEvent.click(await screen.findByRole("button", { name: "To deliver" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Delivered" }));
+    await Promise.resolve();
+    expect(apiMock.mock.calls.filter(([path]) => path === "/operations/parcels/manifest/preview")).toHaveLength(initialPreviewCalls);
+    fireEvent.click(screen.getByRole("button", { name: "Apply filters" }));
     await waitFor(() => {
       const calls = apiMock.mock.calls.filter(([path]) => path === "/operations/parcels/manifest/preview");
       const body = JSON.parse(String(calls.at(-1)?.[1]?.body ?? "{}")) as { statuses?: string[] };

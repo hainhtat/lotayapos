@@ -41,8 +41,10 @@ html.dark body{color:var(--color-text-primary);background:var(--color-canvas)}
 .dark :is(input,select,textarea):focus{border-color:var(--color-brand)!important;box-shadow:0 0 0 3px rgb(56 169 248 / .18)}
 .dark tbody tr{border-color:var(--color-border)}
 
-@keyframes page-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-@keyframes data-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes page-in{from{opacity:0}to{opacity:1}}
+@keyframes data-in{from{opacity:0}to{opacity:1}}
+/* Opacity-only: a lingering transform creates a containing block so
+   position:fixed overlays center in the document instead of the viewport. */
 .page-transition{animation:page-in 180ms ease-out both}
 .data-reveal{animation:data-in 260ms ease-out both}
 

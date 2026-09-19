@@ -1,4 +1,4 @@
-import { assertCashbookOpen } from "../src/services/finance/cashbook-policy.js";
+import { assertCashbookOpen, lockCashbookDay } from "../src/services/finance/cashbook-policy.js";
 import { buildCashbookAdjustmentLines, buildOpeningBalanceLines, buildWalletTransferLines } from "../src/services/finance/cashbook-postings.js";
 import { calculateWalletBalances, calculateWalletReconciliationVariance } from "../src/services/finance/cashbook-close.js";
 import { calculateOsSettlementNet, isOsSettlementCodCovered, osBatchComponents, returnedAdvanceContribution } from "../src/services/finance/os-settlements.js";
@@ -7,7 +7,7 @@ import { buildRiderSettlementReceivableLines, calculateDailySalaryDeduction, cal
 import { buildExpenseLines } from "../src/services/finance/expenses.js";
 import { buildRiderReceivableRecognitionLines } from "../src/services/parcel.service.js";
 import { ApiError } from "../src/utils/api-error.js";
-import { batchMutationLockMode, buildManifestFilenameSuffix, buildPickupAdvanceJournalLines, bulkAssignParcels, calculateReturnExtension, hubCalendarDaysAfter, isAssignmentEligible, manifestStatusesLabel, pickupAdvancePostingDisposition, sanitizeManifestFilenamePart, summarizeManifestParcels, yangonBusinessDate } from "../src/services/operations.service.js";
+import { acquireBatchMutationLock, batchMutationLockMode, buildManifestFilenameSuffix, buildPickupAdvanceJournalLines, bulkAssignParcels, calculateReturnExtension, hubCalendarDaysAfter, isAssignmentEligible, manifestStatusesLabel, pickupAdvancePostingDisposition, sanitizeManifestFilenamePart, summarizeManifestParcels, yangonBusinessDate } from "../src/services/operations.service.js";
 import { businessDateFor, countUnsettledOsAccountBatches } from "../src/services/master-data.service.js";
 import { assertParcelAccess, buildParcelListWhere, buildParcelScope, buildRiderCommissionLines, calculateCommissionAmount, canOverrideStatus, isAllowedTransition, LINKED_MONEY_POSTED_SOURCE_TYPES, MONEY_POSTED_SOURCE_TYPES, overrideLeavesMoneyBearingStatus, requiresOverrideNote, requirePendingReturnReason, resolveCommissionRateBps, validateConfiguredReason } from "../src/services/parcel.service.js";
 import { normalizeReasonCode, normalizeRiderPayFields } from "../src/services/master-data.service.js";
@@ -296,6 +296,27 @@ describe("cashbook close controls", () => {
     await expect(assertCashbookOpen(transaction as never, new Date("2026-08-10T00:00:00.000Z"), "hub-a")).rejects.toThrow("already closed");
     expect(transaction.cashbookDay.findFirst).toHaveBeenCalledWith({ where: { hubId: "hub-a", businessDate: new Date("2026-08-10T00:00:00.000Z") }, select: { closedAt: true } });
   });
+
+  test("acquires the PostgreSQL cashbook day lock through executeRaw", async () => {
+    const original = env.databaseProvider;
+    (env as { databaseProvider: string }).databaseProvider = "postgresql";
+    try {
+      let sql = "";
+      const tx = {
+        $executeRaw: jest.fn(async (parts: TemplateStringsArray) => {
+          sql = parts.join("");
+          return 0;
+        }),
+        $queryRaw: jest.fn(),
+      };
+      await lockCashbookDay(tx as never, new Date("2026-09-18T00:00:00.000Z"), "hub-a");
+      expect(tx.$executeRaw).toHaveBeenCalled();
+      expect(sql).toContain("SELECT pg_advisory_xact_lock(hashtext(");
+      expect(tx.$queryRaw).not.toHaveBeenCalled();
+    } finally {
+      (env as { databaseProvider: string }).databaseProvider = original;
+    }
+  });
 });
 
 describe("parcel transitions", () => {
@@ -435,6 +456,31 @@ describe("pickup advance funding wallet", () => {
     expect(batchMutationLockMode("postgresql://db.example/lotaya")).toBe("POSTGRES_ADVISORY");
     expect(batchMutationLockMode("file:./dev.db")).toBe("SQLITE_WRITE");
   });
+
+  test("acquires the PostgreSQL batch mutation lock through executeRaw", async () => {
+    const original = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = "postgresql://db.example/lotaya";
+    try {
+      let sql = "";
+      const tx = {
+        $executeRaw: jest.fn(async (parts: TemplateStringsArray) => {
+          sql = parts.join("");
+          return 0;
+        }),
+        $queryRaw: jest.fn(),
+        batch: { updateMany: jest.fn() },
+      };
+      await acquireBatchMutationLock(tx as never, "batch-1");
+      expect(tx.$executeRaw).toHaveBeenCalled();
+      expect(sql).toContain("SELECT pg_advisory_xact_lock(hashtext(");
+      expect(tx.$queryRaw).not.toHaveBeenCalled();
+      expect(tx.batch.updateMany).not.toHaveBeenCalled();
+    } finally {
+      if (original === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = original;
+    }
+  });
+
   test("credits the selected KBZ Pay wallet while keeping the entry balanced", () => {
     expect(buildPickupAdvanceJournalLines(25000, "KBZ_PAY")).toEqual([
       { account: "OS_COD_PAYABLE", debit: 25000, credit: 0 },

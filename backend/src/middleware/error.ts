@@ -8,5 +8,14 @@ export const errorHandler: ErrorRequestHandler = (error,req,res,_next) => {
     : error?.code === "P2034"
     ? new ApiError(409, "RETRYABLE_CONFLICT", "The record changed concurrently; retry the request")
     : new ApiError(500,"INTERNAL_ERROR","An unexpected error occurred");
+  if (!(error instanceof ApiError) && !oversized) {
+    console.error("Unhandled API error", {
+      requestId: req.requestId,
+      method: req.method,
+      path: req.path,
+      code: error?.code,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
   res.status(err.status).json({ success:false, error:{ code:err.code, message:err.message, details:err.details, requestId:req.requestId } });
 };
