@@ -152,7 +152,7 @@ export function FinancePage() {
 
       {tab === "overview" ? (
         <div id="finance-overview-panel" role="tabpanel" aria-labelledby="finance-overview-tab">
-          <OsCashbookOverview ledger={currentBalances.data ?? []} />
+          <OsCashbookOverview ledger={currentBalances.data ?? []} hubs={hubs.data ?? []} />
           <section className="mt-6" aria-labelledby="wallet-health-heading">
           <div className="mb-3"><h2 id="wallet-health-heading" className="font-display text-lg font-bold">{t("walletHealth")}</h2><p className="text-sm text-slate-500">{t("walletHealthDescription")}</p></div>
           <div className="mt-6 grid gap-4 sm:grid-cols-3">
@@ -257,7 +257,7 @@ export function FinancePage() {
               )}
             </div>
           </section>
-          <CashbookExpenses />
+          <CashbookExpenses hubs={hubs.data ?? []} />
           {adjustingWallet && <WalletAdjustmentDialog wallet={adjustingWallet} currentBalance={walletBalance(adjustingWallet === "CASH" ? "WALLET_CASH" : adjustingWallet === "KBZ_PAY" ? "WALLET_KBZ_PAY" : "WALLET_WAVE_PAY")} hubs={hubs.data ?? []} onClose={() => setAdjustingWallet(null)} onSaved={() => setMessage(t("walletAdjustmentSaved"))} />}
         </div>
       ) : (

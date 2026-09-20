@@ -11,18 +11,21 @@ import { notifyError, notifySuccess } from "@/lib/notifications";
 
 type Category = { id: string; code: string; nameEn: string; nameMy: string; active: boolean };
 type Expense = { id: string; amount: number; description: string; wallet: string; category: Category };
+type Hub = { id: string; name: string };
 
-export function CashbookExpenses() {
+export function CashbookExpenses({ hubs = [] }: { hubs?: Hub[] }) {
   const { t, i18n } = useTranslation();
   const user = useAuth()?.user;
   const idempotencyKey = useRef("");
   const queryClient = useQueryClient();
-  const [entry, setEntry] = useState({ businessDate: hubBusinessDate(), categoryId: "", wallet: "CASH", amount: "", description: "" });
+  const requiresHub = user?.role === "SUPERADMIN";
+  const [entry, setEntry] = useState({ businessDate: hubBusinessDate(), hubId: "", categoryId: "", wallet: "CASH", amount: "", description: "" });
   const [category, setCategory] = useState({ code: "", nameEn: "", nameMy: "" });
   const categories = useQuery({ queryKey: ["expense-categories"], queryFn: () => api<Category[]>("/finance/expense-categories").then((response) => response.data) });
-  const expenses = useQuery({ queryKey: ["expenses", entry.businessDate], queryFn: () => api<Expense[]>(`/finance/expenses?businessDate=${entry.businessDate}`).then((response) => response.data) });
+  const expenseQuery = new URLSearchParams({ businessDate: entry.businessDate, ...(entry.hubId ? { hubId: entry.hubId } : {}) }).toString();
+  const expenses = useQuery({ queryKey: ["expenses", expenseQuery], queryFn: () => api<Expense[]>(`/finance/expenses?${expenseQuery}`).then((response) => response.data), enabled: !requiresHub || Boolean(entry.hubId) });
   const post = useMutation({
-    mutationFn: () => api("/finance/expenses", { method: "POST", body: JSON.stringify({ ...entry, amount: Number(entry.amount), idempotencyKey: idempotencyKey.current }) }),
+    mutationFn: () => api("/finance/expenses", { method: "POST", body: JSON.stringify({ businessDate: entry.businessDate, ...(entry.hubId ? { hubId: entry.hubId } : {}), categoryId: entry.categoryId, wallet: entry.wallet, amount: Number(entry.amount), description: entry.description, idempotencyKey: idempotencyKey.current }) }),
     onSuccess: async () => {
       idempotencyKey.current = "";
       notifySuccess(t("expenseSaved"));
@@ -46,8 +49,12 @@ export function CashbookExpenses() {
     <Card className="mt-6">
       <h2 className="font-display text-lg font-bold">{t("cashbookExpenses")}</h2>
       <p className="mt-1 text-sm text-slate-500">{t("cashbookExpensesDescription")}</p>
-      <form onSubmit={(event) => { event.preventDefault(); if (!idempotencyKey.current) idempotencyKey.current = crypto.randomUUID(); post.mutate(); }} className="mt-5 grid gap-3 md:grid-cols-5">
+      <form onSubmit={(event) => { event.preventDefault(); if (requiresHub && !entry.hubId) return; if (!idempotencyKey.current) idempotencyKey.current = crypto.randomUUID(); post.mutate(); }} className="mt-5 grid gap-3 md:grid-cols-6">
         <Input aria-label={t("businessDate")} type="date" value={entry.businessDate} onChange={(event) => setEntry((value) => ({ ...value, businessDate: event.target.value }))} />
+        {requiresHub && <Select aria-label={t("expenseHub")} required value={entry.hubId} onChange={(event) => setEntry((value) => ({ ...value, hubId: event.target.value }))}>
+          <option value="">{t("selectHub")}</option>
+          {hubs.map((hub) => <option key={hub.id} value={hub.id}>{hub.name}</option>)}
+        </Select>}
         <Select aria-label={t("expenseCategory")} required value={entry.categoryId} onChange={(event) => setEntry((value) => ({ ...value, categoryId: event.target.value }))}>
           <option value="">{t("selectExpenseCategory")}</option>
           {(categories.data ?? []).filter((value) => value.active).map((value) => <option key={value.id} value={value.id}>{localizedCategory(value)}</option>)}
@@ -57,7 +64,7 @@ export function CashbookExpenses() {
         </Select>
         <Input aria-label={t("amount")} required type="number" min="1" value={entry.amount} onChange={(event) => setEntry((value) => ({ ...value, amount: event.target.value }))} placeholder={t("amount")} />
         <Input aria-label={t("description")} required minLength={2} value={entry.description} onChange={(event) => setEntry((value) => ({ ...value, description: event.target.value }))} placeholder={t("description")} />
-        <Button disabled={post.isPending} className="bg-[#1598ef] text-white md:col-start-5">{t("recordExpense")}</Button>
+        <Button disabled={post.isPending || (requiresHub && !entry.hubId)} className={`bg-[#1598ef] text-white ${requiresHub ? "md:col-start-6" : "md:col-start-5"}`}>{t("recordExpense")}</Button>
       </form>
       {user?.role === "SUPERADMIN" && <details className="mt-5"><summary className="cursor-pointer text-sm font-bold text-[#0787df]">{t("manageExpenseCategories")}</summary>
         <form onSubmit={(event) => { event.preventDefault(); createCategory.mutate(); }} className="mt-3 grid gap-2 md:grid-cols-4">

@@ -29,6 +29,7 @@ describe("FinancePage",()=>{
     if(path==="/finance/expense-categories")return Promise.resolve({data:[{id:"fuel",code:"FUEL",nameEn:"Fuel",nameMy:"ဆီဖိုး",active:true}]});
     if(path.startsWith("/finance/expenses?"))return Promise.resolve({data:[]});
     if(path==="/master-data/shops"||path==="/master-data")return Promise.resolve({data:path==="/master-data"?{hubs:[]}:[]});
+    if(path.startsWith("/finance/os-accounts"))return Promise.resolve({data:{shops:[{shop:{id:"shop-1",name:"SNMD"},hubId:"hub-1",returnedCod:75000,creditAvailable:25000}]}});
     if(path.startsWith("/finance/os-pending-returns"))return Promise.resolve({data:emptyPendingReturns});
     if(path.startsWith("/finance/rider-outstanding")||path.startsWith("/finance/os-settlement"))return Promise.resolve({data:[]});
     return Promise.resolve({data:ledgerReport});
@@ -38,12 +39,16 @@ describe("FinancePage",()=>{
     renderPage("/finance/settlements");
     expect(await screen.findByRole("tab", { name: "OS & riders" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tabpanel", { name: "OS & riders" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open OS handover documents" })).toHaveAttribute("href", "/operations/returns");
   });
 
   it("renders wallet cards from ledger balances",async()=>{
     renderPage();
     await waitFor(()=>expect(within(screen.getByText("Cash wallet").parentElement!).getByText("100,000 MMK")).toBeInTheDocument());
     expect(screen.getByText("OS cashbook snapshot")).toBeInTheDocument();
+    expect((await screen.findAllByText("OS credits recorded")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("75,000 MMK").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("25,000 MMK").length).toBeGreaterThan(0);
     expect(screen.getAllByText("150,000 MMK").length).toBeGreaterThan(0);
     expect(screen.getAllByText("40,000 MMK")).toHaveLength(2);
     expect(screen.getAllByText("60,000 MMK")).toHaveLength(2);
@@ -133,6 +138,31 @@ describe("FinancePage",()=>{
       method:"POST",
       body:expect.stringContaining('"categoryId":"fuel","wallet":"WAVE_PAY","amount":12500,"description":"Rider fuel"'),
     })));
+  });
+
+  it("requires a Superadmin to select the expense hub and sends it with the expense", async () => {
+    authState.role = "SUPERADMIN";
+    apiMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/master-data") return Promise.resolve({ data: { hubs: [{ id: "hub-1", name: "Yangon" }] } });
+      if (path === "/finance/expense-categories") return Promise.resolve({ data: [{ id: "fuel", code: "FUEL", nameEn: "Fuel", nameMy: "ဆီဖိုး", active: true }] });
+      if (path.startsWith("/finance/expenses?") && !init) return Promise.resolve({ data: [] });
+      if (path === "/finance/expenses" && init) return Promise.resolve({ data: { id: "expense-1" } });
+      if (path === "/operations/batches") return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: ledgerReport });
+    });
+    const user = userEvent.setup();
+    renderPage();
+    const expenseHub = screen.getByLabelText("Expense hub");
+    await waitFor(() => expect(within(expenseHub).getByRole("option", { name: "Yangon" })).toBeInTheDocument());
+    await user.selectOptions(expenseHub, "hub-1");
+    await user.selectOptions(screen.getByLabelText("Expense category"), "fuel");
+    await user.type(screen.getByLabelText("Amount"), "6000");
+    await user.type(screen.getByLabelText("Description"), "YCDC");
+    await user.click(screen.getByRole("button", { name: "Record expense" }));
+    await waitFor(() => {
+      const call = apiMock.mock.calls.find(([path]) => path === "/finance/expenses");
+      expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ hubId: "hub-1", amount: 6000, description: "YCDC" });
+    });
   });
 
   it("shows COD, fee, and commission breakdown in rider outstanding rows", async () => {
