@@ -210,6 +210,7 @@ describe("audit ledger re-post and MONEY_POSTED gates", () => {
     await prisma.rider.deleteMany({ where: { id: riderId } });
     await prisma.user.deleteMany({ where: { id: { in: [dispatcherId, financeId, riderUserId] } } });
     await prisma.onlineShop.deleteMany({ where: { id: shopId } });
+    await prisma.cashbookDay.deleteMany({ where: { hubId } });
     await prisma.hub.deleteMany({ where: { id: hubId } });
     await prisma.reasonCode.deleteMany({ where: { code: reasonCode } });
   });

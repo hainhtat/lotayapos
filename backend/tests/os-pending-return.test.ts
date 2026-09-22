@@ -277,6 +277,7 @@ describe("Finance OS pending-return recovery", () => {
     await prisma.batch.deleteMany({ where: { id: { in: batchIds } } });
     await prisma.onlineShop.deleteMany({ where: { id: shopId } });
     await prisma.user.deleteMany({ where: { id: financeId } });
+    await prisma.cashbookDay.deleteMany({ where: { hubId } });
     await prisma.hub.deleteMany({ where: { id: hubId } });
   });
 

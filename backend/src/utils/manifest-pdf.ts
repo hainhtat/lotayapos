@@ -47,12 +47,13 @@ export type ManifestInput = {
 };
 
 function isOsHandoverDocument(title?: string) {
-  return title === "Return to OS Handover" || title === "Paid to OS Handover";
+  return title === "Return to OS Handover" || title === "Paid to OS Handover" || title === "OS Handover Report";
 }
 
 function handoverBrandLabel(title?: string) {
   if (title === "Return to OS Handover") return "Return Handover";
   if (title === "Paid to OS Handover") return "Paid to OS Handover";
+  if (title === "OS Handover Report") return "OS Handover Report";
   return "Active Rider Sheet";
 }
 

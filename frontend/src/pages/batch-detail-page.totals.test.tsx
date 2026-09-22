@@ -7,6 +7,7 @@ import { BatchDetailPage, isParcelRowComplete, normalizeManifestRow, parseParcel
 
 const apiMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", () => ({ api: apiMock }));
+vi.mock("@/app/auth", () => ({ useAuth: () => ({ user: { id: "ops-1", role: "OPERATIONS_MANAGER" } }) }));
 
 describe("BatchDetailPage settlement totals", () => {
   beforeEach(() => {
@@ -112,6 +113,44 @@ describe("BatchDetailPage settlement totals", () => {
     await waitFor(() => expect(screen.getByText("100,000 MMK")).toBeInTheDocument());
     expect(screen.getByText("60,000 MMK")).toBeInTheDocument();
     expect(screen.getByText(/Remaining to OS/i)).toBeInTheDocument();
+  });
+
+  it("reviews the deferred credit calculation before finalizing parcel entry", async () => {
+    let finalized = false;
+    const original = apiMock.getMockImplementation()!;
+    apiMock.mockImplementation((path: string, options?: RequestInit) => {
+      if (path === "/operations/batches/finalize-batch/finalize" && options?.method === "POST") {
+        finalized = true;
+        return Promise.resolve({ data: { finalizedAt: "2026-09-20T12:00:00.000Z" } });
+      }
+      if (path === "/operations/batches/finalize-batch") return Promise.resolve({ data: {
+        id: "finalize-batch", hubId: "hub-1", label: "Shop 11.08.2026", automaticAccounting: true,
+        advancePaid: 40000, totalCod: 100000, remainingToOs: 45000, availableOsCredit: 20000,
+        expectedOsCreditApplied: 15000, expectedOutstanding: 45000, expectedCarryForwardCredit: 0,
+        finalizedAt: finalized ? "2026-09-20T12:00:00.000Z" : null, nextTrackingSequence: 2,
+        shop: { name: "Shop One" }, parcels: [{ id: "parcel-1", trackingNumber: "LTY-1", customerName: "Ma Su", address: "Road", status: "CREATED", codAmount: 100000 }],
+      } });
+      return original(path, options);
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<MemoryRouter initialEntries={["/batches/finalize-batch"]}><QueryClientProvider client={client}><Routes><Route path="/batches/:id" element={<BatchDetailPage />} /></Routes></QueryClientProvider></MemoryRouter>);
+
+    const finalizeButton = await screen.findByRole("button", { name: "Finalize batch" });
+    await waitFor(() => expect(finalizeButton).toBeEnabled());
+    fireEvent.click(finalizeButton);
+    const dialog = screen.getByRole("dialog", { name: "Finalize batch" });
+    expect(dialog).toHaveTextContent("100,000 mmk");
+    expect(dialog).toHaveTextContent("40,000 mmk");
+    expect(dialog).toHaveTextContent("20,000 mmk");
+    expect(dialog).toHaveTextContent("15,000 mmk");
+    expect(dialog).toHaveTextContent("45,000 mmk");
+    expect(dialog).toHaveTextContent("Existing credit remaining");
+    fireEvent.click(screen.getByRole("button", { name: "Finalize and create OS payable" }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/operations/batches/finalize-batch/finalize", { method: "POST" }));
+    expect(await screen.findByText(/Parcel entry is finalized/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add parcel" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Upload manifest PDF")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Edit parcel/ })).not.toBeInTheDocument();
   });
 
   it("lists region townships across districts and fills district without changing region", async () => {

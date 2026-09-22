@@ -57,6 +57,10 @@ type Batch = {
   parcels: SavedParcel[];
   finalizedAt?: string | null;
   automaticAccounting?: boolean;
+  availableOsCredit?: number;
+  expectedOsCreditApplied?: number;
+  expectedOutstanding?: number;
+  expectedCarryForwardCredit?: number;
 };
 
 export type ParcelRow = {
@@ -533,11 +537,12 @@ function BatchDetailContent() {
   }, [savedPage, savedPageCount]);
   const remainingToOs = batch.data?.remainingToOs ?? 0;
   const returnedCod = batch.data?.returnedCod ?? 0;
+  const finalized = Boolean(batch.data?.finalizedAt);
   const canFinalize=["SUPERADMIN","OPERATIONS_MANAGER","DISPATCHER"].includes(user?.role??"");
   const finalize=useMutation({mutationFn:()=>api(`/operations/batches/${id}/finalize`,{method:"POST"}),onSuccess:async()=>{setConfirmFinalize(false);setMessage(t("batchFinalized"));await queryClient.invalidateQueries({queryKey:["batch",id]})},onError:error=>setMessage(error instanceof Error?error.message:t("loadError"))});
   const updateParcel = useMutation({
     mutationFn: () => {
-      const canEditDeliveryFields = fieldEditableStatuses.has(editing!.status) && !editing!.linkGroupId;
+      const canEditDeliveryFields = !finalized && fieldEditableStatuses.has(editing!.status) && !editing!.linkGroupId;
       return api(`/parcels/${editing!.id}`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -692,7 +697,9 @@ function BatchDetailContent() {
 
   return (
     <div className="mx-auto max-w-[1600px]">
-      <BatchWorkspaceSummary shopName={batch.data?.shop.name} label={batch.data?.label} finalized={!batch.data?.automaticAccounting&&Boolean(batch.data?.finalizedAt)} canFinalize={!batch.data?.automaticAccounting&&canFinalize} parcelCount={savedParcels.length} totalCod={batch.data?.totalCod??0} advancePaid={batch.data?.advancePaid??0} remainingToOs={remainingToOs} balanceError={batch.data?.balanceError} accountBreakdown={t("batchAccountBreakdown",{cod:(batch.data?.totalCod??0).toLocaleString(),advance:(batch.data?.advancePostedAmount??batch.data?.advancePaid??0).toLocaleString(),paid:(batch.data?.paymentPaid??0).toLocaleString(),returns:returnedCod.toLocaleString(),historical:(batch.data?.historicalSettledAmount??0).toLocaleString(),adjustment:(batch.data?.openingAdjustment??0).toLocaleString()})} onFinalize={()=>setConfirmFinalize(true)} />
+      <BatchWorkspaceSummary shopName={batch.data?.shop.name} label={batch.data?.label} finalized={finalized} canFinalize={!finalized&&canFinalize} parcelCount={savedParcels.length} totalCod={batch.data?.totalCod??0} advancePaid={batch.data?.advancePaid??0} remainingToOs={finalized ? remainingToOs : (batch.data?.expectedOutstanding ?? remainingToOs)} balanceError={batch.data?.balanceError} accountBreakdown={t("batchAccountBreakdown",{cod:(batch.data?.totalCod??0).toLocaleString(),advance:(batch.data?.advancePostedAmount??batch.data?.advancePaid??0).toLocaleString(),paid:(batch.data?.paymentPaid??0).toLocaleString(),returns:returnedCod.toLocaleString(),historical:(batch.data?.historicalSettledAmount??0).toLocaleString(),adjustment:(batch.data?.openingAdjustment??0).toLocaleString()})} onFinalize={()=>setConfirmFinalize(true)} />
+      {finalized && <p role="status" className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200">{t("finalizedBatchLocked")}</p>}
+      {!finalized && <>
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex rounded-xl border border-slate-200 p-1 dark:border-white/10">
           <button
@@ -890,6 +897,7 @@ function BatchDetailContent() {
         </table>
       </div>
       )}
+      </>}
       {(batch.data?.parcels.length ?? 0) > 0 && (
         <section className="mt-8 rounded-2xl border bg-white p-6 dark:border-white/10 dark:bg-[#181a1d]">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -942,7 +950,7 @@ function BatchDetailContent() {
                     <td className="py-3">{parcel.status}</td>
                     <td className="py-3 text-right">
                       <button aria-label={`${t("viewFieldHistory")} ${parcel.trackingNumber}`} onClick={()=>setHistoryParcel({id:parcel.id,trackingNumber:parcel.trackingNumber})} className="mr-1 rounded-lg border px-2 py-1 text-xs font-bold text-slate-600 dark:text-slate-300">{t("history")}</button>
-                      {["CREATED", "PICKED_UP", "ASSIGNED"].includes(parcel.status) && (
+                      {!finalized && ["CREATED", "PICKED_UP", "ASSIGNED"].includes(parcel.status) && (
                         <button aria-label={`${t("editParcel")} ${parcel.trackingNumber}`} onClick={() => setEditing(parcel)} className="rounded-lg border px-2 py-1 text-xs font-bold text-[#0787df]">
                           <Pencil size={14} className="mr-1 inline" />
                           {t("editParcel")}
@@ -1023,7 +1031,7 @@ function BatchDetailContent() {
           </form>
         </div></ModalPortal>
       )}
-      {confirmFinalize&&<ModalPortal><div className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-black/55 p-4"><section role="dialog" aria-modal="true" aria-labelledby="finalize-title" className="relative my-6 max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 dark:bg-[#181a1d]"><div className="sticky top-0 z-10 -mx-6 -mt-6 flex items-start justify-between bg-white px-6 pt-6 dark:bg-[#181a1d]"><h2 id="finalize-title" className="text-xl font-bold">{t("finalizeBatch")}</h2><button type="button" aria-label={t("close")} disabled={finalize.isPending} onClick={()=>setConfirmFinalize(false)} className="rounded-lg p-2 hover:bg-slate-100 disabled:opacity-40 dark:hover:bg-white/10"><X size={18}/></button></div><p className="mt-3 text-sm text-slate-500">{t("finalizeBatchExplanation",{count:savedParcels.length,cod:(batch.data?.totalCod??0).toLocaleString()})}</p><div className="mt-6 flex justify-end gap-2"><button type="button" onClick={()=>setConfirmFinalize(false)} className="rounded-xl border px-4 py-2 text-sm font-bold">{t("cancel")}</button><button type="button" disabled={finalize.isPending} onClick={()=>finalize.mutate()} className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{finalize.isPending?t("loading"):t("confirmFinalize")}</button></div></section></div></ModalPortal>}
+      {confirmFinalize&&<ModalPortal><div className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-black/55 p-4"><section role="dialog" aria-modal="true" aria-labelledby="finalize-title" className="relative my-6 max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 dark:bg-[#181a1d]"><div className="sticky top-0 z-10 -mx-6 -mt-6 flex items-start justify-between bg-white px-6 pt-6 dark:bg-[#181a1d]"><h2 id="finalize-title" className="text-xl font-bold">{t("finalizeBatch")}</h2><button type="button" aria-label={t("close")} disabled={finalize.isPending} onClick={()=>setConfirmFinalize(false)} className="rounded-lg p-2 hover:bg-slate-100 disabled:opacity-40 dark:hover:bg-white/10"><X size={18}/></button></div><p className="mt-3 text-sm text-slate-500">{t("finalizeBatchExplanation")}</p><dl className="mt-5 divide-y rounded-xl border px-4 text-sm dark:border-white/10">{[[t("savedParcels"),savedParcels.length],[t("totalCodFromOs"),`${(batch.data?.totalCod??0).toLocaleString()} ${t("mmk")}`],[t("totalAdvancePaid"),`${(batch.data?.advancePaid??0).toLocaleString()} ${t("mmk")}`],[t("availableOsCredit"),`${(batch.data?.availableOsCredit??0).toLocaleString()} ${t("mmk")}`],[t("osCreditApplied"),`${(batch.data?.expectedOsCreditApplied??0).toLocaleString()} ${t("mmk")}`],[t("outstanding"),`${(batch.data?.expectedOutstanding??0).toLocaleString()} ${t("mmk")}`],[t("creditRemainingAfterFinalize"),`${Math.max(0,(batch.data?.availableOsCredit??0)-(batch.data?.expectedOsCreditApplied??0)).toLocaleString()} ${t("mmk")}`],[t("overAdvanceCarryForward"),`${(batch.data?.expectedCarryForwardCredit??0).toLocaleString()} ${t("mmk")}`]].map(([label,value])=><div key={String(label)} className="flex justify-between gap-4 py-3"><dt className="text-slate-500">{label}</dt><dd className="text-right font-bold">{value}</dd></div>)}</dl><div className="mt-6 flex justify-end gap-2"><button type="button" disabled={finalize.isPending} onClick={()=>setConfirmFinalize(false)} className="rounded-xl border px-4 py-2 text-sm font-bold disabled:opacity-40">{t("cancel")}</button><button type="button" disabled={finalize.isPending} onClick={()=>finalize.mutate()} className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{finalize.isPending?t("loading"):t("confirmFinalize")}</button></div></section></div></ModalPortal>}
       {historyParcel&&<ParcelFieldHistory parcel={historyParcel} onClose={()=>setHistoryParcel(null)}/>}
     </div>
   );

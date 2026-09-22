@@ -217,6 +217,7 @@ describe("parcel corrections and delivery fee edits", () => {
     await prisma.rider.deleteMany({ where: { id: { in: [rider1Id, rider2Id] } } });
     await prisma.user.deleteMany({ where: { id: { in: [dispatcherId, financeUserId, rider1UserId, rider2UserId] } } });
     await prisma.onlineShop.deleteMany({ where: { id: shopId } });
+    await prisma.cashbookDay.deleteMany({ where: { hubId } });
     await prisma.hub.deleteMany({ where: { id: hubId } });
   });
 

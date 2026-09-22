@@ -7,7 +7,6 @@ import { resolveCommissionRateBps } from "../utils/commission.js";
 import { caseInsensitiveTextCondition } from "../utils/string-filters.js";
 import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
-import { syncBatchObligation } from "./os-account.service.js";
 import { acquireBatchMutationLock } from "./operations.service.js";
 import { assertCashbookOpen } from "./finance/cashbook-policy.js";
 import { assertBalancedLines, buildPartialReturnAdjustmentLines, buildPartialReturnCollectionLines, calculateLinkedDeliveryAmounts, calculatePartialReturnAmounts, reverseJournalEntryInTx } from "./ledger.service.js";
@@ -263,7 +262,8 @@ async function serializableTransaction<T>(work: (tx: Prisma.TransactionClient) =
     try {
       return await prisma.$transaction(work, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     } catch (error) {
-      if ((error as { code?: string }).code !== "P2034" || attempt === 2) throw error;
+      if ((error as { code?: string }).code !== "P2034") throw error;
+      if (attempt === 2) throw new ApiError(409, "TRANSACTION_CONFLICT", "Concurrent parcel update; retry the request");
     }
   }
   throw new ApiError(409, "TRANSACTION_CONFLICT", "Concurrent parcel update; retry the request");
@@ -565,10 +565,12 @@ export async function updateParcel(
   const accessScope = buildParcelScope(scope);
   const parcel = await prisma.parcel.findFirst({
     where: { id, ...(accessScope ?? {}) },
-    include: { batch: { select: { id: true, hubId: true, automaticAccounting: true } } },
+    include: { batch: { select: { id: true, hubId: true, automaticAccounting: true, finalizedAt: true } } },
   });
   if (!parcel) throw new ApiError(404, "PARCEL_NOT_FOUND", "Parcel not found");
   const changesDeliveryAttributes = input.codAmount !== undefined || input.deliveryFee !== undefined || input.townshipId !== undefined || input.zoneId !== undefined;
+  const changesLockedFinancialAttributes = input.codAmount !== undefined || input.deliveryFee !== undefined || input.townshipId !== undefined;
+  if (changesLockedFinancialAttributes && parcel.batch.finalizedAt) throw new ApiError(409, "BATCH_FINALIZED", "COD, delivery fee, and township cannot be changed after batch finalization");
   if (changesDeliveryAttributes && !editableStatuses.has(parcel.status)) throw new ApiError(409, "PARCEL_NOT_EDITABLE", "COD, delivery fee, township, and zone may only be edited for Created, Picked up, or Assigned parcels");
   if (changesDeliveryAttributes && parcel.linkGroupId) throw new ApiError(409, "PARCEL_LINKED", "Unlink the parcel before editing delivery attributes");
   if (!parcel.batch.automaticAccounting && (input.codAmount !== undefined || input.townshipId !== undefined || input.deliveryFee !== undefined)) {
@@ -644,6 +646,7 @@ export async function updateParcel(
 
   return serializableTransaction(async (tx) => {
     await acquireBatchMutationLock(tx, parcel.batchId);
+    if (changesLockedFinancialAttributes && await tx.batch.findFirst({ where: { id: parcel.batchId, finalizedAt: { not: null } }, select: { id: true } })) throw new ApiError(409, "BATCH_FINALIZED", "COD, delivery fee, and township cannot be changed after batch finalization");
     if (input.codAmount !== undefined && await tx.osHistoricalSettlement.findUnique({ where: { batchId: parcel.batchId } })) throw new ApiError(409, "HISTORICAL_BATCH_LOCKED", "Historically settled batch COD cannot be changed");
     if (changedFields.length > 0) {
       const result = await tx.parcel.updateMany({ where: { id, updatedAt: parcel.updatedAt, ...(changesDeliveryAttributes ? {status: { in: [...editableStatuses] }} : {}) }, data });
@@ -656,7 +659,6 @@ export async function updateParcel(
           afterJson: JSON.stringify(Object.fromEntries(changedFields.map((key) => [key, afterValues[key]]))),
         },
       });
-      if (parcel.batch.automaticAccounting && changedFields.includes("codAmount")) await syncBatchObligation(tx, parcel.batchId, actor.id);
     }
     return tx.parcel.findUniqueOrThrow({
       where: { id },
@@ -741,12 +743,97 @@ async function updateStatusInTransaction(
     if (scope.role === "RIDER") {
       throw new ApiError(403, "FORBIDDEN", "Paid-to-OS delivery may only be recorded from the ERP");
     }
-    if (parcel.linkGroupId) {
-      throw new ApiError(400, "LINKED_PAID_TO_OS_UNSUPPORTED", "Paid-to-OS is not available for linked parcels");
+    if (parcel.linkGroupId && paidToOsFeeIncluded) {
+      throw new ApiError(400, "LINKED_PAID_TO_OS_FEE_UNSUPPORTED", "A linked parcel may be paid to OS for COD only; the shared group delivery fee stays with the rider");
     }
     if (!paidToOsFeeIncluded && !parcel.riderId && (parcel.deliveryFee ?? 0) > 0) {
       throw new ApiError(400, "RIDER_REQUIRED_FOR_FEE", "Assign a rider before paid-to-OS when the delivery fee is not included in OS credit");
     }
+  }
+  const reclassifyLinkedDeliveredToPaidToOs = parcel.status === "DELIVERED"
+    && toStatus === "DELIVERED"
+    && Boolean(parcel.linkGroupId)
+    && parcel.collectionMode !== "PAID_BY_OS"
+    && input.collectionMode === "PAID_BY_OS";
+  if (reclassifyLinkedDeliveredToPaidToOs) {
+    const candidates = await tx.journalEntry.findMany({
+      where: {
+        sourceType: "LINKED_RIDER_RECEIVABLE_COD",
+        OR: [{ sourceId: parcel.id }, { sourceId: { startsWith: `${parcel.id}:` } }],
+      },
+      include: { lines: true },
+      orderBy: { createdAt: "desc" },
+    });
+    let original = null as (typeof candidates)[number] | null;
+    for (const candidate of candidates) {
+      if (await journalEntryIsUnreversed(tx, candidate.id)) { original = candidate; break; }
+    }
+    if (!original?.sourceId) throw new ApiError(409, "RECOGNITION_NOT_FOUND", "The linked rider COD posting could not be found for correction");
+    await reverseJournalEntryInTx(tx, {
+      sourceType: original.sourceType,
+      sourceId: original.sourceId,
+      businessDate,
+      reason: `Reclassified ${parcel.trackingNumber} from rider collection to Paid to OS: ${note!.trim()}`,
+    });
+    const projection = await tx.riderReceivableRecognition.findUnique({
+      where: { sourceType_sourceId: { sourceType: original.sourceType, sourceId: original.sourceId } },
+    });
+    if (!projection) throw new ApiError(409, "RECOGNITION_NOT_FOUND", "The linked rider COD recognition could not be found for correction");
+    await tx.riderReceivableRecognition.create({ data: {
+      sourceType: "RIDER_RECEIVABLE_CORRECTION",
+      sourceId: `${original.id}:paid-to-os`,
+      riderId: projection.riderId,
+      hubId: projection.hubId,
+      businessDate,
+      codAmount: -projection.codAmount,
+      deliveryFee: 0,
+      commissionAmount: 0,
+      receivableAmount: -projection.receivableAmount,
+    } });
+    const creditSourceId = await nextVersionedJournalSourceId(tx, "OS_PAID_TO_OS_CREDIT", parcel.id);
+    if (!creditSourceId) throw new ApiError(409, "PAID_TO_OS_ALREADY_POSTED", "Paid-to-OS credit is already posted for this parcel");
+    await assertCashbookOpen(tx, businessDate, parcelHubId);
+    const journal = await tx.journalEntry.create({ data: {
+      sourceType: "OS_PAID_TO_OS_CREDIT",
+      sourceId: creditSourceId,
+      hubId: parcelHubId,
+      businessDate,
+      description: `Paid-to-OS COD correction for ${parcel.trackingNumber}`,
+      lines: { create: [
+        { account: "OS_COD_PAYABLE", debit: parcel.codAmount, credit: 0 },
+        { account: "OS_BATCH_COD_CLEARING", debit: 0, credit: parcel.codAmount },
+      ] },
+    } });
+    await tx.osReturnCredit.create({ data: {
+      parcelId: parcel.id,
+      batchId: parcel.batchId,
+      shopId: parcel.batch.shopId,
+      hubId: parcelHubId,
+      amount: parcel.codAmount,
+      codAmount: parcel.codAmount,
+      feeAmount: 0,
+      kind: "PAID_TO_OS",
+      businessDate,
+      idempotencyKey: `paid-to-os:${creditSourceId}`,
+      postedBy: actor.id,
+      journalEntryId: journal.id,
+    } });
+    await tx.parcel.update({ where: { id: parcel.id }, data: { collectionMode: "PAID_BY_OS", paidToOsFeeIncluded: false } });
+    await tx.statusHistory.create({ data: {
+      parcelId: parcel.id,
+      fromStatus: "DELIVERED",
+      toStatus: "DELIVERED",
+      actorId: actor.id,
+      reasonCode: "PAID_TO_OS_CORRECTION",
+      note: note!.trim(),
+    } });
+    return tx.parcel.findUniqueOrThrow({ where: { id: parcel.id } });
+  }
+  if (parcel.status === "DELIVERED" && toStatus === "DELIVERED") {
+    if (input.collectionMode === undefined || parcel.collectionMode === input.collectionMode) {
+      return tx.parcel.findUniqueOrThrow({ where: { id: parcel.id } });
+    }
+    throw new ApiError(409, "DELIVERY_COLLECTION_CORRECTION_REQUIRED", "This delivered parcel's collection method cannot be changed automatically");
   }
   if (overrideLeavesMoneyBearingStatus(parcel.status, toStatus, overrideTransition)) {
       const postedMoney = await findUnreversedMoneyPostedEntry(tx, {
@@ -893,7 +980,7 @@ async function updateStatusInTransaction(
           });
         }
       }
-      if (toStatus === "DELIVERED" && collectionMode === "PAID_BY_OS" && !parcel.linkGroupId) {
+      if (toStatus === "DELIVERED" && collectionMode === "PAID_BY_OS") {
         const feeAmount = paidToOsFeeIncluded ? (parcel.deliveryFee ?? 0) : 0;
         const creditAmount = parcel.codAmount + feeAmount;
         const creditSourceId = await nextVersionedJournalSourceId(tx, "OS_PAID_TO_OS_CREDIT", parcel.id);
@@ -911,7 +998,7 @@ async function updateStatusInTransaction(
           await tx.osReturnCredit.create({ data: { parcelId: parcel.id, batchId: parcel.batchId, shopId: parcel.batch.shopId, hubId: parcelHubId, amount: creditAmount, codAmount: parcel.codAmount, feeAmount, kind: "PAID_TO_OS", businessDate, idempotencyKey: `paid-to-os:${creditSourceId}`, postedBy: actor.id, journalEntryId: journal.id } });
         }
         // Fee stays with the rider when OS credit is COD-only (non-linked, assigned).
-        if (!paidToOsFeeIncluded && (parcel.deliveryFee ?? 0) > 0) {
+        if (!parcel.linkGroupId && !paidToOsFeeIncluded && (parcel.deliveryFee ?? 0) > 0) {
           const feeReceivableSourceId = await nextVersionedJournalSourceId(tx, "OS_PAID_TO_OS_FEE_RECEIVABLE", parcel.id);
           if (feeReceivableSourceId) {
             await recognizeRiderReceivable(tx, {
@@ -947,7 +1034,7 @@ async function updateStatusInTransaction(
       if (parcel.linkGroupId) {
         // COD belongs to the member's own delivery day. Group fee and commission
         // are intentionally deferred until the final member completes.
-        if (toStatus === "DELIVERED") {
+        if (toStatus === "DELIVERED" && collectionMode !== "PAID_BY_OS") {
           const linkedCodSourceId = await nextVersionedJournalSourceId(tx, "LINKED_RIDER_RECEIVABLE_COD", parcel.id);
           if (linkedCodSourceId) {
             await recognizeRiderReceivable(tx, {
@@ -1030,17 +1117,52 @@ async function updateStatusInTransaction(
 
 export async function updateStatus(id: string, toStatus: string, actor: Actor, reasonCode?: string, note?: string, actualCodCollected?: number, collectionWallet?: "CASH" | "KBZ_PAY" | "WAVE_PAY", collectionMode?: "PAID_BY_OS" | "CASH_RECEIPT_EXCEPTION", paidToOsIncludeDeliveryFee?: boolean, returnToOs?: boolean) {
   const scope = await actorScope(actor);
-  return serializableTransaction((tx) => updateStatusInTransaction(tx, {
-    parcelId: id,
-    status: toStatus,
-    reasonCode,
-    note,
-    actualCodCollected,
-    collectionWallet,
-    collectionMode,
-    paidToOsIncludeDeliveryFee,
-    returnToOs,
-  }, actor, scope));
+  const input = { parcelId: id, status: toStatus, reasonCode, note, actualCodCollected, collectionWallet, collectionMode, paidToOsIncludeDeliveryFee, returnToOs };
+  try {
+    return await serializableTransaction((tx) => updateStatusInTransaction(tx, input, actor, scope));
+  } catch (error) {
+    if (!["P2002", "TRANSACTION_CONFLICT"].includes((error as { code?: string }).code ?? "")) throw error;
+    return (await recoverStatusWriteConflict([input]))[0]!;
+  }
+}
+
+async function recoverStatusWriteConflict(inputs: StatusUpdateInput[]) {
+  const ids = inputs.map((input) => input.parcelId);
+  const current = await prisma.parcel.findMany({
+    where: { id: { in: ids } },
+    select: {
+      id: true,
+      status: true,
+      collectionMode: true,
+      paidToOsFeeIncluded: true,
+      linkGroupId: true,
+      batch: { select: { hubId: true, shop: { select: { includeDeliveryFeeInOsCredit: true } } } },
+    },
+  });
+  const byId = new Map(current.map((parcel) => [parcel.id, parcel]));
+  const exactPaidToOsReplay = inputs.every((input) => {
+    const parcel = byId.get(input.parcelId);
+    const expectedFeeIncluded = parcel?.linkGroupId
+      ? false
+      : (input.paidToOsIncludeDeliveryFee ?? parcel?.batch.shop.includeDeliveryFeeInOsCredit);
+    return input.status === "DELIVERED"
+      && input.collectionMode === "PAID_BY_OS"
+      && parcel?.status === "DELIVERED"
+      && parcel.collectionMode === "PAID_BY_OS"
+      && parcel.paidToOsFeeIncluded === expectedFeeIncluded;
+  });
+  if (exactPaidToOsReplay) {
+    const replayed = await prisma.parcel.findMany({ where: { id: { in: ids } } });
+    const replayedById = new Map(replayed.map((parcel) => [parcel.id, parcel]));
+    return ids.map((id) => replayedById.get(id)!);
+  }
+  const date = new Date();
+  date.setUTCHours(0, 0, 0, 0);
+  const hubIds = [...new Set(current.flatMap((parcel) => parcel.batch.hubId ? [parcel.batch.hubId] : []))];
+  if (hubIds.length && await prisma.cashbookDay.findFirst({ where: { hubId: { in: hubIds }, businessDate: date, closedAt: { not: null } }, select: { id: true } })) {
+    throw new ApiError(409, "DAY_CLOSED", "Cashbook day is already closed");
+  }
+  throw new ApiError(409, "RETRYABLE_CONFLICT", "Parcel accounting changed concurrently; refresh and retry");
 }
 
 export async function bulkUpdateStatus(inputs: StatusUpdateInput[], actor: Actor) {
@@ -1054,26 +1176,31 @@ export async function bulkUpdateStatus(inputs: StatusUpdateInput[], actor: Actor
   const ids = inputs.map((input) => input.parcelId);
   if (new Set(ids).size !== ids.length) throw new ApiError(400, "DUPLICATE_PARCEL", "Each parcel may appear only once");
 
-  return serializableTransaction(async (tx) => {
-    // Resolve the complete selection before applying changes. Individual transition
-    // validation and every side effect still run through the single-item domain path.
-    const selected = await tx.parcel.findMany({
-      where: { id: { in: ids } },
-      select: {
-        id: true,
-        batch: { select: { hubId: true } },
-        rider: { select: { userId: true } },
-      },
-    });
-    if (selected.length !== ids.length) throw new ApiError(404, "PARCEL_NOT_FOUND", "One or more parcels were not found");
-    for (const parcel of selected) {
-      assertParcelAccess(scope, { batchHubId: parcel.batch.hubId, riderUserId: parcel.rider?.userId ?? null });
-    }
+  try {
+    return await serializableTransaction(async (tx) => {
+      // Resolve the complete selection before applying changes. Individual transition
+      // validation and every side effect still run through the single-item domain path.
+      const selected = await tx.parcel.findMany({
+        where: { id: { in: ids } },
+        select: {
+          id: true,
+          batch: { select: { hubId: true } },
+          rider: { select: { userId: true } },
+        },
+      });
+      if (selected.length !== ids.length) throw new ApiError(404, "PARCEL_NOT_FOUND", "One or more parcels were not found");
+      for (const parcel of selected) {
+        assertParcelAccess(scope, { batchHubId: parcel.batch.hubId, riderUserId: parcel.rider?.userId ?? null });
+      }
 
-    const updated = [];
-    for (const input of inputs) updated.push(await updateStatusInTransaction(tx, input, actor, scope));
-    return updated;
-  });
+      const updated = [];
+      for (const input of inputs) updated.push(await updateStatusInTransaction(tx, input, actor, scope));
+      return updated;
+    });
+  } catch (error) {
+    if (!["P2002", "TRANSACTION_CONFLICT"].includes((error as { code?: string }).code ?? "")) throw error;
+    return recoverStatusWriteConflict(inputs);
+  }
 }
 
 async function hasActiveFeeReceivable(tx: Prisma.TransactionClient, parcelId: string) {

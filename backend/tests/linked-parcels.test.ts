@@ -43,6 +43,8 @@ describe("linked parcel replacement and financial unlink", () => {
   const batchId = `link-review-batch-${suffix}`;
   const rollbackIds = [`link-review-rollback-a-${suffix}`, `link-review-rollback-b-${suffix}`];
   const postedIds = [`link-review-posted-a-${suffix}`, `link-review-posted-b-${suffix}`];
+  const mixedIds = [`link-review-mixed-a-${suffix}`, `link-review-mixed-b-${suffix}`, `link-review-mixed-c-${suffix}`];
+  const correctionIds = [`link-review-correction-a-${suffix}`, `link-review-correction-b-${suffix}`, `link-review-correction-c-${suffix}`];
   const token = () => signAccessToken({ sub: dispatcherId, email: `link-review-${suffix}@test.local`, role: "DISPATCHER", tokenVersion: 0 });
   const financeToken = () => signAccessToken({ sub: financeId, email: `link-finance-${suffix}@test.local`, role: "FINANCE", tokenVersion: 0 });
 
@@ -63,19 +65,27 @@ describe("linked parcel replacement and financial unlink", () => {
       id, batchId, trackingNumber: `LINK-REVIEW-${index}-${suffix}`, customerName: `Customer ${index}`, address: index % 2 ? "Different address" : "Original address",
       codAmount: 10_000 + index * 1_000, deliveryFee: 3000, townshipId, status: "CREATED",
     })) });
+    await prisma.parcel.createMany({ data: [...mixedIds, ...correctionIds].map((id, index) => ({
+      id, batchId, trackingNumber: `LINK-MIXED-${index}-${suffix}`, customerName: `Mixed Customer ${index}`, address: correctionIds.includes(id) ? "Correction delivery stop" : "Mixed delivery stop",
+      codAmount: (index + 1) * 10_000, deliveryFee: 3000, townshipId, status: "CREATED",
+    })) });
   });
 
   afterAll(async () => {
     await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS link_review_abort_${suffix.replace(/[^a-z0-9]/gi, "_")}`);
-    const parcelIds = [...rollbackIds, ...postedIds];
+    const parcelIds = [...rollbackIds, ...postedIds, ...mixedIds, ...correctionIds];
     await prisma.riderReceivableRecognition.deleteMany({ where: { riderId } });
+    await prisma.osCreditAllocation.deleteMany({ where: { credit: { parcelId: { in: parcelIds } } } });
+    await prisma.osAdvanceCreditAllocation.deleteMany({ where: { credit: { parcelId: { in: parcelIds } } } });
+    await prisma.osReturnCredit.deleteMany({ where: { parcelId: { in: parcelIds } } });
     await prisma.journalLine.deleteMany({ where: { entry: { hubId } } });
     await prisma.journalEntry.deleteMany({ where: { hubId } });
     await prisma.statusHistory.deleteMany({ where: { parcelId: { in: parcelIds } } });
     await prisma.deliveryWay.deleteMany({ where: { parcelId: { in: parcelIds } } });
     await prisma.packageAssignment.deleteMany({ where: { parcelId: { in: parcelIds } } });
     await prisma.parcel.deleteMany({ where: { id: { in: parcelIds } } });
-    await prisma.parcelLinkGroup.deleteMany({ where: { address: { in: ["Original address", "Different address"] } } });
+    await prisma.parcelLinkGroup.deleteMany({ where: { address: { in: ["Original address", "Different address", "Mixed delivery stop", "Correction delivery stop"] } } });
+    await prisma.cashbookDay.deleteMany({ where: { hubId } });
     await prisma.batch.delete({ where: { id: batchId } });
     await prisma.township.delete({ where: { id: townshipId } });
     await prisma.district.delete({ where: { id: districtId } });
@@ -135,5 +145,88 @@ describe("linked parcel replacement and financial unlink", () => {
     expect(replay.status).toBe(200);
     expect(replay.body.data).toMatchObject({ groupId, replay: true });
     expect(await prisma.journalEntry.count({ where: { sourceType: "RIDER_RECEIVABLE_RECOGNITION", sourceId: { contains: `unlink:${payload.idempotencyKey}` } } })).toBe(2);
+  });
+
+  test("allows one linked parcel COD to be paid to OS while the remaining COD and shared fee stay with the rider", async () => {
+    const linked = await request(app).post("/api/v1/operations/parcels/link").set("Authorization", `Bearer ${token()}`).send({
+      parcelIds: mixedIds, responsibleRiderId: riderId, reason: "One customer delivery stop",
+    });
+    expect(linked.status).toBe(201);
+    const groupId = linked.body.data.id as string;
+    for (const parcelId of mixedIds) {
+      expect((await request(app).post(`/api/v1/parcels/${parcelId}/status`).set("Authorization", `Bearer ${token()}`).send({ status: "OUT_FOR_DELIVERY" })).status).toBe(200);
+    }
+
+    const invalidFee = await request(app).post(`/api/v1/parcels/${mixedIds[0]}/status`).set("Authorization", `Bearer ${token()}`).send({
+      status: "DELIVERED", collectionMode: "PAID_BY_OS", paidToOsIncludeDeliveryFee: true,
+    });
+    expect(invalidFee.status).toBe(400);
+    expect(invalidFee.body.error.code).toBe("LINKED_PAID_TO_OS_FEE_UNSUPPORTED");
+
+    const paidToOs = await request(app).post(`/api/v1/parcels/${mixedIds[0]}/status`).set("Authorization", `Bearer ${token()}`).send({
+      status: "DELIVERED", collectionMode: "PAID_BY_OS", paidToOsIncludeDeliveryFee: false,
+    });
+    expect(paidToOs.status).toBe(200);
+    expect(await prisma.osReturnCredit.findUnique({ where: { parcelId: mixedIds[0] } })).toMatchObject({ codAmount: 10_000, feeAmount: 0, amount: 10_000, kind: "PAID_TO_OS" });
+    expect(await prisma.riderReceivableRecognition.count({ where: { sourceType: "LINKED_RIDER_RECEIVABLE_COD", sourceId: { startsWith: mixedIds[0] } } })).toBe(0);
+
+    for (const parcelId of mixedIds.slice(1)) {
+      const delivered = await request(app).post(`/api/v1/parcels/${parcelId}/status`).set("Authorization", `Bearer ${token()}`).send({
+        status: "DELIVERED", collectionMode: "CASH_RECEIPT_EXCEPTION",
+      });
+      expect(delivered.status).toBe(200);
+    }
+
+    const codRecognitions = await prisma.riderReceivableRecognition.findMany({ where: { sourceType: "LINKED_RIDER_RECEIVABLE_COD", OR: mixedIds.slice(1).map((id) => ({ sourceId: { startsWith: id } })) } });
+    expect(codRecognitions).toHaveLength(2);
+    expect(codRecognitions.reduce((sum, row) => sum + row.codAmount, 0)).toBe(50_000);
+    const feeRecognition = await prisma.riderReceivableRecognition.findFirstOrThrow({ where: { sourceType: "LINKED_RIDER_RECEIVABLE_FEE", sourceId: { startsWith: groupId } } });
+    expect(feeRecognition).toMatchObject({ codAmount: 0, deliveryFee: 5_000, commissionAmount: 2_000, receivableAmount: 3_000 });
+    expect(await prisma.journalEntry.count({ where: { sourceType: "LINKED_RIDER_COMMISSION", sourceId: { startsWith: groupId } } })).toBe(1);
+  });
+
+  test("reclassifies one already-delivered linked parcel to paid to OS without duplicating the shared fee", async () => {
+    const linked = await request(app).post("/api/v1/operations/parcels/link").set("Authorization", `Bearer ${token()}`).send({
+      parcelIds: correctionIds, responsibleRiderId: riderId, reason: "Shared stop corrected after delivery",
+    });
+    expect(linked.status).toBe(201);
+    const groupId = linked.body.data.id as string;
+    for (const parcelId of correctionIds) {
+      expect((await request(app).post(`/api/v1/parcels/${parcelId}/status`).set("Authorization", `Bearer ${token()}`).send({ status: "OUT_FOR_DELIVERY" })).status).toBe(200);
+      expect((await request(app).post(`/api/v1/parcels/${parcelId}/status`).set("Authorization", `Bearer ${token()}`).send({ status: "DELIVERED", collectionMode: "CASH_RECEIPT_EXCEPTION" })).status).toBe(200);
+    }
+
+    const correctedParcelId = correctionIds[0];
+    const originalRecognition = await prisma.riderReceivableRecognition.findFirstOrThrow({
+      where: { sourceType: "LINKED_RIDER_RECEIVABLE_COD", sourceId: { startsWith: correctedParcelId } },
+    });
+    const originalJournal = await prisma.journalEntry.findUniqueOrThrow({
+      where: { sourceType_sourceId: { sourceType: originalRecognition.sourceType, sourceId: originalRecognition.sourceId } },
+    });
+    const missingNote = await request(app).post(`/api/v1/parcels/${correctedParcelId}/status`).set("Authorization", `Bearer ${token()}`).send({
+      status: "DELIVERED", collectionMode: "PAID_BY_OS", paidToOsIncludeDeliveryFee: false,
+    });
+    expect(missingNote.status).toBe(400);
+    expect(missingNote.body.error.code).toBe("OVERRIDE_NOTE_REQUIRED");
+    const requestBody = { status: "DELIVERED", collectionMode: "PAID_BY_OS", paidToOsIncludeDeliveryFee: false, note: "Customer paid this parcel directly to OS" };
+    const corrected = await request(app).post(`/api/v1/parcels/${correctedParcelId}/status`).set("Authorization", `Bearer ${token()}`).send(requestBody);
+    expect(corrected.status).toBe(200);
+    expect(corrected.body.data).toMatchObject({ status: "DELIVERED", collectionMode: "PAID_BY_OS", paidToOsFeeIncluded: false });
+    expect(await prisma.osReturnCredit.findUnique({ where: { parcelId: correctedParcelId } })).toMatchObject({
+      codAmount: originalRecognition.codAmount, feeAmount: 0, amount: originalRecognition.codAmount, kind: "PAID_TO_OS",
+    });
+    expect(await prisma.journalEntry.count({ where: { sourceType: "LEDGER_REVERSAL", sourceId: originalJournal.id } })).toBe(1);
+    expect(await prisma.riderReceivableRecognition.findUnique({
+      where: { sourceType_sourceId: { sourceType: "RIDER_RECEIVABLE_CORRECTION", sourceId: `${originalJournal.id}:paid-to-os` } },
+    })).toMatchObject({ codAmount: -originalRecognition.codAmount, receivableAmount: -originalRecognition.receivableAmount });
+    expect(await prisma.journalEntry.count({ where: { sourceType: "LINKED_RIDER_COMMISSION", sourceId: { startsWith: groupId } } })).toBe(1);
+    expect(await prisma.riderReceivableRecognition.count({ where: { sourceType: "LINKED_RIDER_RECEIVABLE_FEE", sourceId: { startsWith: groupId } } })).toBe(1);
+    expect(await prisma.deliveryWay.count({ where: { parcelId: correctedParcelId } })).toBe(1);
+
+    const replay = await request(app).post(`/api/v1/parcels/${correctedParcelId}/status`).set("Authorization", `Bearer ${token()}`).send(requestBody);
+    expect(replay.status).toBe(200);
+    expect(await prisma.osReturnCredit.count({ where: { parcelId: correctedParcelId } })).toBe(1);
+    expect(await prisma.riderReceivableRecognition.count({ where: { sourceType: "RIDER_RECEIVABLE_CORRECTION", sourceId: `${originalJournal.id}:paid-to-os` } })).toBe(1);
+    expect(await prisma.journalEntry.count({ where: { sourceType: "LINKED_RIDER_COMMISSION", sourceId: { startsWith: groupId } } })).toBe(1);
   });
 });

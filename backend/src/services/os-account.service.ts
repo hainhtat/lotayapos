@@ -55,7 +55,7 @@ async function scopedHub(actor: Actor, requestedHubId: string | undefined, mutat
 export async function syncBatchObligation(tx: Prisma.TransactionClient, batchId: string, actorId?: string) {
   const batch = await tx.batch.findUnique({ where: { id: batchId }, select: { id: true, shopId: true, hubId: true, pickupDate: true, finalizedAt: true, automaticAccounting: true, parcels: { select: { codAmount: true } }, osObligation: true } });
   if (!batch?.hubId) throw new ApiError(409, "BATCH_HUB_REQUIRED", "Batch must belong to a hub");
-  if (!batch.finalizedAt && !batch.automaticAccounting) throw new ApiError(409, "BATCH_NOT_FINALIZED", "Finalize the batch before creating its OS obligation");
+  if (!batch.finalizedAt) throw new ApiError(409, "BATCH_NOT_FINALIZED", "Finalize the batch before creating its OS obligation");
   const originalCod = batch.parcels.reduce((sum, parcel) => sum + parcel.codAmount, 0);
   if (!Number.isSafeInteger(originalCod)) throw new ApiError(400, "INVALID_AMOUNT", "Batch COD exceeds the supported amount");
   if (batch.osObligation) {
@@ -65,9 +65,107 @@ export async function syncBatchObligation(tx: Prisma.TransactionClient, batchId:
     await tx.journalEntry.create({ data: { sourceType: "OS_BATCH_COD_CHANGE", sourceId: `${batchId}:${randomUUID()}`, hubId: batch.hubId, businessDate: batch.pickupDate, description: `Saved parcel COD change for ${batchId}: ${batch.osObligation.originalCod} to ${originalCod}; actor ${actorId ?? "system"}`, lines: { create: buildCutoverAdjustmentLines(delta) } } });
     return tx.osBatchObligation.update({ where: { batchId }, data: { originalCod } });
   }
+  await assertCashbookOpen(tx, batch.pickupDate, batch.hubId);
   const obligation = await tx.osBatchObligation.create({ data: { batchId, shopId: batch.shopId, hubId: batch.hubId, originalCod, migrated: false } });
   if (originalCod > 0) await tx.journalEntry.create({ data: { sourceType: "OS_BATCH_OBLIGATION", sourceId: batchId, hubId: batch.hubId, businessDate: batch.pickupDate, description: `OS batch COD obligation ${batchId}`, lines: { create: [{ account: "OS_BATCH_COD_CLEARING", debit: originalCod, credit: 0 }, { account: "OS_COD_PAYABLE", debit: 0, credit: originalCod }] } } });
   return obligation;
+}
+
+export async function availableOsCreditForShop(db: Db, shopId: string, hubId: string, excludeBatchId?: string) {
+  const rows = await accountRows(db, { shopId, hubId });
+  return rows.reduce((sum, row) => sum + (row.batchId === excludeBatchId ? 0 : row.creditAvailable), 0);
+}
+
+async function acquireOsCreditAllocationLock(tx: Prisma.TransactionClient, shopId: string, hubId: string) {
+  if (process.env.DATABASE_PROVIDER === "postgresql" || /^postgres(ql)?:\/\//.test(process.env.DATABASE_URL ?? "")) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${shopId}:${hubId}:os-credit`}))`;
+  }
+}
+
+export async function finalizeAutomaticBatchAccounting(
+  tx: Prisma.TransactionClient,
+  batch: { id: string; shopId: string; hubId: string; pickupDate: Date; advancePaid: number },
+  actorId: string,
+) {
+  await acquireOsCreditAllocationLock(tx, batch.shopId, batch.hubId);
+  const obligation = await syncBatchObligation(tx, batch.id, actorId);
+  const positionBeforeCredit = Math.max(0, obligation.originalCod - batch.advancePaid);
+  const carryForwardCredit = Math.max(0, batch.advancePaid - obligation.originalCod);
+
+  // Batches created before deferred credit allocation may already have credit
+  // reserved. Keep only the amount the finalized parcel COD actually needs so
+  // an old draft cannot strand or over-consume a shop credit.
+  const existingAllocations = await tx.osAdvanceCreditAllocation.findMany({
+    where: { batchId: batch.id },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+  });
+  let existingApplied = existingAllocations.reduce((sum, allocation) => sum + allocation.amount, 0);
+  let excessExisting = Math.max(0, existingApplied - positionBeforeCredit);
+  for (const allocation of existingAllocations) {
+    if (excessExisting <= 0) break;
+    const release = Math.min(allocation.amount, excessExisting);
+    if (release === allocation.amount) await tx.osAdvanceCreditAllocation.delete({ where: { id: allocation.id } });
+    else await tx.osAdvanceCreditAllocation.update({ where: { id: allocation.id }, data: { amount: allocation.amount - release } });
+    existingApplied -= release;
+    excessExisting -= release;
+  }
+
+  if (carryForwardCredit > 0) {
+    await tx.osReturnCredit.upsert({
+      where: { parcelId: `batch-over-advance:${batch.id}` },
+      create: {
+        parcelId: `batch-over-advance:${batch.id}`,
+        batchId: batch.id,
+        shopId: batch.shopId,
+        hubId: batch.hubId,
+        amount: carryForwardCredit,
+        kind: "BATCH_OVER_ADVANCE",
+        codAmount: 0,
+        feeAmount: 0,
+        businessDate: batch.pickupDate,
+        idempotencyKey: `batch-over-advance:${batch.id}`,
+        postedBy: actorId,
+      },
+      update: {},
+    });
+  }
+
+  const rows = await accountRows(tx, { shopId: batch.shopId, hubId: batch.hubId });
+  const availableBySourceBatch = new Map(
+    rows.filter((row) => row.batchId !== batch.id && row.creditAvailable > 0).map((row) => [row.batchId, row.creditAvailable]),
+  );
+  const availableOsCredit = [...availableBySourceBatch.values()].reduce((sum, amount) => sum + amount, 0);
+  const remainingNeed = Math.max(0, positionBeforeCredit - existingApplied);
+  let remaining = Math.min(remainingNeed, availableOsCredit);
+  const credits = remaining > 0 ? await tx.osReturnCredit.findMany({
+    where: { shopId: batch.shopId, hubId: batch.hubId, status: "POSTED", batchId: { not: batch.id } },
+    include: { allocations: { where: { payment: { status: "POSTED" } } }, advanceAllocations: true },
+    orderBy: [{ businessDate: "asc" }, { id: "asc" }],
+  }) : [];
+  for (const credit of credits) {
+    const sourceAvailable = availableBySourceBatch.get(credit.batchId) ?? 0;
+    if (sourceAvailable <= 0 || remaining <= 0) continue;
+    const consumed = credit.allocations.reduce((sum, allocation) => sum + allocation.amount, 0)
+      + credit.advanceAllocations.reduce((sum, allocation) => sum + allocation.amount, 0);
+    const use = Math.min(Math.max(0, credit.amount - consumed), sourceAvailable, remaining);
+    if (use <= 0) continue;
+    await tx.osAdvanceCreditAllocation.create({ data: { batchId: batch.id, creditId: credit.id, amount: use } });
+    availableBySourceBatch.set(credit.batchId, sourceAvailable - use);
+    remaining -= use;
+  }
+  if (remaining > 0) throw new ApiError(409, "OS_CREDIT_CONFLICT", "Available OS credit changed; refresh and retry");
+
+  const newlyApplied = Math.min(remainingNeed, availableOsCredit);
+  const osCreditApplied = existingApplied + newlyApplied;
+  return {
+    obligation,
+    totalCod: obligation.originalCod,
+    advancePaid: batch.advancePaid,
+    availableOsCredit,
+    osCreditApplied,
+    outstanding: positionBeforeCredit - osCreditApplied,
+    carryForwardCredit,
+  };
 }
 
 export async function postedAdvanceByBatch(db: Db, batchIds: string[]) {
@@ -108,7 +206,7 @@ export async function accountRows(db: Db, input: { shopId?: string; hubId: strin
   const batchIds = obligations.map((row) => row.batchId);
   const [allocations, returnCreditRecords, advances, consumedCredits, advanceCreditAllocations, legacySettlements] = await Promise.all([
     db.osPaymentAllocation.findMany({ where: { batchId: { in: batchIds }, payment: { status: "POSTED" } }, select: { batchId: true, amount: true } }),
-    db.osReturnCredit.findMany({ where: { batchId: { in: batchIds } }, select: { id: true, parcelId: true, batchId: true, amount: true, status: true } }),
+    db.osReturnCredit.findMany({ where: { batchId: { in: batchIds } }, select: { id: true, parcelId: true, batchId: true, amount: true, kind: true, status: true } }),
     postedAdvanceByBatch(db, batchIds),
     db.osCreditAllocation.findMany({ where: { credit: { ...(input.shopId ? { shopId: input.shopId } : {}), hubId: input.hubId }, payment: { status: "POSTED" } }, select: { creditId: true, amount: true } }),
     db.osAdvanceCreditAllocation.findMany({ where: { credit: { ...(input.shopId ? { shopId: input.shopId } : {}), hubId: input.hubId } }, select: { creditId: true, batchId: true, amount: true } }),
@@ -116,7 +214,7 @@ export async function accountRows(db: Db, input: { shopId?: string; hubId: strin
   ]);
   const returnCredits = returnCreditRecords.filter(credit => credit.status === "POSTED");
   for (const batch of projected) for (const parcel of batch.parcels) {
-    if (parcel.status === "RETURNED" && !returnCreditRecords.some(credit => credit.parcelId === parcel.id)) returnCredits.push({ id: `historical-return:${parcel.id}`, parcelId: parcel.id, batchId: batch.id, amount: parcel.codAmount, status: "POSTED" });
+    if (parcel.status === "RETURNED" && !returnCreditRecords.some(credit => credit.parcelId === parcel.id)) returnCredits.push({ id: `historical-return:${parcel.id}`, parcelId: parcel.id, batchId: batch.id, amount: parcel.codAmount, kind: "PHYSICAL_RETURN", status: "POSTED" });
   }
   const paid = new Map<string, number>();
   for (const allocation of allocations) paid.set(allocation.batchId, (paid.get(allocation.batchId) ?? 0) + allocation.amount);
@@ -148,7 +246,8 @@ export async function accountRows(db: Db, input: { shopId?: string; hubId: strin
   }
   return obligations.map((row) => {
     const credits = returnCredits.filter((credit) => credit.batchId === row.batchId);
-    const returnedCod = credits.reduce((sum, credit) => sum + credit.amount, 0);
+    const returnedCod = credits.filter((credit) => credit.kind !== "BATCH_OVER_ADVANCE").reduce((sum, credit) => sum + credit.amount, 0);
+    const postedCredit = credits.reduce((sum, credit) => sum + credit.amount, 0);
     const consumedCredit = credits.reduce((sum, credit) => sum + (consumedByCredit.get(credit.id) ?? 0), 0);
     const advancePaid = advances.get(row.batchId) ?? 0;
     const paidAmount = paid.get(row.batchId) ?? 0;
@@ -156,7 +255,7 @@ export async function accountRows(db: Db, input: { shopId?: string; hubId: strin
     const historicalSettledAmount = row.batch.historicalOsSettlement?.amount ?? 0;
     const advanceCreditApplied = advanceCreditByBatch.get(row.batchId) ?? 0;
     const raw = adjustedOriginalCod - advancePaid - returnedCod - paidAmount - historicalSettledAmount - advanceCreditApplied;
-    const creditAvailable = Math.min(Math.max(0, returnedCod - consumedCredit), Math.max(0, -raw - consumedCredit));
+    const creditAvailable = Math.min(Math.max(0, postedCredit - consumedCredit), Math.max(0, -raw - consumedCredit));
     return { batchId: row.batchId, label: row.batch.label, pickupDate: row.batch.pickupDate, shop: { id: row.batch.shop.id, name: row.batch.shop.name }, hubId: row.hubId, originalCod: row.originalCod, openingAdjustment: row.openingAdjustment, adjustedOriginalCod, advancePaid, advanceCreditApplied, paymentPaid: paidAmount, historicalSettledAmount, historicallySettled: Boolean(row.batch.historicalOsSettlement), returnedCod, creditAvailable, outstanding: Math.max(0, raw), migrated: row.migrated };
   });
 }

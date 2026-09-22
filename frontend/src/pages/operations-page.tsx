@@ -22,6 +22,7 @@ import {
   type ManifestStatus,
 } from "@/lib/manifest-filters";
 import { dispatchFiltersFromSearch, dispatchFiltersToSearch, emptyDispatchFilters, type DispatchFilters as Filters } from "@/lib/dispatch-filters";
+import { ReturnToOsWorkspace } from "./return-to-os-workspace";
 
 type Parcel = {
   id: string;
@@ -31,6 +32,7 @@ type Parcel = {
   customerPhone?: string | null;
   address?: string | null;
   status: string;
+  collectionMode?: "PAID_BY_OS" | "CASH_RECEIPT_EXCEPTION" | null;
   codAmount: number;
   deliveryFee?: number | null;
   actualCodCollected?: number | null;
@@ -135,7 +137,7 @@ function formatPickupDate(parcel: Parcel) {
   return parcel.batch.label;
 }
 
-export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispatch" | "returns" }) {
+function DispatchOperationsPage({ workspace = "dispatch" }: { workspace?: "dispatch" | "returns" }) {
   const { t, i18n } = useTranslation();
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -516,6 +518,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
   });
 
   const selectedParcels = visible.filter((parcel) => selected.includes(parcel.id));
+  const bulkPaidToOsHasLinkedParcel = selectedParcels.some((parcel) => Boolean(parcel.linkGroup));
   const returnListEligible = selectedParcels.length > 0 && selectedParcels.length <= 500 && selectedParcels.every((parcel) => ["PENDING_RETURN", "REJECTED"].includes(parcel.status));
   const returnListPreview = useQuery({
     queryKey: ["os-return-list-preview", selectedParcels.map((parcel) => parcel.id)],
@@ -723,15 +726,6 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
     setManifestDateTo("");
     setManifestOpen(true);
   };
-  const openOsReturnList = () => {
-    const today = hubBusinessDate();
-    setPaidToOsDateFrom(today);
-    setPaidToOsDateTo(today);
-    setPaidToOsShopId("");
-    setPaidToOsRiderId("");
-    setIncludePaidToOsHandover(canPaidToOsHandover && !returnListEligible);
-    setReturnListOpen(true);
-  };
   const toggleManifestRider = (id: string) =>
     setManifestRiderIds((current) => (current.includes(id) ? current.filter((rider) => rider !== id) : [...current, id]));
 
@@ -805,22 +799,6 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
       {workspace === "dispatch" && <nav aria-label={t("dispatchWorkQueues")} className="mt-5 flex flex-wrap gap-2">
         {[["", "all"], ["to-assign", "queueToAssign"], ["with-riders", "queueWithRiders"], ["rescheduled", "queueRescheduled"], ["return-to-os", "queueReturnToOs"], ["overdue", "queueOverdue"]].map(([value, label]) => <button key={value} type="button" aria-pressed={filters.queue === value} onClick={() => { setPage(1); setSelected([]); const next = { ...emptyFilters, batchId: filters.batchId, queue: value }; setFilters(next); setSearchParams(dispatchFiltersToSearch(next), { replace: true }); }} className={`rounded-lg px-3 py-2 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${filters.queue === value ? "bg-sky-600 text-white" : "bg-white text-slate-600 dark:bg-white/5 dark:text-slate-200"}`}>{t(label)}</button>)}
       </nav>}
-      {filters.queue === "return-to-os" && (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            disabled={!returnListEligible && !canPaidToOsHandover}
-            onClick={openOsReturnList}
-            className={`${control} font-bold disabled:opacity-40`}
-          >
-            <Download size={14} className="mr-1 inline" />
-            {t("generateOsReturnList")}
-          </button>
-          {selected.length > 0 && !returnListEligible && (
-            <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("returnListEligibilityHelp")}</p>
-          )}
-        </div>
-      )}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "DISPATCHER"].includes(user?.role ?? "") && (
           <button
@@ -1291,6 +1269,17 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
                             >
                               <UserRoundPen size={12} className="mr-1 inline" />
                               {t("correctRider")}
+                            </button>
+                          ) : null}
+                          {p.status === "DELIVERED" && p.linkGroup && p.collectionMode !== "PAID_BY_OS" ? (
+                            <button
+                              type="button"
+                              aria-label={`${t("deliveredPaidToOs")} ${p.trackingNumber}`}
+                              disabled={!canDispatchEdit || savePaidToOs.isPending}
+                              onClick={() => { savePaidToOs.reset(); setIncludeDeliveryFee(false); setPaidToOs(p); }}
+                              className="rounded-md border border-sky-500 px-2 py-1 text-[11px] font-bold text-sky-700 disabled:opacity-40 dark:text-sky-300"
+                            >
+                              {t("deliveredPaidToOs")}
                             </button>
                           ) : null}
                           <button
@@ -1815,7 +1804,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
             <h2 id="bulk-paid-to-os-title" className="font-display text-xl font-bold">{t("deliveredPaidToOs")}</h2>
             <p className="mt-2 text-sm text-slate-500">{t("deliveredPaidToOsHelp")}</p>
             {applyStatusBulk.isError && <p role="alert" className="mt-4 rounded-xl bg-rose-50 p-3 text-sm font-semibold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200">{applyStatusBulk.error instanceof Error ? applyStatusBulk.error.message : t("loadError")}</p>}
-            <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 p-4 text-sm dark:border-white/10"><input aria-label={t("includeFullDeliveryFee")} type="checkbox" checked={includeDeliveryFee} onChange={(event) => setIncludeDeliveryFee(event.target.checked)} className="mt-0.5 h-4 w-4"/><span><span className="block font-bold">{t("includeFullDeliveryFee")}</span></span></label>
+            <label className={`mt-5 flex items-start gap-3 rounded-xl border border-slate-200 p-4 text-sm dark:border-white/10 ${bulkPaidToOsHasLinkedParcel ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}><input aria-label={t("includeFullDeliveryFee")} type="checkbox" disabled={bulkPaidToOsHasLinkedParcel} checked={includeDeliveryFee} onChange={(event) => setIncludeDeliveryFee(event.target.checked)} className="mt-0.5 h-4 w-4"/><span><span className="block font-bold">{t("includeFullDeliveryFee")}</span>{bulkPaidToOsHasLinkedParcel&&<span className="mt-1 block text-slate-500">{t("linkedPaidToOsCodOnlyHelp")}</span>}</span></label>
             <div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setBulkPaidToOs(false)} className={control}>{t("cancel")}</button><button type="submit" disabled={applyStatusBulk.isPending} className="rounded-lg bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{applyStatusBulk.isPending ? t("loading") : t("confirmDeliveredPaidToOs")}</button></div>
           </form>
         </div></ModalPortal>
@@ -1833,7 +1822,7 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
             <div className="flex items-start justify-between gap-4"><div><h2 id="paid-to-os-title" className="font-display text-xl font-bold">{t("deliveredPaidToOs")}</h2><p className="mt-2 text-sm text-slate-500">{t("deliveredPaidToOsHelp")}</p></div><button type="button" aria-label={t("close")} onClick={() => setPaidToOs(null)} className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10"><X size={18}/></button></div>
             {savePaidToOs.isError && <p role="alert" className="mt-4 rounded-xl bg-rose-50 p-3 text-sm font-semibold text-rose-700 dark:bg-rose-950/30 dark:text-rose-200">{savePaidToOs.error instanceof Error ? savePaidToOs.error.message : t("loadError")}</p>}
             <div className="mt-5 rounded-xl bg-sky-50 p-4 text-sm dark:bg-sky-950/50"><p className="font-bold">{paidToOs.trackingNumber}</p><p className="mt-1 text-slate-600 dark:text-slate-300">{t("cod")}: {money(paidToOs.codAmount)} MMK</p><p className="mt-1 text-slate-600 dark:text-slate-300">{t("fee")}: {money(paidToOs.deliveryFee ?? 0)} MMK</p></div>
-            <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 p-4 text-sm dark:border-white/10"><input aria-label={t("includeFullDeliveryFee")} type="checkbox" checked={includeDeliveryFee} onChange={(event) => setIncludeDeliveryFee(event.target.checked)} className="mt-0.5 h-4 w-4"/><span><span className="block font-bold">{t("includeFullDeliveryFee")}</span><span className="mt-1 block text-slate-500">{t("includeFullDeliveryFeeHelp", { amount: money(paidToOs.deliveryFee ?? 0) })}</span></span></label>
+            <label className={`mt-5 flex items-start gap-3 rounded-xl border border-slate-200 p-4 text-sm dark:border-white/10 ${paidToOs.linkGroup ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}><input aria-label={t("includeFullDeliveryFee")} type="checkbox" disabled={Boolean(paidToOs.linkGroup)} checked={includeDeliveryFee} onChange={(event) => setIncludeDeliveryFee(event.target.checked)} className="mt-0.5 h-4 w-4"/><span><span className="block font-bold">{t("includeFullDeliveryFee")}</span><span className="mt-1 block text-slate-500">{paidToOs.linkGroup?t("linkedPaidToOsCodOnlyHelp"):t("includeFullDeliveryFeeHelp", { amount: money(paidToOs.deliveryFee ?? 0) })}</span></span></label>
             <p className="mt-4 text-sm text-emerald-700 dark:text-emerald-400">{t("osCreditWillBe", { amount: money(paidToOs.codAmount + (includeDeliveryFee ? paidToOs.deliveryFee ?? 0 : 0)) })}</p>
             <p className="mt-2 text-xs text-slate-500">{t("osCreditAutoOffsetHelp")}</p>
             <div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setPaidToOs(null)} className={control}>{t("cancel")}</button><button type="submit" disabled={savePaidToOs.isPending} className="rounded-lg bg-[#1598ef] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{savePaidToOs.isPending ? t("loading") : t("confirmDeliveredPaidToOs")}</button></div>
@@ -2125,4 +2114,8 @@ export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispat
       {rescheduleOpen && <ModalPortal><div className="fixed inset-0 z-[100] grid place-items-center bg-black/55 p-4"><form role="dialog" aria-modal="true" aria-labelledby="reschedule-title" onSubmit={event => { event.preventDefault(); if (!reschedule.isPending) reschedule.mutate(); }} className="w-full max-w-lg rounded-2xl bg-white p-6 dark:bg-[#181a1d]"><h2 id="reschedule-title" className="text-xl font-bold">{t("rescheduleParcels")}</h2><p className="mt-2 text-sm text-slate-500">{t("rescheduleHelp")}</p><label className="mt-4 block text-sm font-bold">{t("plannedDeliveryDate")}<input autoFocus required type="date" value={rescheduleDate} onChange={event => setRescheduleDate(event.target.value)} className={`${control} mt-1 w-full`} /></label><label className="mt-4 block text-sm font-bold">{t("reason")}<textarea required minLength={3} value={rescheduleReason} onChange={event => setRescheduleReason(event.target.value)} className={`${control} mt-1 w-full`} /></label>{reschedule.isError && <p role="alert" className="mt-3 text-sm text-rose-600">{reschedule.error instanceof Error ? reschedule.error.message : t("loadError")}</p>}<div className="mt-5 flex justify-end gap-2"><button type="button" disabled={reschedule.isPending} onClick={() => setRescheduleOpen(false)} className={control}>{t("cancel")}</button><button disabled={reschedule.isPending} className="rounded-lg bg-sky-600 px-4 py-2 text-white disabled:opacity-40">{t(reschedule.isPending ? "loading" : "save")}</button></div></form></div></ModalPortal>}
     </div>
   );
+}
+
+export function OperationsPage({ workspace = "dispatch" }: { workspace?: "dispatch" | "returns" }) {
+  return workspace === "returns" ? <ReturnToOsWorkspace /> : <DispatchOperationsPage workspace={workspace} />;
 }

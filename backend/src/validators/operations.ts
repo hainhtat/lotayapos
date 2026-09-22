@@ -114,3 +114,10 @@ export const paidToOsHandoverValidation = [
   body("dateFrom").optional().matches(/^\d{4}-\d{2}-\d{2}$/).withMessage("dateFrom must be YYYY-MM-DD").bail().isISO8601({ strict: true }),
   body("dateTo").optional().matches(/^\d{4}-\d{2}-\d{2}$/).withMessage("dateTo must be YYYY-MM-DD").bail().isISO8601({ strict: true }),
 ];
+
+export const combinedOsHandoverValidation = [
+  body("parcelIds").optional().isArray({ max: 500 }),
+  body("parcelIds.*").optional().isString().trim().notEmpty(),
+  body("parcelIds").optional().custom((ids: string[]) => new Set(ids).size === ids.length).withMessage("parcelIds must be unique"),
+  ...paidToOsHandoverValidation,
+];

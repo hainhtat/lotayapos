@@ -97,11 +97,14 @@ async function postCashbookJournal(
     if (["P2002", "P2034"].includes((error as { code?: string }).code ?? "")) {
       const raced = await existingForKey();
       if (raced) return raced;
-      if ((error as { code?: string }).code === "P2034") {
-        const day = await prisma.cashbookDay.findUnique({ where: { hubId_businessDate: { hubId, businessDate: date } }, select: { closedAt: true } });
-        if (day?.closedAt) throw new ApiError(409, "DAY_CLOSED", "Cashbook day is already closed");
-        throw new ApiError(409, "RETRYABLE_CONFLICT", "Cashbook changed concurrently; retry with the same idempotency key");
-      }
+      // A transaction may take its Serializable snapshot before waiting for
+      // the per-day advisory lock. If the closer creates the day row while we
+      // wait, our stale create can surface as P2002 rather than P2034. Re-read
+      // outside that transaction and translate both database races into the
+      // same stable domain result.
+      const day = await prisma.cashbookDay.findUnique({ where: { hubId_businessDate: { hubId, businessDate: date } }, select: { closedAt: true } });
+      if (day?.closedAt) throw new ApiError(409, "DAY_CLOSED", "Cashbook day is already closed");
+      throw new ApiError(409, "RETRYABLE_CONFLICT", "Cashbook changed concurrently; retry with the same idempotency key");
     }
     throw error;
   }

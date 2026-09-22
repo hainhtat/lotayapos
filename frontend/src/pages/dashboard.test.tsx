@@ -11,7 +11,6 @@ describe("Dashboard batch creation",()=>{it("creates the batch with an explicit 
     if(path==="/master-data/dashboard")return Promise.resolve({data:{totalParcels:0,delivered:0,pendingReturn:0,cashCollected:0,grossProfit:0,batches:[]}});
     if(path.startsWith("/operations/parcels/overdue-unsent"))return Promise.resolve({data:[],pagination:{total:0}});
     if(path==="/master-data")return Promise.resolve({data:{hubs:[{id:"hub-1",name:"Main Hub"}],shops:[{id:"shop-1",name:"Shop One"}]}});
-    if(path.startsWith("/finance/os-accounts?"))return Promise.resolve({data:{shops:[{shop:{id:"shop-1"},creditAvailable:0}]}});
     return Promise.resolve({data:{id:"batch-1"}});
   });
   const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
@@ -19,7 +18,6 @@ describe("Dashboard batch creation",()=>{it("creates the batch with an explicit 
   fireEvent.click(await screen.findByRole("button",{name:/create batch/i}));
   const dialog=screen.getByRole("dialog");
   fireEvent.change(within(dialog).getByLabelText("Batch label"),{target:{value:"Morning pickup"}});
-  fireEvent.change(within(dialog).getByLabelText("Requested total advance"),{target:{value:"50000"}});
   fireEvent.change(within(dialog).getByLabelText("Cash"),{target:{value:"50000"}});
   await waitFor(()=>expect(within(dialog).getByRole("button",{name:"Save and add parcels"})).toBeEnabled());
   expect(within(dialog).queryByLabelText("Tracking")).not.toBeInTheDocument();

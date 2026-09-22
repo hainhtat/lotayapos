@@ -52,6 +52,7 @@ describe("auditable OS settlement editing", () => {
     await prisma.batch.deleteMany({ where: { id: { in: [batchId, draftBatchId] } } });
     await prisma.user.delete({ where: { id: userId } });
     await prisma.onlineShop.delete({ where: { id: shopId } });
+    await prisma.cashbookDay.deleteMany({ where: { hubId } });
     await prisma.hub.delete({ where: { id: hubId } });
   });
 

@@ -132,3 +132,20 @@ export const downloadPaidToOsHandover: RequestHandler = async (req, res) => {
   });
   res.type("application/pdf").set("Content-Disposition", `attachment; filename="${result.filename}"`).send(pdf);
 };
+
+export const downloadCombinedOsHandover: RequestHandler = async (req, res) => {
+  const result = await service.buildCombinedOsHandover(req.body, actor(req));
+  const pdf = await generateDispatchManifestPdf({
+    sections: result.sections,
+    statusesLabel: "Physical returns and delivered - paid to OS",
+    documentTitle: "OS Handover Report",
+    documentSubtitle: "Combined report-back document; downloading does not post finance entries",
+    footerLabel: "Lotaya Delivery - OS handover report",
+    noteLabel: "Return / fee note",
+  });
+  res.type("application/pdf").set({
+    "Content-Disposition": `attachment; filename="${result.filename}"`,
+    "X-Physical-Return-Count": String(result.physicalCount),
+    "X-Paid-To-OS-Count": String(result.paidToOsCount),
+  }).send(pdf);
+};

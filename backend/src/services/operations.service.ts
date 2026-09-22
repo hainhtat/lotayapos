@@ -5,7 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { ApiError } from "../utils/api-error.js";
 import { assertCashbookOpen } from "./finance/cashbook-policy.js";
 import { buildRiderCommissionLines, buildRiderReceivableRecognitionLines, calculateCommissionAmount, journalEntryIsUnreversed, nextVersionedJournalSourceId } from "./parcel.service.js";
-import { accountRows, postedAdvanceByBatch, syncBatchObligation } from "./os-account.service.js";
+import { accountRows, finalizeAutomaticBatchAccounting, postedAdvanceByBatch, syncBatchObligation } from "./os-account.service.js";
 import { resolveCommissionRateBps } from "../utils/commission.js";
 import { buildDeliveryCollectionLines } from "./ledger.service.js";
 import { businessDateUtcBoundary, nextCalendarDate } from "../utils/business-date.js";
@@ -297,11 +297,14 @@ export async function getBatchDetail(id:string,actor:BatchActor){
   const totalCod=batch.parcels.reduce((sum,parcel)=>sum+parcel.codAmount,0);
   const advancePostedAmount=(await postedAdvanceByBatch(prisma,[batch.id])).get(batch.id) ?? 0;
   let balanceError: string | null = null;
-  const account = batch.hubId ? (await accountRows(prisma,{hubId:batch.hubId,shopId:batch.shopId}).catch(error=>{ if (!(error instanceof ApiError) || error.code !== "OS_CUTOVER_RECONCILIATION_REQUIRED") throw error; balanceError=error.message; return []; })).find(row=>row.batchId===batch.id) : undefined;
+  const accountRowsForShop = batch.hubId ? await accountRows(prisma,{hubId:batch.hubId,shopId:batch.shopId}).catch(error=>{ if (!(error instanceof ApiError) || error.code !== "OS_CUTOVER_RECONCILIATION_REQUIRED") throw error; balanceError=error.message; return []; }) : [];
+  const account = accountRowsForShop.find(row=>row.batchId===batch.id);
   const deliveryFeeCredit=await prisma.osReturnCredit.aggregate({ where: { batchId: batch.id, status: "POSTED", kind: "PAID_TO_OS" }, _sum: { feeAmount: true } }).then(result => result._sum.feeAmount ?? 0);
   const returnedCod=account?.returnedCod ?? batch.parcels.reduce((sum,parcel)=>sum+(parcel.status === "RETURNED" ? parcel.codAmount : 0),0);
   const remainingToOs=account?.outstanding ?? Math.max(0,totalCod-advancePostedAmount-returnedCod);
-  return {...batch,totalCod,advancePostedAmount,deliveryFeeCredit,osCreditAvailable:account?.creditAvailable ?? 0,osAdvanceCreditApplied:account?.advanceCreditApplied ?? 0,returnedCod,remainingToOs:balanceError?null:remainingToOs,balanceError,paymentPaid:account?.paymentPaid??0,historicalSettledAmount:account?.historicalSettledAmount??0,openingAdjustment:account?.openingAdjustment??0,nextTrackingSequence:await nextTrackingSequenceStart()};
+  const availableOsCredit = balanceError ? 0 : accountRowsForShop.reduce((sum, row) => sum + (row.batchId === batch.id ? 0 : row.creditAvailable), 0);
+  const expectedOsCreditApplied = Math.min(Math.max(0, totalCod - batch.advancePaid), availableOsCredit);
+  return {...batch,totalCod,advancePostedAmount,deliveryFeeCredit,availableOsCredit,expectedOsCreditApplied,expectedOutstanding:Math.max(0,totalCod-batch.advancePaid-expectedOsCreditApplied),expectedCarryForwardCredit:Math.max(0,batch.advancePaid-totalCod),osCreditAvailable:account?.creditAvailable ?? 0,osAdvanceCreditApplied:account?.advanceCreditApplied ?? 0,returnedCod,remainingToOs:balanceError?null:remainingToOs,balanceError,paymentPaid:account?.paymentPaid??0,historicalSettledAmount:account?.historicalSettledAmount??0,openingAdjustment:account?.openingAdjustment??0,nextTrackingSequence:await nextTrackingSequenceStart()};
 }
 
 type NewParcelInput = { trackingNumber?: string; orderId?: string | null; customerName: string; customerPhone?: string; address: string; codAmount: number; townshipId: string; zoneId?: string };
@@ -313,7 +316,7 @@ export async function createBatch(input: { shopId: string; pickupDate: string; b
   const hubId = await resolveBatchHub(actor, input.hubId);
   if (!Number.isInteger(input.advancePaid) || input.advancePaid < 0) throw new ApiError(400,"INVALID_ADVANCE","Batch advance paid must be a non-negative integer");
   const wallets = input.wallets ?? { cash: 0, kbzPay: 0, wavePay: 0 };
-  if (Object.values(wallets).some(amount => !Number.isSafeInteger(amount) || amount < 0) || wallets.cash + wallets.kbzPay + wallets.wavePay > input.advancePaid) throw new ApiError(400, "INVALID_WALLET_SPLIT", "Wallet amounts may not exceed the requested advance");
+  if (Object.values(wallets).some(amount => !Number.isSafeInteger(amount) || amount < 0) || wallets.cash + wallets.kbzPay + wallets.wavePay !== input.advancePaid) throw new ApiError(400, "INVALID_WALLET_SPLIT", "Wallet amounts must equal the actual advance paid");
   if ((input.advancePaid > 0 || wallets.cash + wallets.kbzPay + wallets.wavePay > 0) && !["SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER"].includes(actor.role)) throw new ApiError(403, "FORBIDDEN", "Only Superadmin, Finance, or Operations Manager may record an advance payment");
   if (input.advancePaid > 0 && !input.idempotencyKey) throw new ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "An idempotency key is required for an advance payment");
   const creationKey = input.idempotencyKey ? `${actor.id}:${input.idempotencyKey}` : null;
@@ -331,36 +334,24 @@ export async function createBatch(input: { shopId: string; pickupDate: string; b
   try {
     return await prisma.$transaction(async tx => {
       const walletAdvance = wallets.cash + wallets.kbzPay + wallets.wavePay;
-      const availableCredit = (await accountRows(tx, { shopId: shop.id, hubId })).reduce((sum, row) => sum + row.creditAvailable, 0);
-      const creditApplied = Math.min(input.advancePaid, availableCredit);
-      if (walletAdvance !== input.advancePaid - creditApplied) throw new ApiError(400, "INVALID_WALLET_SPLIT", "Wallet amounts must equal requested advance after available OS credit is applied", { requestedAdvance: input.advancePaid, availableOsCredit: availableCredit, requiredWalletAdvance: input.advancePaid - creditApplied });
       if (walletAdvance > 0) await assertCashbookOpen(tx, pickupDate, hubId);
       const batch = await tx.batch.create({ data: { shopId: shop.id, hubId, pickupDate, label: input.batchName, advancePaid: walletAdvance, automaticAccounting: true, creationKey, creationHash, createdBy: actor.id }, include: { shop: true, parcels: true } });
-      await syncBatchObligation(tx, batch.id, actor.id);
-      if (creditApplied > 0) {
-        const credits = await tx.osReturnCredit.findMany({ where: { shopId: shop.id, hubId, status: "POSTED" }, include: { allocations: { where: { payment: { status: "POSTED" } } }, advanceAllocations: true }, orderBy: [{ businessDate: "asc" }, { id: "asc" }] });
-        let remaining = creditApplied;
-        for (const credit of credits) {
-          const consumed = credit.allocations.reduce((sum, allocation) => sum + allocation.amount, 0) + credit.advanceAllocations.reduce((sum, allocation) => sum + allocation.amount, 0);
-          const use = Math.min(Math.max(0, credit.amount - consumed), remaining);
-          if (use > 0) await tx.osAdvanceCreditAllocation.create({ data: { batchId: batch.id, creditId: credit.id, amount: use } });
-          remaining -= use;
-          if (!remaining) break;
-        }
-        if (remaining) throw new ApiError(409, "OS_CREDIT_CONFLICT", "Available OS credit changed; refresh and retry");
-      }
       if (walletAdvance > 0) await tx.journalEntry.create({ data: {
         sourceType: "BATCH_PICKUP_ADVANCE", sourceId: batch.id, hubId, businessDate: pickupDate,
         description: `Advance paid for ${batch.label} by ${actor.id}`,
         lines: { create: [{ account: "OS_COD_PAYABLE", debit: walletAdvance, credit: 0 }, ...Object.entries(wallets).filter(([, amount]) => amount > 0).map(([wallet, amount]) => ({ account: { cash: "WALLET_CASH", kbzPay: "WALLET_KBZ_PAY", wavePay: "WALLET_WAVE_PAY" }[wallet]!, debit: 0, credit: amount }))] },
       } });
-      return { ...batch, requestedAdvance: input.advancePaid, walletAdvance, osCreditApplied: creditApplied };
+      return { ...batch, walletAdvance, osCreditApplied: 0 };
     });
   } catch (error) {
     if ((error as { code?: string }).code === "P2002") {
       const existing = await replay();
       if (existing) return existing;
-      throw new ApiError(409, "BATCH_EXISTS", "A batch already exists for this online shop and pickup date");
+      const day = await prisma.cashbookDay.findUnique({ where: { hubId_businessDate: { hubId, businessDate: pickupDate } }, select: { closedAt: true } });
+      if (day?.closedAt) throw new ApiError(409, "DAY_CLOSED", "Cashbook day is already closed");
+      const conflictingBatch = await prisma.batch.findUnique({ where: { shopId_pickupDate: { shopId: input.shopId, pickupDate } }, select: { id: true } });
+      if (conflictingBatch) throw new ApiError(409, "BATCH_EXISTS", "A batch already exists for this online shop and pickup date");
+      throw new ApiError(409, "RETRYABLE_CONFLICT", "Batch creation changed concurrently; retry with the same idempotency key");
     }
     throw error;
   }
@@ -371,7 +362,7 @@ export async function bulkCreateParcels(batchId:string,input:{parcels:NewParcelI
   if(!user?.active||user.role!==actor.role||!["SUPERADMIN","OPERATIONS_MANAGER","DISPATCHER"].includes(user.role)) throw new ApiError(403,"FORBIDDEN","You may not add parcels");
   const batch=await prisma.batch.findFirst({where:{id:batchId,...(user.role==="SUPERADMIN"?{}:{hubId:user.hubId})},select:{id:true,hubId:true,finalizedAt:true,automaticAccounting:true}});
   if(!batch) throw new ApiError(404,"BATCH_NOT_FOUND","Batch not found");
-  if(batch.finalizedAt && !batch.automaticAccounting) throw new ApiError(409,"BATCH_FINALIZED","A finalized batch cannot accept more parcels");
+  if(batch.finalizedAt) throw new ApiError(409,"BATCH_FINALIZED","A finalized batch cannot accept more parcels");
   const townshipIds=[...new Set(input.parcels.map(p=>p.townshipId))];
   const townships=await prisma.township.findMany({where:{id:{in:townshipIds}},select:{id:true,nameEn:true,deliveryFee:true}});
   if(townships.length!==townshipIds.length) throw new ApiError(400,"INVALID_TOWNSHIP","One or more townships are invalid");
@@ -384,14 +375,13 @@ export async function bulkCreateParcels(batchId:string,input:{parcels:NewParcelI
     await acquireBatchMutationLock(tx, batchId);
     const currentBatch = await tx.batch.findUnique({ where: { id: batchId }, select: { finalizedAt: true, automaticAccounting: true, historicalOsSettlement: { select: { id: true } } } });
     if (currentBatch?.historicalOsSettlement) throw new ApiError(409, "HISTORICAL_BATCH", "Historically settled batches cannot accept more parcels");
-    if (!currentBatch || (currentBatch.finalizedAt && !currentBatch.automaticAccounting)) throw new ApiError(409,"BATCH_FINALIZED","A finalized batch cannot accept more parcels");
+    if (!currentBatch || currentBatch.finalizedAt) throw new ApiError(409,"BATCH_FINALIZED","A finalized batch cannot accept more parcels");
     // Serialize allocation in PostgreSQL. SQLite writes are serialized by the database;
     // the bounded retry below also covers a stale read racing another transaction.
     await acquireTrackingAllocationLock(tx);
     const sequenceStart = await nextTrackingSequenceStartWith(tx);
     const trackingNumbers = input.parcels.map((_, index) => formatTrackingNumber(sequenceStart + index));
     await tx.parcel.createMany({data:input.parcels.map((p,index)=>{const township=townshipById.get(p.townshipId)!;const zone=p.zoneId?zoneById.get(p.zoneId):undefined;return {orderId:p.orderId,customerName:p.customerName,customerPhone:p.customerPhone,address:p.address,codAmount:p.codAmount,townshipId:p.townshipId,zoneId:p.zoneId,zone:zone?.name,township:township.nameEn,deliveryFee:township.deliveryFee,advanceAmount:0,batchId,trackingNumber:trackingNumbers[index]!};})});
-    if (currentBatch.automaticAccounting) await syncBatchObligation(tx, batchId, actor.id);
     return tx.parcel.findMany({where:{batchId,trackingNumber:{in:trackingNumbers}},include:{townshipRelation:{include:{district:{include:{regionState:true}}}},zoneRelation:true}});
   });
 
@@ -408,21 +398,43 @@ export async function bulkCreateParcels(batchId:string,input:{parcels:NewParcelI
 export async function finalizeBatch(batchId: string, actor: BatchActor) {
   const user = await prisma.user.findUnique({ where: { id: actor.id }, select: { active: true, role: true, hubId: true } });
   if (!user?.active || user.role !== actor.role || !["SUPERADMIN", "OPERATIONS_MANAGER", "DISPATCHER"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "You may not finalize batches");
-  return prisma.$transaction(async (tx) => {
+  const attempt = () => prisma.$transaction(async (tx) => {
     await acquireBatchMutationLock(tx, batchId);
     const batch = await tx.batch.findFirst({ where: { id: batchId, ...(user.role === "SUPERADMIN" ? {} : { hubId: user.hubId }) }, include: { osObligation: true, _count: { select: { parcels: true } } } });
     if (!batch) throw new ApiError(404, "BATCH_NOT_FOUND", "Batch not found");
     if (batch._count.parcels < 1) throw new ApiError(409, "EMPTY_BATCH", "Add at least one parcel before finalizing the batch");
     if (batch.finalizedAt) {
       if (!batch.osObligation) throw new ApiError(409, "FINALIZATION_INCOMPLETE", "The finalized batch is missing its OS obligation");
-      return { batchId, finalizedAt: batch.finalizedAt, finalizedBy: batch.finalizedBy, obligation: batch.osObligation, replay: true };
+      const row = (await accountRows(tx, { shopId: batch.shopId, hubId: batch.hubId! })).find(item => item.batchId === batch.id);
+      const carryForwardCredit = await tx.osReturnCredit.findUnique({ where: { parcelId: `batch-over-advance:${batch.id}` }, select: { amount: true } });
+      return { batchId, finalizedAt: batch.finalizedAt, finalizedBy: batch.finalizedBy, obligation: batch.osObligation, totalCod: batch.osObligation.originalCod, advancePaid: batch.advancePaid, osCreditApplied: row?.advanceCreditApplied ?? 0, outstanding: row?.outstanding ?? 0, carryForwardCredit: carryForwardCredit?.amount ?? 0, replay: true };
     }
     const finalized = await tx.batch.updateMany({ where: { id: batchId, finalizedAt: null }, data: { finalizedAt: new Date(), finalizedBy: actor.id } });
     if (finalized.count !== 1) throw new ApiError(409, "BATCH_FINALIZE_CONFLICT", "Batch changed while finalizing; refresh and retry");
-    const obligation = await syncBatchObligation(tx, batchId, actor.id);
+    const accounting = batch.automaticAccounting
+      ? await finalizeAutomaticBatchAccounting(tx, { id: batch.id, shopId: batch.shopId, hubId: batch.hubId!, pickupDate: batch.pickupDate, advancePaid: batch.advancePaid }, actor.id)
+      : { obligation: await syncBatchObligation(tx, batchId, actor.id), totalCod: 0, advancePaid: batch.advancePaid, availableOsCredit: 0, osCreditApplied: 0, outstanding: 0, carryForwardCredit: 0 };
     const current = await tx.batch.findUniqueOrThrow({ where: { id: batchId }, select: { finalizedAt: true, finalizedBy: true } });
-    return { batchId, finalizedAt: current.finalizedAt, finalizedBy: current.finalizedBy, obligation, replay: false };
-  }, { isolationLevel: "Serializable" });
+    return { batchId, finalizedAt: current.finalizedAt, finalizedBy: current.finalizedBy, ...accounting, replay: false };
+  // PostgreSQL's transaction-level advisory lock is the serialization
+  // mechanism for this batch. READ COMMITTED takes a fresh snapshot after a
+  // waiter acquires that lock; SERIALIZABLE would retain the pre-wait snapshot
+  // and could miss a parcel inserted by the preceding lock holder.
+  }, {
+    // The checked-in default Prisma client is generated from SQLite and types
+    // only Serializable, while the production PostgreSQL client also accepts
+    // ReadCommitted. The runtime value is selected from the active provider.
+    isolationLevel: (batchMutationLockMode() === "POSTGRES_ADVISORY" ? "ReadCommitted" : "Serializable") as Prisma.TransactionIsolationLevel,
+  });
+  for (let retry = 0; retry < 3; retry += 1) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if ((error as { code?: string }).code !== "P2034") throw error;
+      if (retry === 2) throw new ApiError(409, "BATCH_FINALIZE_CONFLICT", "Batch accounting changed while finalizing; retry the request");
+    }
+  }
+  throw new ApiError(409, "BATCH_FINALIZE_CONFLICT", "Batch accounting changed while finalizing; retry the request");
 }
 
 export function pickupAdvancePostingDisposition(parcelCount: number, postedCount: number) {
@@ -1051,5 +1063,29 @@ export async function buildPaidToOsHandover(input: PaidToOsHandoverQuery, actor:
     totalCod: flat.reduce((sum, parcel) => sum + parcel.codAmount, 0),
     totalFees: flat.reduce((sum, parcel) => sum + (parcel.paidToOsFeeIncluded ? parcel.deliveryFee ?? 0 : 0), 0),
     filename: `lotaya-paid-to-os-${new Date().toISOString().slice(0, 10)}.pdf`,
+  };
+}
+
+export async function buildCombinedOsHandover(
+  input: PaidToOsHandoverQuery & { parcelIds?: string[] },
+  actor: BatchActor,
+) {
+  const physical = input.parcelIds?.length
+    ? await buildReturnToOsHandover({ parcelIds: input.parcelIds, hubId: input.hubId }, actor)
+    : null;
+  const paidToOs = await buildPaidToOsHandover(input, actor);
+  if (!physical?.parcelCount && !paidToOs.parcelCount) {
+    throw new ApiError(400, "EMPTY_HANDOVER", "Select physical returns or choose Paid-to-OS filters with matching parcels");
+  }
+  return {
+    sections: [
+      ...(physical?.sections.map((section) => ({ ...section, riderName: "Physical returns" })) ?? []),
+      ...paidToOs.sections
+        .filter((section) => section.parcels.length > 0)
+        .map((section) => ({ ...section, riderName: `Paid to OS - ${section.riderName}` })),
+    ],
+    physicalCount: physical?.parcelCount ?? 0,
+    paidToOsCount: paidToOs.parcelCount,
+    filename: `lotaya-os-handover-${new Date().toISOString().slice(0, 10)}.pdf`,
   };
 }

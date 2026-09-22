@@ -464,6 +464,16 @@ describe("OUT_FOR_DELIVERY to DELIVERED without open delivery way", () => {
     expect(pdf.status).toBe(200);
     expect(pdf.headers["content-type"]).toMatch(/pdf/);
     expect(Buffer.from(pdf.body).subarray(0, 5).toString("ascii")).toBe("%PDF-");
+
+    const combinedPdf = await request(app)
+      .post("/api/v1/operations/parcels/os-handover/pdf")
+      .set("Authorization", `Bearer ${dispatcherToken()}`)
+      .send({ parcelIds: [], shopId, riderId });
+    expect(combinedPdf.status).toBe(200);
+    expect(combinedPdf.headers["content-type"]).toMatch(/pdf/);
+    expect(combinedPdf.headers["x-physical-return-count"]).toBe("0");
+    expect(Number(combinedPdf.headers["x-paid-to-os-count"])).toBeGreaterThanOrEqual(1);
+    expect(Buffer.from(combinedPdf.body).subarray(0, 5).toString("ascii")).toBe("%PDF-");
   });
 
   test("allows DELIVERED when open delivery way belongs to a different rider", async () => {

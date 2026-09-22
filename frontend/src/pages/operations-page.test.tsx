@@ -29,7 +29,7 @@ function mockParcelList(data: unknown[], pagination?: { page: number; pageSize: 
         }),
       });
     }
-    return Promise.resolve({ json: async () => ({ data: [] }), blob: async () => new Blob() });
+    return Promise.resolve({ json: async () => ({ data: [] }), blob: async () => new Blob(), headers: new Headers() });
   });
 }
 
@@ -130,21 +130,17 @@ describe("OperationsPage", () => {
     );
   });
 
-  it("previews selected Return to OS parcels without posting a physical return", async () => {
+  it("keeps OS reporting out of the Dispatch Queue return filter", async () => {
     const parcel = { id: "return-1", trackingNumber: "TRK-RETURN", customerName: "Customer", address: "Address", status: "PENDING_RETURN", codAmount: 12000, batch: { label: "Batch", shop: { name: "Shop" } }, rider: null };
     mockParcelList([parcel]);
     apiMock.mockImplementation((path: string) => {
       if (path === "/master-data") return Promise.resolve({ data: { shops: [], riders: [] } });
       if (path === "/operations/batches" || path === "/master-data/reason-codes") return Promise.resolve({ data: [] });
-      if (path === "/operations/parcels/returns/preview") return Promise.resolve({ data: { parcelCount: 1, totalCod: 12000, parcels: [{ ...parcel, reasonCode: "CUSTOMER_CANCELLED" }] } });
       return Promise.resolve({ data: {} });
     });
     renderPage("/operations/dispatch?queue=return-to-os");
     await waitFor(() => expect(screen.getByText("TRK-RETURN")).toBeInTheDocument());
-    fireEvent.click(screen.getByLabelText("Select TRK-RETURN"));
-    fireEvent.click(screen.getByRole("button", { name: "Generate OS return list" }));
-    await waitFor(() => expect(screen.getByText("OS return list")).toBeInTheDocument());
-    expect(apiMock).toHaveBeenCalledWith("/operations/parcels/returns/preview", expect.objectContaining({ method: "POST", body: JSON.stringify({ parcelIds: ["return-1"] }) }));
+    expect(screen.queryByRole("button", { name: "Generate OS return list" })).not.toBeInTheDocument();
     expect(apiMock.mock.calls.some(([path]) => path === "/finance/os-returns/receive-bulk")).toBe(false);
   });
 
@@ -168,6 +164,29 @@ describe("OperationsPage", () => {
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/parcels/parcel-paid/status", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ status: "DELIVERED", collectionMode: "PAID_BY_OS", paidToOsIncludeDeliveryFee: true, note: "Ops correction" }),
+    })));
+  });
+
+  it("keeps a linked paid-to-OS delivery COD-only and leaves the shared fee with the rider", async () => {
+    const parcel = { id: "parcel-linked-paid", trackingNumber: "TRK-LINKED-PAID", customerName: "Customer", address: "Address", status: "OUT_FOR_DELIVERY", codAmount: 25000, deliveryFee: 3000, linkGroup: { id: "group-1", totalDeliveryFee: 4000 }, batch: { label: "Batch", shop: { name: "Shop" } }, rider: { id: "rider-1", user: { name: "Rider" } } };
+    mockParcelList([parcel]);
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/master-data") return Promise.resolve({ data: { shops: [], riders: [{ id: "rider-1", user: { name: "Rider" } }] } });
+      if (path === "/operations/batches" || path === "/master-data/reason-codes") return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: {} });
+    });
+    renderPage();
+    await screen.findByText("TRK-LINKED-PAID");
+    fireEvent.change(screen.getByLabelText("Status TRK-LINKED-PAID"), { target: { value: "DELIVERED" } });
+    fireEvent.click(screen.getByRole("button", { name: /Delivered — paid to OS/ }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByLabelText("Include the full delivery fee in OS credit")).toBeDisabled();
+    expect(within(dialog).getByText(/Paid to OS applies to this parcel's COD only/)).toBeInTheDocument();
+    expect(within(dialog).getByText("OS credit created: 25,000 MMK")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirm paid to OS" }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/parcels/parcel-linked-paid/status", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ status: "DELIVERED", collectionMode: "PAID_BY_OS", paidToOsIncludeDeliveryFee: false, note: "Ops correction" }),
     })));
   });
 
@@ -518,6 +537,27 @@ describe("OperationsPage", () => {
     }));
   });
 
+  it("offers a COD-only paid-to-OS correction for an already-delivered linked parcel", async () => {
+    const parcel = { id: "parcel-linked-correction", trackingNumber: "TRK-LINKED-CORRECTION", customerName: "Customer", address: "Address", status: "DELIVERED", collectionMode: "CASH_RECEIPT_EXCEPTION", codAmount: 25000, deliveryFee: 3000, linkGroup: { id: "group-1", totalDeliveryFee: 4000 }, batch: { label: "Batch", shop: { name: "Shop" } }, rider: { id: "rider-1", user: { name: "Rider" } } };
+    mockParcelList([parcel]);
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/master-data") return Promise.resolve({ data: { shops: [], riders: [{ id: "rider-1", user: { name: "Rider" } }] } });
+      if (path === "/operations/batches" || path === "/master-data/reason-codes") return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: {} });
+    });
+    renderPage();
+    await screen.findByText("TRK-LINKED-CORRECTION");
+    fireEvent.click(screen.getByRole("button", { name: "Delivered — paid to OS TRK-LINKED-CORRECTION" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByLabelText("Include the full delivery fee in OS credit")).toBeDisabled();
+    expect(within(dialog).getByText("OS credit created: 25,000 MMK")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirm paid to OS" }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/parcels/parcel-linked-correction/status", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ status: "DELIVERED", collectionMode: "PAID_BY_OS", paidToOsIncludeDeliveryFee: false, note: "Ops correction" }),
+    })));
+  });
+
   it("reassigns an eligible parcel via inline rider select", async () => {
     const parcel = {
       id: "parcel-1",
@@ -716,8 +756,8 @@ describe("OperationsPage", () => {
     });
   });
 
-  it("includes Paid to OS handover from the OS return list modal on returns", async () => {
-    mockParcelList([]);
+  it("shows Paid to OS deliveries beside physical returns and downloads one combined PDF", async () => {
+    mockParcelList([{ id: "return-1", trackingNumber: "TRK-RETURN", customerName: "Return Customer", status: "PENDING_RETURN", codAmount: 12000, batch: { label: "Batch", shop: { name: "Shop One" } } }]);
     apiMock.mockImplementation((path: string) => {
       if (path === "/master-data") {
         return Promise.resolve({
@@ -755,12 +795,6 @@ describe("OperationsPage", () => {
       return Promise.resolve({ data: [] });
     });
     renderReturnsPage();
-    fireEvent.click(await screen.findByRole("button", { name: "Generate OS return list" }));
-    const dialog = await screen.findByRole("dialog", { name: "OS return list" });
-    expect(dialog).toBeInTheDocument();
-    expect(dialog.parentElement).toBe(document.body);
-    // No return selection: Paid to OS is included by default.
-    expect(within(dialog).getByLabelText("Include Paid to OS handover")).toBeChecked();
     await waitFor(() => {
       const call = apiMock.mock.calls.find(([path]) => path === "/operations/parcels/paid-to-os/preview");
       expect(call?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
@@ -777,10 +811,21 @@ describe("OperationsPage", () => {
       expect(body.shopId).toBeUndefined();
       expect(body.riderId).toBeUndefined();
     });
-    expect(await within(dialog).findByText("TRK-PAID")).toBeInTheDocument();
-    expect(within(dialog).getByText("1 parcels · COD 50,000 MMK · fees 3,000 MMK")).toBeInTheDocument();
-    expect(within(dialog).getByText("Aung Aung · 1 parcels")).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Download Paid to OS PDF" })).toBeInTheDocument();
+    expect(await screen.findByText("TRK-PAID")).toBeInTheDocument();
+    expect(screen.getByText("1 parcels · COD 50,000 MMK · fees 3,000 MMK")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Paid to OS deliveries" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download combined OS handover PDF" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Download Paid to OS PDF" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("TRK-RETURN"));
+    fireEvent.click(screen.getByRole("button", { name: "Download combined OS handover PDF" }));
+    await waitFor(() => {
+      const call = apiRawMock.mock.calls.find(([path]) => path === "/operations/parcels/os-handover/pdf");
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+        parcelIds: ["return-1"],
+        dateFrom: hubBusinessDate(),
+        dateTo: hubBusinessDate(),
+      });
+    });
   });
 
   it("does not show a standalone Paid to OS handover button on dispatch", async () => {
@@ -791,12 +836,13 @@ describe("OperationsPage", () => {
     expect(screen.queryByRole("button", { name: "Paid to OS handover" })).not.toBeInTheDocument();
   });
 
-  it("opens Paid to OS only through Generate OS return list on returns", async () => {
+  it("keeps dispatch controls off the focused Return to OS workspace", async () => {
     mockParcelList([]);
     apiMock.mockResolvedValue({ data: [] });
     renderReturnsPage();
     expect(await screen.findByRole("heading", { name: "Return to OS" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Paid to OS handover" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Generate OS return list" })).toBeEnabled();
+    expect(screen.queryByRole("heading", { name: "Dispatch queue" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Assign & dispatch (0)" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Physical returns" })).toBeInTheDocument();
   });
 });

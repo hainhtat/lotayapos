@@ -751,6 +751,20 @@ describe("bulk dispatch and manifest rules", () => {
     expect(text).not.toContain("53,000");
   });
 
+  test("combined OS handover PDF stays landscape and labels both report-back sections", async () => {
+    const base={customerName:"Customer",customerPhone:null,address:"Address",codAmount:50000,deliveryFee:3000,zone:null,township:"Hlaing"};
+    const pdf=await generateDispatchManifestPdf({documentTitle:"OS Handover Report",sections:[
+      {riderName:"Physical returns",parcels:[{...base,trackingNumber:"LTY-RETURN",status:"PENDING_RETURN",note:"Return requested",paidToOsFeeIncluded:false}]},
+      {riderName:"Paid to OS - Rider One",parcels:[{...base,trackingNumber:"LTY-PAID",status:"DELIVERED",note:"Fee included in OS credit",paidToOsFeeIncluded:true}]},
+    ]});
+    const document=await PDFDocument.load(pdf);
+    expect(document.getPage(0).getWidth()).toBeGreaterThan(document.getPage(0).getHeight());
+    const text=extractPdfStrings(pdf).join(" ");
+    expect(text).toContain("OS Handover Report");
+    expect(text).toContain("Physical returns");
+    expect(text).toContain("Paid to OS - Rider One");
+  });
+
   test("supports multi-rider sections as separate active rider sheets", async () => {
     const pdf = await generateDispatchManifestPdf({
       generatedAt: new Date("2026-08-10T00:00:00.000Z"),
