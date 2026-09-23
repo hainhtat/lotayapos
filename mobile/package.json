@@ -1,8 +1,11 @@
 {
   "name": "lotaya-rider",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "main": "expo-router/entry",
+  "engines": {
+    "node": ">=22.13 <23"
+  },
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
@@ -12,34 +15,44 @@
     "typecheck": "tsc --noEmit",
     "doctor": "npx expo-doctor",
     "test": "jest --runInBand",
-    "build:apk": "CI=1 expo prebuild --platform android && cd android && ./gradlew app:assembleRelease",
+    "signing:setup": "bash scripts/setup-android-signing.sh",
+    "build:apk": "bash scripts/build-release-apk.sh",
     "build:aab": "CI=1 expo prebuild --platform android && cd android && ./gradlew app:bundleRelease"
   },
   "dependencies": {
     "@tanstack/react-query": "5.101.4",
-    "expo": "57.0.11",
-    "expo-clipboard": "~57.0.1",
-    "expo-localization": "57.0.1",
-    "expo-router": "57.0.11",
-    "expo-secure-store": "57.0.1",
+    "expo": "~57.0.24",
+    "expo-clipboard": "~57.0.2",
+    "expo-constants": "~57.0.19",
+    "expo-linking": "~57.0.10",
+    "expo-localization": "~57.0.2",
+    "expo-router": "~57.0.22",
+    "expo-secure-store": "~57.0.4",
     "expo-status-bar": "57.0.1",
+    "expo-system-ui": "~57.0.4",
     "i18n-js": "4.5.3",
-    "react": "19.2.8",
-    "react-dom": "19.2.8",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
     "react-hook-form": "7.85.0",
-    "react-native": "0.86.2",
-    "react-native-safe-area-context": "5.8.1",
+    "react-native": "0.86.3",
+    "react-native-safe-area-context": "~5.7.0",
     "react-native-web": "0.21.2"
   },
   "devDependencies": {
     "@testing-library/react-native": "14.0.1",
-    "@types/jest": "30.0.0",
+    "@types/jest": "29.5.14",
     "@types/react": "19.2.18",
     "eslint": "^9.0.0",
-    "eslint-config-expo": "~57.0.1",
+    "eslint-config-expo": "~57.0.2",
     "jest": "29.7.0",
-    "jest-expo": "57.0.3",
+    "jest-expo": "~57.0.5",
     "typescript": "6.0.3"
+  },
+  "overrides": {
+    "@xmldom/xmldom": "0.9.12",
+    "image-size": "2.0.4",
+    "query-string": "9.5.1",
+    "uuid": "11.1.1"
   },
   "jest": {
     "preset": "jest-expo",

@@ -2,18 +2,18 @@
   "expo": {
     "name": "LOTAYA Rider",
     "slug": "lotaya-rider",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "lotayarider",
-    "plugins": ["expo-router", "expo-localization"],
+    "plugins": ["expo-router", "expo-localization", "./plugins/with-android-release-signing"],
     "experiments": {
       "typedRoutes": true
     },
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "com.lotaya.rider",
-      "versionCode": 2,
+      "versionCode": 3,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#000000"

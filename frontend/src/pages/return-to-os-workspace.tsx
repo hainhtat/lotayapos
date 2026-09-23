@@ -62,8 +62,10 @@ export function ReturnToOsWorkspace() {
     queryKey: ["operations-return-queue"],
     queryFn: async () => {
       const response = await apiRaw("/parcels?queue=return-to-os&page=1&pageSize=100");
-      const body = await response.json() as { data?: ReturnParcel[] };
-      return body.data ?? [];
+      const body = await response.json() as { data?: ReturnParcel[] | { items?: ReturnParcel[] } };
+      if (Array.isArray(body.data)) return body.data;
+      if (body.data && Array.isArray(body.data.items)) return body.data.items;
+      throw new Error("INVALID_RETURN_QUEUE_RESPONSE");
     },
   });
   const masters = useQuery({
@@ -145,7 +147,7 @@ export function ReturnToOsWorkspace() {
         </div>
         {canConfirm && <button type="button" disabled={!selected.length} onClick={() => { confirmReturns.reset(); setReturnOpen(true); }} className={`${control} font-bold disabled:opacity-40`}>{t("confirmReturnedToOs")}</button>}
       </div>
-      {returns.isLoading ? <p className="py-8 text-center">{t("loading")}</p> : physical.length === 0 ? <p className="py-8 text-center text-sm text-slate-500">{t("nothingHere")}</p> :
+      {returns.isLoading ? <p className="py-8 text-center">{t("loading")}</p> : returns.isError ? <div role="alert" className="py-8 text-center text-sm text-rose-600">{returns.error instanceof ApiError ? returns.error.message : t("loadError")} <button type="button" onClick={() => void returns.refetch()} className="ml-2 underline">{t("retry")}</button></div> : physical.length === 0 ? <p className="py-8 text-center text-sm text-slate-500">{t("empty")}</p> :
         <div className="mt-4 overflow-x-auto rounded-xl border dark:border-white/10">
           <table className="w-full min-w-[760px] text-left text-sm">
             <thead><tr className="border-b bg-slate-50 text-xs uppercase text-slate-500 dark:border-white/10 dark:bg-white/5">
@@ -165,8 +167,8 @@ export function ReturnToOsWorkspace() {
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label className="text-xs font-bold text-slate-500">{t("dateFrom")}<input aria-label={t("dateFrom")} type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className={`${control} mt-1 w-full`}/></label>
         <label className="text-xs font-bold text-slate-500">{t("dateTo")}<input aria-label={t("dateTo")} type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className={`${control} mt-1 w-full`}/></label>
-        <label className="text-xs font-bold text-slate-500">{t("onlineShop")}<select aria-label={t("onlineShop")} value={shopId} onChange={(event) => setShopId(event.target.value)} className={`${control} mt-1 w-full`}><option value="">{t("all")}</option>{masters.data?.shops?.map((shop) => <option key={shop.id} value={shop.id}>{shop.name}</option>)}</select></label>
-        <label className="text-xs font-bold text-slate-500">{t("rider")}<select aria-label={t("rider")} value={riderId} onChange={(event) => setRiderId(event.target.value)} className={`${control} mt-1 w-full`}><option value="">{t("all")}</option>{masters.data?.riders?.map((rider) => <option key={rider.id} value={rider.id}>{rider.user.name}</option>)}</select></label>
+        <label className="text-xs font-bold text-slate-500">{t("onlineShop")}<select aria-label={t("onlineShop")} value={shopId} onChange={(event) => setShopId(event.target.value)} className={`${control} mt-1 w-full`}><option value="">{t("all")}</option>{(Array.isArray(masters.data?.shops) ? masters.data.shops : []).map((shop) => <option key={shop.id} value={shop.id}>{shop.name}</option>)}</select></label>
+        <label className="text-xs font-bold text-slate-500">{t("rider")}<select aria-label={t("rider")} value={riderId} onChange={(event) => setRiderId(event.target.value)} className={`${control} mt-1 w-full`}><option value="">{t("all")}</option>{(Array.isArray(masters.data?.riders) ? masters.data.riders : []).map((rider) => <option key={rider.id} value={rider.id}>{rider.user.name}</option>)}</select></label>
       </div>
       <p className="mt-4 rounded-xl bg-sky-50 p-3 text-sm dark:bg-sky-950/40">{t("paidToOsHandoverSummary", { count: paidCount, cod: (paidToOs.data?.totalCod ?? 0).toLocaleString(), fees: (paidToOs.data?.totalFees ?? 0).toLocaleString() })}</p>
       {paidToOs.isLoading ? <p className="py-8 text-center">{t("loading")}</p> : paidCount === 0 ? <p className="py-8 text-center text-sm text-slate-500">{t("paidToOsHandoverEmpty")}</p> :

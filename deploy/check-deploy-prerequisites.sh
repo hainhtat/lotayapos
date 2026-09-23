@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
+command -v node >/dev/null || { echo "Node.js 22 is required to deploy Lotaya." >&2; exit 1; }
+NODE_VERSION="${LOTAYA_NODE_VERSION:-$(node -p 'process.versions.node')}"
+IFS=. read -r NODE_MAJOR NODE_MINOR _NODE_PATCH <<< "${NODE_VERSION}"
+if [[ "${NODE_MAJOR}" -ne 22 || "${NODE_MINOR}" -lt 13 ]]; then
+  echo "Node.js 22.13 or newer (but below 23) is required; found ${NODE_VERSION}. Run 'nvm install 22 && nvm use 22' before deploying." >&2
+  exit 1
+fi
 CERT_DIR="${LOTAYA_CERT_DIR:-/etc/letsencrypt/live/lotaya.mmds.site}"
 LOTAYA_HOSTNAMES="${LOTAYA_HOSTNAMES:-lotaya.mmds.site lt.mmds.site}"
 for file in fullchain.pem privkey.pem; do

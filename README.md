@@ -243,6 +243,35 @@ Financial changes should also be verified against an isolated PostgreSQL databas
 
 The ERP/API version is stored in [`VERSION`](VERSION), with release notes in [`CHANGELOG.md`](CHANGELOG.md). The Rider APK has an independent version in `mobile/app.json`, `mobile/package.json`, and `deploy/app/version.json`.
 
+Use Node.js 22 for installs and builds (`nvm install 22 && nvm use 22`). The repository pins the expected line in `.nvmrc`, and production deployment rejects unsupported Node versions before changing the active release.
+
+### Release the Rider app without Google Play
+
+The Rider app is distributed as a signed APK from `https://lotaya.mmds.site/app/`, so a Google Play developer account is not required. Android may ask riders to allow installation from the browser the first time.
+
+Create the signing key once, then back up both generated files somewhere secure. Losing this key prevents future APKs from updating the installed app.
+
+```bash
+cd mobile
+npm run signing:setup
+# Back up credentials/lotaya-rider-upload.p12 and .env.release.local.
+```
+
+For every release, increment both `expo.version` and `expo.android.versionCode` in `mobile/app.json`, keep `mobile/package.json` at the same human-readable version, then build:
+
+```bash
+cd mobile
+npm ci
+npm run build:apk
+```
+
+The build command requires the Android SDK, refuses to use the debug key, and stages these ignored release artifacts:
+
+- `releases/lotaya-rider.apk`
+- `releases/lotaya-rider.version`
+
+Copy both files to `/opt/lotaya/repo/releases/` on the VPS after pulling the matching commit, then run `sudo ./deploy.sh`. Deployment verifies the APK package, version, version code, and non-debug signature before replacing the download. A mismatched or invalid APK leaves the currently published Rider app untouched.
+
 Production uses PostgreSQL behind TLS. The deployment process builds a versioned release, validates migrations, checks the database-backed readiness endpoint, switches the current release atomically, and restores application files if health checks fail. Database migrations remain forward-only, so production releases require a tested backup and restore plan.
 
 Useful deployment checks:

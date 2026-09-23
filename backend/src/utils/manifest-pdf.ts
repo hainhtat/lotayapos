@@ -286,6 +286,24 @@ function scriptRuns(text: string) {
   return runs;
 }
 
+/** Standard Helvetica uses WinAnsi; parcel text can contain emoji or other glyphs it cannot encode. */
+function printableLatinText(text: string, font: PDFFont) {
+  const replacements: Record<string, string> = {
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-", "\u2212": "-",
+    "\u2018": "'", "\u2019": "'", "\u201C": '"', "\u201D": '"', "\u2026": "...",
+    "\u00A0": " ",
+  };
+  return graphemes(text).map((part) => {
+    const replacement = [...part].map((char) => replacements[char] ?? char).join("");
+    try {
+      font.encodeText(replacement);
+      return replacement;
+    } catch {
+      return "?";
+    }
+  }).join("");
+}
+
 type PageContext = {
   doc: PDFDocument;
   page: ReturnType<PDFDocument["addPage"]>;
@@ -325,13 +343,14 @@ function drawText(
         cursorX += width;
       } else {
         const font = bold ? ctx.fonts.bold : ctx.fonts.regular;
-        ctx.page.drawText(run.text, { x: cursorX, y, size, font, color });
-        cursorX += font.widthOfTextAtSize(run.text, size);
+        const printable = printableLatinText(run.text, font);
+        ctx.page.drawText(printable, { x: cursorX, y, size, font, color });
+        cursorX += font.widthOfTextAtSize(printable, size);
       }
     }
     return;
   }
-  ctx.page.drawText(text, {
+  ctx.page.drawText(printableLatinText(text, bold ? ctx.fonts.bold : ctx.fonts.regular), {
     x,
     y,
     size,

@@ -18,6 +18,8 @@ android/
 ios/
 *.apk
 releases/*.apk
+mobile/.env.release.local
+mobile/credentials/
 
 # Databases / local runtime
 *.db

@@ -9,7 +9,7 @@ mkdir -p "${APP_DIR}" "${FIXTURE}/deploy/app" "${FIXTURE}/mobile/assets" "${FIXT
 mkdir -p "${TMP}/bin"
 cat > "${TMP}/bin/aapt" <<'EOF'
 #!/usr/bin/env bash
-if [[ "${AAPT_MODE:-valid}" == wrong ]]; then echo "package: name='com.attacker.app' versionCode='2' versionName='0.1.1'";else echo "package: name='com.lotaya.rider' versionCode='2' versionName='0.1.1'";fi
+if [[ "${AAPT_MODE:-valid}" == wrong ]]; then echo "package: name='com.attacker.app' versionCode='${TEST_VERSION_CODE}' versionName='${TEST_VERSION}'";else echo "package: name='com.lotaya.rider' versionCode='${TEST_VERSION_CODE}' versionName='${TEST_VERSION}'";fi
 EOF
 cat > "${TMP}/bin/apksigner" <<'EOF'
 #!/usr/bin/env bash
@@ -21,6 +21,8 @@ export PATH="${TMP}/bin:${PATH}"
 cp "${REPO}/deploy/app/index.html" "${FIXTURE}/deploy/app/index.html"
 cp "${REPO}/mobile/assets/icon.png" "${FIXTURE}/mobile/assets/icon.png"
 cp "${REPO}/mobile/app.json" "${FIXTURE}/mobile/app.json"
+export TEST_VERSION="$(node -p "require('${FIXTURE}/mobile/app.json').expo.version")"
+export TEST_VERSION_CODE="$(node -p "require('${FIXTURE}/mobile/app.json').expo.android.versionCode")"
 printf '%s' old-apk > "${APP_DIR}/lotaya-rider.apk"
 printf '%s' '{"version":"0.1.0"}' > "${APP_DIR}/version.json"
 printf '%s' new-apk > "${FIXTURE}/releases/lotaya-rider.apk"
@@ -36,5 +38,5 @@ APKSIGNER_DEBUG=1 bash "${REPO}/deploy/publish-rider-app.sh" "${FIXTURE}" "${APP
 [[ "$(cat "${APP_DIR}/lotaya-rider.apk")" == old-apk ]]
 bash "${REPO}/deploy/publish-rider-app.sh" "${FIXTURE}" "${APP_DIR}"
 [[ "$(cat "${APP_DIR}/lotaya-rider.apk")" == new-apk ]]
-node -e "const fs=require('fs'),v=JSON.parse(fs.readFileSync(process.argv[1]));if(v.version!=='0.1.1'||v.sizeBytes!==7||!/^[a-f0-9]{64}$/.test(v.sha256))process.exit(1)" "${APP_DIR}/version.json"
+node -e "const fs=require('fs'),v=JSON.parse(fs.readFileSync(process.argv[1]));if(v.version!==process.argv[2]||v.sizeBytes!==7||!/^[a-f0-9]{64}$/.test(v.sha256))process.exit(1)" "${APP_DIR}/version.json" "${TEST_VERSION}"
 echo "Rider publication contract passed."

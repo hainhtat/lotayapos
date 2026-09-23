@@ -2,12 +2,14 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)";trap 'rm -rf "${TMP}"' EXIT
-if LOTAYA_CERT_DIR="${TMP}/missing" bash "${REPO}/deploy/check-deploy-prerequisites.sh" >/dev/null 2>&1; then echo "missing TLS certificate was accepted" >&2;exit 1;fi
+if LOTAYA_NODE_VERSION=21.0.0 LOTAYA_CERT_DIR="${TMP}/missing" bash "${REPO}/deploy/check-deploy-prerequisites.sh" >/dev/null 2>&1; then echo "unsupported Node.js was accepted" >&2;exit 1;fi
+if LOTAYA_NODE_VERSION=22.12.0 LOTAYA_CERT_DIR="${TMP}/missing" bash "${REPO}/deploy/check-deploy-prerequisites.sh" >/dev/null 2>&1; then echo "outdated Node.js was accepted" >&2;exit 1;fi
+if LOTAYA_NODE_VERSION=22.22.1 LOTAYA_CERT_DIR="${TMP}/missing" bash "${REPO}/deploy/check-deploy-prerequisites.sh" >/dev/null 2>&1; then echo "missing TLS certificate was accepted" >&2;exit 1;fi
 mkdir -p "${TMP}/cert"
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj '/CN=lotaya.mmds.site' -addext 'subjectAltName=DNS:lotaya.mmds.site' -keyout "${TMP}/cert/privkey.pem" -out "${TMP}/cert/fullchain.pem" >/dev/null 2>&1
-if LOTAYA_CERT_DIR="${TMP}/cert" bash "${REPO}/deploy/check-deploy-prerequisites.sh" >/dev/null 2>&1; then echo "certificate missing alternate domain was accepted" >&2;exit 1;fi
+if LOTAYA_NODE_VERSION=22.22.1 LOTAYA_CERT_DIR="${TMP}/cert" bash "${REPO}/deploy/check-deploy-prerequisites.sh" >/dev/null 2>&1; then echo "certificate missing alternate domain was accepted" >&2;exit 1;fi
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj '/CN=lotaya.mmds.site' -addext 'subjectAltName=DNS:lotaya.mmds.site,DNS:lt.mmds.site' -keyout "${TMP}/cert/privkey.pem" -out "${TMP}/cert/fullchain.pem" >/dev/null 2>&1
-LOTAYA_CERT_DIR="${TMP}/cert" bash "${REPO}/deploy/check-deploy-prerequisites.sh" >/dev/null
+LOTAYA_NODE_VERSION=22.22.1 LOTAYA_CERT_DIR="${TMP}/cert" bash "${REPO}/deploy/check-deploy-prerequisites.sh" >/dev/null
 grep -q 'listen 443 ssl;' "${REPO}/deploy/nginx/lotaya.mmds.site.conf"
 grep -q 'http2 on;' "${REPO}/deploy/nginx/lotaya.mmds.site.conf"
 if grep -q 'listen .*http2' "${REPO}/deploy/nginx/lotaya.mmds.site.conf"; then echo "deprecated listen http2 syntax remains" >&2;exit 1;fi

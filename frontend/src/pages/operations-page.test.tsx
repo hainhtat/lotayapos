@@ -65,6 +65,22 @@ describe("OperationsPage", () => {
     await waitFor(() => expect(apiRawMock).toHaveBeenCalledWith(expect.stringMatching(/^\/parcels\?queue=return-to-os/)));
   });
 
+  it("does not crash when the return queue has an unexpected response shape", async () => {
+    apiRawMock.mockResolvedValue({ json: async () => ({ data: { unexpected: true } }) });
+    apiMock.mockResolvedValue({ data: { riders: [], shops: [] } });
+    renderReturnsPage();
+    expect(await screen.findByRole("alert")).toHaveTextContent("We couldn’t load this data.");
+    expect(screen.getByRole("heading", { name: "Return to OS" })).toBeInTheDocument();
+  });
+
+  it("accepts a nested return queue item list during an API rollout", async () => {
+    apiRawMock.mockResolvedValue({ json: async () => ({ data: { items: [] } }) });
+    apiMock.mockResolvedValue({ data: { riders: [], shops: [] } });
+    renderReturnsPage();
+    expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Return to OS" })).toBeInTheDocument();
+  });
+
   it("uses server queues for rescheduled and overdue parcels without hiding assigned overdue work", async () => {
     mockParcelList([]); apiMock.mockResolvedValue({data:[]}); renderPage();
     fireEvent.click(screen.getByRole("button", {name:"Rescheduled"}));

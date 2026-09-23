@@ -784,6 +784,30 @@ describe("bulk dispatch and manifest rules", () => {
     expect(doc.getPageCount()).toBe(2);
   });
 
+  test("generates an out-for-delivery rider PDF when parcel text contains unsupported Unicode", async () => {
+    const pdf = await generateDispatchManifestPdf({
+      statusesLabel: "Out for delivery",
+      sections: [{
+        riderName: "Thaw Zin Tun",
+        parcels: [{
+          trackingNumber: "LTY-UNICODE",
+          customerName: "Customer 😊",
+          customerPhone: "09-1234-5678",
+          address: "No. 12, Flower Street — near market",
+          codAmount: 20000,
+          deliveryFee: 4000,
+          zone: null,
+          township: "Sanchaung",
+          shopName: "Shop ‘One’",
+          status: "OUT_FOR_DELIVERY",
+        }],
+      }],
+    });
+    expect(pdf.subarray(0, 5).toString("ascii")).toBe("%PDF-");
+    expect((await PDFDocument.load(pdf)).getPageCount()).toBe(1);
+    expect(extractPdfStrings(pdf).join(" ")).toContain("Flower Street - near market");
+  });
+
   test("renders shaped Myanmar script in PDF without throwing", async () => {
     const latinOnly = await generateDispatchManifestPdf({
       generatedAt: new Date("2026-08-10T00:00:00.000Z"),

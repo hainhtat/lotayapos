@@ -13,6 +13,7 @@ describe("manifest status vs exception note mapping", () => {
   const riderId = `msn-rider-${suffix}`;
   const batchId = `msn-batch-${suffix}`;
   const assignedId = `msn-assigned-${suffix}`;
+  const outForDeliveryId = `msn-ofd-${suffix}`;
   const failedWithNoteId = `msn-failed-note-${suffix}`;
   const failedReasonOnlyId = `msn-failed-reason-${suffix}`;
 
@@ -87,6 +88,20 @@ describe("manifest status vs exception note mapping", () => {
     });
     await prisma.parcel.create({
       data: {
+        id: outForDeliveryId,
+        batchId,
+        riderId,
+        trackingNumber: `MSN-OFD-${suffix}`,
+        customerName: "Customer 😊",
+        address: "No. 12, Flower Street — near market",
+        codAmount: 20000,
+        deliveryFee: 4000,
+        advanceAmount: 0,
+        status: "OUT_FOR_DELIVERY",
+      },
+    });
+    await prisma.parcel.create({
+      data: {
         id: failedWithNoteId,
         batchId,
         riderId,
@@ -146,7 +161,7 @@ describe("manifest status vs exception note mapping", () => {
   });
 
   afterAll(async () => {
-    const parcelIds = [assignedId, failedWithNoteId, failedReasonOnlyId];
+    const parcelIds = [assignedId, outForDeliveryId, failedWithNoteId, failedReasonOnlyId];
     await prisma.statusHistory.deleteMany({ where: { parcelId: { in: parcelIds } } });
     await prisma.parcel.deleteMany({ where: { id: { in: parcelIds } } });
     await prisma.batch.deleteMany({ where: { id: batchId } });
@@ -204,6 +219,17 @@ describe("manifest status vs exception note mapping", () => {
     expect(disposition).toContain(`filename="${expected}"`);
     expect(disposition).toContain(`filename*=UTF-8''${encodeURIComponent(expected)}`);
     expect(disposition).not.toContain("dispatch-manifest-");
+    expect(Buffer.from(response.body).subarray(0, 5).toString("ascii")).toBe("%PDF-");
+  });
+
+  test("downloads an out-for-delivery manifest containing unsupported Unicode parcel text", async () => {
+    const response = await request(app)
+      .post("/api/v1/operations/parcels/manifest")
+      .set("Authorization", `Bearer ${dispatcherToken()}`)
+      .send({ riderIds: [riderId], statuses: ["OUT_FOR_DELIVERY"] });
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toMatch(/application\/pdf/);
     expect(Buffer.from(response.body).subarray(0, 5).toString("ascii")).toBe("%PDF-");
   });
 });
