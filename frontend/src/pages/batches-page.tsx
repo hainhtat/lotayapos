@@ -29,10 +29,10 @@ const control =
   "rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none transition focus:border-[#1598ef] focus:ring-2 focus:ring-[#1598ef]/20 dark:border-white/10 dark:bg-[#121416] dark:text-slate-100";
 
 function batchStats(parcels: Array<{ status: string }>) {
-  const total = parcels.length;
+  const total = parcels.filter((parcel) => parcel.status !== "VOIDED").length;
   const delivered = parcels.filter((parcel) => parcel.status === "DELIVERED").length;
   const pendingReturn = parcels.filter((parcel) => parcel.status === "PENDING_RETURN").length;
-  const remaining = parcels.filter((parcel) => !["DELIVERED", "RETURNED"].includes(parcel.status)).length;
+  const remaining = parcels.filter((parcel) => !["DELIVERED", "RETURNED", "VOIDED"].includes(parcel.status)).length;
   return { total, delivered, pendingReturn, remaining };
 }
 

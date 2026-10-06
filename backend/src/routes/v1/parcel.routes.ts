@@ -2,8 +2,8 @@ import { Router } from "express";
 import { requireAuth, requireRoles } from "../../middleware/auth.js";
 import { validation } from "../../middleware/error.js";
 import { asyncHandler } from "../../utils/async-handler.js";
-import { bulkUpdateStatus, detail, fieldHistory, history, list, reschedule, updateParcel, updateStatus } from "../../controllers/parcel.controller.js";
-import { parcelBulkStatusValidation, parcelListValidation, parcelRescheduleValidation, parcelStatusValidation, parcelUpdateValidation } from "../../validators/parcels.js";
+import { bulkUpdateStatus, detail, fieldHistory, history, list, previewParcelVoid, reschedule, updateParcel, updateStatus, voidParcel } from "../../controllers/parcel.controller.js";
+import { parcelBulkStatusValidation, parcelListValidation, parcelRescheduleValidation, parcelStatusValidation, parcelUpdateValidation, parcelVoidValidation } from "../../validators/parcels.js";
 
 export const parcelRouter = Router();
 parcelRouter.get("/", requireAuth, parcelListValidation, validation, asyncHandler(list));
@@ -18,6 +18,7 @@ parcelRouter.post(
 );
 parcelRouter.get("/:id/history", requireAuth, asyncHandler(history));
 parcelRouter.get("/:id/field-history", requireAuth, asyncHandler(fieldHistory));
+parcelRouter.get("/:id/void-preview", requireAuth, requireRoles("SUPERADMIN", "OPERATIONS_MANAGER"), asyncHandler(previewParcelVoid));
 parcelRouter.get("/:id", requireAuth, asyncHandler(detail));
 parcelRouter.patch(
   "/:id",
@@ -27,6 +28,7 @@ parcelRouter.patch(
   validation,
   asyncHandler(updateParcel),
 );
+parcelRouter.post("/:id/void", requireAuth, requireRoles("SUPERADMIN", "OPERATIONS_MANAGER"), parcelVoidValidation, validation, asyncHandler(voidParcel));
 parcelRouter.post(
   "/:id/status",
   requireAuth,

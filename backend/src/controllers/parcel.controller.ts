@@ -48,3 +48,5 @@ export const updateParcel: RequestHandler = async (req, res) => res.json({ succe
 export const history: RequestHandler = async (req, res) => res.json({ success: true, data: await service.getParcelHistory(String(req.params.id), { id: req.auth!.sub, role: req.auth!.role }) });
 export const fieldHistory: RequestHandler = async (req, res) => res.json({ success: true, data: await service.getParcelFieldHistory(String(req.params.id), { id: req.auth!.sub, role: req.auth!.role }) });
 export const detail: RequestHandler = async (req, res) => res.json({ success: true, data: await service.getParcelDetail(String(req.params.id), { id: req.auth!.sub, role: req.auth!.role }) });
+export const voidParcel: RequestHandler = async (req, res) => res.json({ success: true, data: await service.voidParcel(String(req.params.id), req.body, { id: req.auth!.sub, role: req.auth!.role }) });
+export const previewParcelVoid: RequestHandler = async (req, res) => res.json({ success: true, data: await service.previewParcelVoid(String(req.params.id), { id: req.auth!.sub, role: req.auth!.role }) });

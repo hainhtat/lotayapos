@@ -17,7 +17,7 @@ export const parcelListValidation = [
   query("orderId").optional().isString().trim().isLength({ min: 1, max: 255 }),
   query("customerName").optional().isString().trim().isLength({ min: 1, max: 150 }),
   query("shopId").optional().isString().trim().notEmpty(),
-  query("status").optional().isIn(["CREATED", "PICKED_UP", "ASSIGNED", "OUT_FOR_DELIVERY", "DELIVERED", "PARTIAL", "FAILED", "REJECTED", "PENDING_RETURN", "RETURNED"]),
+  query("status").optional().isIn(["CREATED", "PICKED_UP", "ASSIGNED", "OUT_FOR_DELIVERY", "DELIVERED", "PARTIAL", "FAILED", "REJECTED", "PENDING_RETURN", "RETURNED", "VOIDED"]),
   query("reasonCode").optional().isString().trim().isLength({ min: 1, max: 50 }),
   query("page").optional().isInt({ min: 1, max: 100000 }).toInt(),
   query("pageSize").optional().isInt({ min: 1, max: 100 }).toInt(),
@@ -66,4 +66,10 @@ export const parcelUpdateValidation = [
   body("townshipId").optional().isString().trim().notEmpty(),
   body("zoneId").optional({ nullable: true }).isString().trim().notEmpty(),
   body().custom((value) => ["orderId", "customerName", "customerPhone", "address", "codAmount", "deliveryFee", "townshipId", "zoneId"].some((key) => key in value)).withMessage("At least one editable field is required"),
+];
+
+export const parcelVoidValidation = [
+  param("id").isString().trim().notEmpty(),
+  body("reason").isString().trim().isLength({ min: 3, max: 500 }),
+  body("idempotencyKey").isUUID(),
 ];

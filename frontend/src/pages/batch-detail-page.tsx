@@ -8,6 +8,7 @@ import { ParcelFieldHistory } from "@/components/parcel-field-history";
 import { BatchWorkspaceSummary } from "@/components/batch-workspace-summary";
 import { useAuth } from "@/app/auth";
 import { ModalPortal } from "@/components/modal-portal";
+import { VoidParcelDialog } from "@/components/void-parcel-dialog";
 
 type Location = { id: string; code?: string; nameEn: string; nameMy?: string };
 type Township = Location & {
@@ -484,6 +485,7 @@ function BatchDetailContent() {
   const [storageFailed, setStorageFailed] = useState(false);
   const [preview, setPreview] = useState<ManifestPreview | null>(null);
   const [editing, setEditing] = useState<SavedParcel | null>(null);
+  const [voiding, setVoiding] = useState<SavedParcel | null>(null);
   const [historyParcel,setHistoryParcel]=useState<{id:string;trackingNumber:string}|null>(null);
   const [savedPage, setSavedPage] = useState(1);
   const [confirmFinalize,setConfirmFinalize]=useState(false);
@@ -524,6 +526,7 @@ function BatchDetailContent() {
     });
   }, [editing]);
   const savedParcels = batch.data?.parcels ?? [];
+  const activeParcelCount = savedParcels.filter((parcel) => parcel.status !== "VOIDED").length;
   const savedPageCount = Math.max(1, Math.ceil(savedParcels.length / SAVED_PARCELS_PAGE_SIZE));
   const pagedSavedParcels = savedParcels.slice(
     (savedPage - 1) * SAVED_PARCELS_PAGE_SIZE,
@@ -539,6 +542,7 @@ function BatchDetailContent() {
   const returnedCod = batch.data?.returnedCod ?? 0;
   const finalized = Boolean(batch.data?.finalizedAt);
   const canFinalize=["SUPERADMIN","OPERATIONS_MANAGER","DISPATCHER"].includes(user?.role??"");
+  const canVoidParcel=["SUPERADMIN","OPERATIONS_MANAGER"].includes(user?.role??"");
   const finalize=useMutation({mutationFn:()=>api(`/operations/batches/${id}/finalize`,{method:"POST"}),onSuccess:async()=>{setConfirmFinalize(false);setMessage(t("batchFinalized"));await queryClient.invalidateQueries({queryKey:["batch",id]})},onError:error=>setMessage(error instanceof Error?error.message:t("loadError"))});
   const updateParcel = useMutation({
     mutationFn: () => {
@@ -697,7 +701,7 @@ function BatchDetailContent() {
 
   return (
     <div className="mx-auto max-w-[1600px]">
-      <BatchWorkspaceSummary shopName={batch.data?.shop.name} label={batch.data?.label} finalized={finalized} canFinalize={!finalized&&canFinalize} parcelCount={savedParcels.length} totalCod={batch.data?.totalCod??0} advancePaid={batch.data?.advancePaid??0} remainingToOs={finalized ? remainingToOs : (batch.data?.expectedOutstanding ?? remainingToOs)} balanceError={batch.data?.balanceError} accountBreakdown={t("batchAccountBreakdown",{cod:(batch.data?.totalCod??0).toLocaleString(),advance:(batch.data?.advancePostedAmount??batch.data?.advancePaid??0).toLocaleString(),paid:(batch.data?.paymentPaid??0).toLocaleString(),returns:returnedCod.toLocaleString(),historical:(batch.data?.historicalSettledAmount??0).toLocaleString(),adjustment:(batch.data?.openingAdjustment??0).toLocaleString()})} onFinalize={()=>setConfirmFinalize(true)} />
+      <BatchWorkspaceSummary shopName={batch.data?.shop.name} label={batch.data?.label} finalized={finalized} canFinalize={!finalized&&canFinalize} parcelCount={activeParcelCount} totalCod={batch.data?.totalCod??0} advancePaid={batch.data?.advancePaid??0} remainingToOs={finalized ? remainingToOs : (batch.data?.expectedOutstanding ?? remainingToOs)} balanceError={batch.data?.balanceError} accountBreakdown={t("batchAccountBreakdown",{cod:(batch.data?.totalCod??0).toLocaleString(),advance:(batch.data?.advancePostedAmount??batch.data?.advancePaid??0).toLocaleString(),paid:(batch.data?.paymentPaid??0).toLocaleString(),returns:returnedCod.toLocaleString(),historical:(batch.data?.historicalSettledAmount??0).toLocaleString(),adjustment:(batch.data?.openingAdjustment??0).toLocaleString()})} onFinalize={()=>setConfirmFinalize(true)} />
       {finalized && <p role="status" className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200">{t("finalizedBatchLocked")}</p>}
       {!finalized && <>
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
@@ -947,7 +951,7 @@ function BatchDetailContent() {
                     <td className="py-3">{parcel.townshipRelation?.nameEn || "—"}</td>
                     <td className="py-3 text-right font-bold">{parcel.codAmount.toLocaleString()} MMK</td>
                     <td className="py-3 text-right">{(parcel.deliveryFee ?? 0).toLocaleString()} MMK</td>
-                    <td className="py-3">{parcel.status}</td>
+                    <td className="py-3">{parcel.status === "VOIDED" ? t("parcelVoidedStatus") : parcel.status}</td>
                     <td className="py-3 text-right">
                       <button aria-label={`${t("viewFieldHistory")} ${parcel.trackingNumber}`} onClick={()=>setHistoryParcel({id:parcel.id,trackingNumber:parcel.trackingNumber})} className="mr-1 rounded-lg border px-2 py-1 text-xs font-bold text-slate-600 dark:text-slate-300">{t("history")}</button>
                       {!finalized && ["CREATED", "PICKED_UP", "ASSIGNED"].includes(parcel.status) && (
@@ -956,6 +960,7 @@ function BatchDetailContent() {
                           {t("editParcel")}
                         </button>
                       )}
+                      {canVoidParcel && parcel.status === "CREATED" && !parcel.linkGroupId && !parcel.linkGroup && <button type="button" aria-label={t("parcelVoidActionName", { tracking: parcel.trackingNumber })} onClick={() => setVoiding(parcel)} className="ml-1 rounded-lg border border-rose-300 px-2 py-1 text-xs font-bold text-rose-700 hover:bg-rose-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600 dark:border-rose-800 dark:text-rose-300 dark:hover:bg-rose-950/30">{t("parcelVoidAction")}</button>}
                     </td>
                   </tr>
                 ))}
@@ -964,6 +969,7 @@ function BatchDetailContent() {
           </div>
         </section>
       )}
+      {voiding && <VoidParcelDialog parcel={voiding} batchId={id} finalized={finalized} onClose={() => setVoiding(null)} onSuccess={(success) => { setVoiding(null); setMessage(success); }} />}
       {formOpen && (
         <ModalPortal><div className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-black/45 p-4">
           <form

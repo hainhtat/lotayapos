@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { acquireBatchMutationLock } from "./operations.service.js";
 import { assertCashbookOpen } from "./finance/cashbook-policy.js";
 import { assertBalancedLines, buildPartialReturnAdjustmentLines, buildPartialReturnCollectionLines, calculateLinkedDeliveryAmounts, calculatePartialReturnAmounts, reverseJournalEntryInTx } from "./ledger.service.js";
+import { accountRows, buildCutoverAdjustmentLines } from "./os-account.service.js";
 
 export { resolveCommissionRateBps };
 
@@ -287,9 +288,9 @@ export function buildParcelListWhere(scope: ActorScope, assignedToMe = false, fi
     const notRescheduled = { OR: [{ reasonCode: null }, { reasonCode: { notIn: rescheduleCodes } }] };
     if (filters.queue === "to-assign") conditions.push({ status: { in: ["CREATED", "PICKED_UP", "FAILED", "PARTIAL"] }, ...notRescheduled });
     if (filters.queue === "with-riders") conditions.push({ status: "OUT_FOR_DELIVERY" });
-    if (filters.queue === "rescheduled") conditions.push({ status: { notIn: ["DELIVERED", "RETURNED", "PENDING_RETURN"] }, reasonCode: { in: rescheduleCodes } });
+    if (filters.queue === "rescheduled") conditions.push({ status: { notIn: ["DELIVERED", "RETURNED", "PENDING_RETURN", "VOIDED"] }, reasonCode: { in: rescheduleCodes } });
     if (filters.queue === "return-to-os") conditions.push({ status: { in: ["PENDING_RETURN", "REJECTED"] } });
-    if (filters.queue === "overdue") conditions.push({ status: { notIn: ["DELIVERED", "RETURNED"] }, createdAt: { lte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) } });
+    if (filters.queue === "overdue") conditions.push({ status: { notIn: ["DELIVERED", "RETURNED", "VOIDED"] }, createdAt: { lte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) } });
   }
   if (filters.batchId) conditions.push({ batchId: filters.batchId });
   if (filters.riderId) conditions.push({ riderId: filters.riderId });
@@ -343,7 +344,7 @@ export async function rescheduleParcels(input: { parcelIds: string[]; plannedDel
     const parcels = await tx.parcel.findMany({ where: { id: { in: ids }, ...(buildParcelScope(scope) ?? {}) } });
     if (parcels.length !== ids.length) throw new ApiError(404, "PARCEL_NOT_FOUND", "Some parcels are unavailable in your hub");
     for (const parcel of parcels) {
-      if (["DELIVERED", "RETURNED", "PENDING_RETURN", "PARTIAL"].includes(parcel.status) || parcel.linkGroupId) throw new ApiError(409, "PARCEL_NOT_RESCHEDULABLE", "Resolve financial outcomes, OS returns, or unlink the group before rescheduling");
+      if (["DELIVERED", "RETURNED", "PENDING_RETURN", "PARTIAL", "VOIDED"].includes(parcel.status) || parcel.linkGroupId) throw new ApiError(409, "PARCEL_NOT_RESCHEDULABLE", "Resolve financial outcomes, OS returns, or unlink the group before rescheduling");
       if (parcel.status === "PICKED_UP" && parcel.reasonCode === "RESCHEDULE" && parcel.plannedDeliveryDate?.getTime() === date.getTime()) continue;
       const updated = await tx.parcel.updateMany({ where: { id: parcel.id, updatedAt: parcel.updatedAt, status: parcel.status }, data: { status: "PICKED_UP", riderId: null, reasonCode: "RESCHEDULE", plannedDeliveryDate: date } });
       if (updated.count !== 1) throw new ApiError(409, "STATUS_CONFLICT", "Parcel changed; refresh and retry");
@@ -544,6 +545,76 @@ export async function getParcelDetail(id: string, actor: Actor) {
   return parcel;
 }
 
+/** Retire a parcel that the OS never handed over, preserving its record and batch ledger. */
+export async function voidParcel(id: string, input: { reason: string; idempotencyKey: string }, actor: Actor) {
+  const scope = await actorScope(actor);
+  if (!["SUPERADMIN", "OPERATIONS_MANAGER"].includes(scope.role)) throw new ApiError(403, "FORBIDDEN", "You may not void parcels");
+  const reason = input.reason.trim();
+  if (reason.length < 3 || reason.length > 500) throw new ApiError(400, "VOID_REASON_REQUIRED", "A reason of 3 to 500 characters is required");
+  return serializableTransaction(async (tx) => {
+    const parcel = await tx.parcel.findFirst({
+      where: { id, ...(buildParcelScope(scope) ?? {}) },
+      include: { batch: { select: { id: true, hubId: true, shopId: true, automaticAccounting: true, finalizedAt: true, historicalOsSettlement: { select: { id: true } }, osObligation: true } } },
+    });
+    if (!parcel) throw new ApiError(404, "PARCEL_NOT_FOUND", "Parcel not found");
+    if (!parcel.batch.hubId) throw new ApiError(409, "PARCEL_HUB_REQUIRED", "Parcel batch must belong to a hub");
+    await acquireBatchMutationLock(tx, parcel.batchId);
+    const previous = await tx.statusHistory.findFirst({ where: { parcelId: id, toStatus: "VOIDED" }, orderBy: { createdAt: "desc" } });
+    if (parcel.status === "VOIDED") {
+      if (previous?.reasonCode !== "ENTERED_IN_ERROR" || previous.note !== `${reason} [request ${input.idempotencyKey}]`) throw new ApiError(409, "PARCEL_ALREADY_VOIDED", "Parcel was already voided with a different request");
+      const row = parcel.batch.osObligation ? (await accountRows(tx, { shopId: parcel.batch.shopId, hubId: parcel.batch.hubId })).find((item) => item.batchId === parcel.batchId) : null;
+      return { parcelId: id, status: "VOIDED", reversedCod: parcel.batch.finalizedAt ? parcel.codAmount : 0, remainingOsBalance: row?.outstanding ?? null, replay: true };
+    }
+    if (!["CREATED", "PICKED_UP", "ASSIGNED"].includes(parcel.status) || parcel.linkGroupId || parcel.riderId) throw new ApiError(409, "PARCEL_VOID_REQUIRES_RECONCILIATION", "Resolve delivery, rider assignment, or linked parcel activity before voiding");
+    const [assignmentCount, wayCount, creditCount, postedMoney, legacyAdvance] = await Promise.all([
+      tx.packageAssignment.count({ where: { parcelId: id } }),
+      tx.deliveryWay.count({ where: { parcelId: id } }),
+      tx.osReturnCredit.count({ where: { parcelId: id } }),
+      findUnreversedMoneyPostedEntry(tx, { parcelId: id }),
+      tx.journalEntry.findMany({ where: { sourceType: "BATCH_PICKUP_ADVANCE", OR: [{ sourceId: parcel.batchId }, { sourceId: { startsWith: `${parcel.batchId}:` } }] }, select: { id: true } }),
+    ]);
+    if (assignmentCount || wayCount || creditCount || postedMoney || parcel.batch.historicalOsSettlement) throw new ApiError(409, "PARCEL_VOID_REQUIRES_RECONCILIATION", "Parcel has operational or financial activity requiring reconciliation");
+    if (!parcel.batch.finalizedAt && !parcel.batch.automaticAccounting && legacyAdvance.length) {
+      for (const entry of legacyAdvance) if (await journalEntryIsUnreversed(tx, entry.id)) throw new ApiError(409, "ADVANCE_POSTED", "Reverse the legacy batch advance before voiding this parcel");
+    }
+    let remainingOsBalance: number | null = null;
+    if (parcel.batch.finalizedAt) {
+      const obligation = parcel.batch.osObligation;
+      if (!obligation) throw new ApiError(409, "OS_OBLIGATION_REQUIRED", "Reconcile the finalized batch obligation before voiding");
+      const row = (await accountRows(tx, { shopId: parcel.batch.shopId, hubId: parcel.batch.hubId })).find((item) => item.batchId === parcel.batchId);
+      if (!row || row.outstanding < parcel.codAmount || obligation.originalCod < parcel.codAmount) throw new ApiError(409, "OS_BALANCE_RECONCILIATION_REQUIRED", "Existing advance, credit, or payment allocations must be reconciled before reducing this batch obligation");
+      if (parcel.codAmount > 0) {
+        const businessDate = businessDateUtcBoundary(hubToday(), env.hubTimezone);
+        await assertCashbookOpen(tx, businessDate, parcel.batch.hubId);
+        await tx.journalEntry.create({ data: { sourceType: "PARCEL_ENTERED_IN_ERROR", sourceId: id, hubId: parcel.batch.hubId, businessDate, description: `Entered-in-error parcel ${parcel.trackingNumber}; actor ${actor.id}; ${reason}`, lines: { create: buildCutoverAdjustmentLines(-parcel.codAmount) } } });
+        await tx.osBatchObligation.update({ where: { id: obligation.id }, data: { originalCod: { decrement: parcel.codAmount } } });
+      }
+      remainingOsBalance = row.outstanding - parcel.codAmount;
+    }
+    const updated = await tx.parcel.updateMany({ where: { id, updatedAt: parcel.updatedAt, status: parcel.status }, data: { status: "VOIDED", reasonCode: "ENTERED_IN_ERROR", returnDueAt: null, plannedDeliveryDate: null } });
+    if (updated.count !== 1) throw new ApiError(409, "PARCEL_EDIT_CONFLICT", "Parcel changed; refresh and retry");
+    await tx.statusHistory.create({ data: { parcelId: id, fromStatus: parcel.status, toStatus: "VOIDED", actorId: actor.id, reasonCode: "ENTERED_IN_ERROR", note: `${reason} [request ${input.idempotencyKey}]` } });
+    return { parcelId: id, status: "VOIDED", reversedCod: parcel.batch.finalizedAt ? parcel.codAmount : 0, remainingOsBalance, replay: false };
+  });
+}
+
+export async function previewParcelVoid(id: string, actor: Actor) {
+  const scope = await actorScope(actor);
+  if (!["SUPERADMIN", "OPERATIONS_MANAGER"].includes(scope.role)) throw new ApiError(403, "FORBIDDEN", "You may not void parcels");
+  const parcel = await prisma.parcel.findFirst({ where: { id, ...(buildParcelScope(scope) ?? {}) }, include: { batch: { select: { hubId: true, shopId: true, finalizedAt: true, osObligation: true } } } });
+  if (!parcel) throw new ApiError(404, "PARCEL_NOT_FOUND", "Parcel not found");
+  if (!parcel.batch.hubId) throw new ApiError(409, "PARCEL_HUB_REQUIRED", "Parcel batch must belong to a hub");
+  const row = parcel.batch.osObligation ? (await accountRows(prisma, { shopId: parcel.batch.shopId, hubId: parcel.batch.hubId })).find((item) => item.batchId === parcel.batchId) : null;
+  const fieldAudits = await prisma.parcelFieldAudit.findMany({ where: { parcelId: id }, orderBy: { createdAt: "desc" }, select: { beforeJson: true, afterJson: true, createdAt: true } });
+  const lastZeroing = fieldAudits.flatMap((audit) => {
+    const before = JSON.parse(audit.beforeJson) as Record<string, unknown>;
+    const after = JSON.parse(audit.afterJson) as Record<string, unknown>;
+    if (after.codAmount !== 0 && after.deliveryFee !== 0) return [];
+    return [{ changedAt: audit.createdAt, codBefore: typeof before.codAmount === "number" && after.codAmount === 0 ? before.codAmount : null, feeBefore: typeof before.deliveryFee === "number" && after.deliveryFee === 0 ? before.deliveryFee : null }];
+  }).find((audit) => audit.codBefore !== null || audit.feeBefore !== null) ?? null;
+  return { parcelId: id, trackingNumber: parcel.trackingNumber, status: parcel.status, currentCod: parcel.codAmount, currentDeliveryFee: parcel.deliveryFee ?? 0, finalized: Boolean(parcel.batch.finalizedAt), proposedObligationReduction: parcel.batch.finalizedAt ? parcel.codAmount : 0, currentOsBalance: row?.outstanding ?? null, projectedOsBalance: row && row.outstanding >= parcel.codAmount ? row.outstanding - parcel.codAmount : null, advancePaid: row?.advancePaid ?? null, availableOsCredit: row?.creditAvailable ?? null, lastZeroing };
+}
+
 const editableStatuses = new Set(["CREATED", "PICKED_UP", "ASSIGNED"]);
 
 export async function updateParcel(
@@ -568,6 +639,7 @@ export async function updateParcel(
     include: { batch: { select: { id: true, hubId: true, automaticAccounting: true, finalizedAt: true } } },
   });
   if (!parcel) throw new ApiError(404, "PARCEL_NOT_FOUND", "Parcel not found");
+  if (parcel.status === "VOIDED") throw new ApiError(409, "PARCEL_VOIDED", "Voided parcels cannot change status");
   const changesDeliveryAttributes = input.codAmount !== undefined || input.deliveryFee !== undefined || input.townshipId !== undefined || input.zoneId !== undefined;
   const changesLockedFinancialAttributes = input.codAmount !== undefined || input.deliveryFee !== undefined || input.townshipId !== undefined;
   if (changesLockedFinancialAttributes && parcel.batch.finalizedAt) throw new ApiError(409, "BATCH_FINALIZED", "COD, delivery fee, and township cannot be changed after batch finalization");
@@ -695,6 +767,7 @@ async function updateStatusInTransaction(
   });
   if (!parcel) throw new ApiError(404, "PARCEL_NOT_FOUND", "Parcel not found");
   if (!parcel.batch.hubId) throw new ApiError(409, "PARCEL_HUB_REQUIRED", "Parcel batch must belong to a hub");
+  if (parcel.status === "VOIDED") throw new ApiError(409, "PARCEL_VOIDED", "Voided parcels cannot change status");
   const parcelHubId = parcel.batch.hubId;
   assertParcelAccess(scope, { batchHubId: parcel.batch.hubId, riderUserId: parcel.rider?.userId ?? null });
   if (!(ALL_STATUSES as readonly string[]).includes(toStatus)) {

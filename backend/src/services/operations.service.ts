@@ -173,7 +173,7 @@ export async function listOverdueUnsentParcels(
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
   const cutoffDate = cutoff.toISOString();
   const where: Prisma.ParcelWhereInput = {
-    status: { notIn: ["DELIVERED", "RETURNED"] },
+    status: { notIn: ["DELIVERED", "RETURNED", "VOIDED"] },
     createdAt: { lte: cutoff },
     ...(hubId ? { batch: { hubId } } : {}),
   };
@@ -248,7 +248,7 @@ export async function listBatches(actor: BatchActor, filters: BatchListFilters =
     ? (await Promise.all([...new Set(batches.flatMap(batch => batch.hubId ? [batch.hubId] : []))].map(async hubId => { try { return await accountRows(prisma, { hubId }); } catch (error) { if (!(error instanceof ApiError) || error.code !== "OS_CUTOVER_RECONCILIATION_REQUIRED") throw error; balanceErrors.set(hubId, error.message); return []; } }))).flat()
     : [];
   const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000;
-  return { items: batches.map((batch) => ({ ...batch, balanceError: balanceErrors.get(batch.hubId ?? "") ?? null, advancePosted: postedBatchIds.has(batch.id), historicallySettled: Boolean(batch.historicalOsSettlement), outstanding: accountBalances.find(row => row.batchId === batch.id)?.outstanding ?? null, overdueCount: batch.parcels.filter(parcel => !["DELIVERED", "RETURNED"].includes(parcel.status) && parcel.createdAt.getTime() <= cutoff).length })), total, page, pageSize };
+  return { items: batches.map((batch) => ({ ...batch, balanceError: balanceErrors.get(batch.hubId ?? "") ?? null, advancePosted: postedBatchIds.has(batch.id), historicallySettled: Boolean(batch.historicalOsSettlement), outstanding: accountBalances.find(row => row.batchId === batch.id)?.outstanding ?? null, overdueCount: batch.parcels.filter(parcel => !["DELIVERED", "RETURNED", "VOIDED"].includes(parcel.status) && parcel.createdAt.getTime() <= cutoff).length })), total, page, pageSize };
 }
 export function formatTrackingNumber(sequence: number) {
   return `LTY-${String(sequence).padStart(3, "0")}`;
@@ -294,7 +294,7 @@ export async function getBatchDetail(id:string,actor:BatchActor){
     include:{shop:true,hub:true,parcels:{include:{townshipRelation:{include:{district:{include:{regionState:true}}}},zoneRelation:true},orderBy:{trackingNumber:"asc"}}},
   });
   if(!batch)throw new ApiError(404,"BATCH_NOT_FOUND","Batch not found");
-  const totalCod=batch.parcels.reduce((sum,parcel)=>sum+parcel.codAmount,0);
+  const totalCod=batch.parcels.reduce((sum,parcel)=>sum+(parcel.status === "VOIDED" ? 0 : parcel.codAmount),0);
   const advancePostedAmount=(await postedAdvanceByBatch(prisma,[batch.id])).get(batch.id) ?? 0;
   let balanceError: string | null = null;
   const accountRowsForShop = batch.hubId ? await accountRows(prisma,{hubId:batch.hubId,shopId:batch.shopId}).catch(error=>{ if (!(error instanceof ApiError) || error.code !== "OS_CUTOVER_RECONCILIATION_REQUIRED") throw error; balanceError=error.message; return []; }) : [];
@@ -535,7 +535,7 @@ export async function linkParcels(input: { parcelIds: string[]; responsibleRider
   if (!rider?.user.active || rider.user.role !== "RIDER" || !rider.hubId || (user.role !== "SUPERADMIN" && rider.hubId !== user.hubId)) throw new ApiError(404, "RIDER_NOT_FOUND", "Active responsible rider was not found in scope");
   const parcels = await prisma.parcel.findMany({ where: { id: { in: parcelIds } }, select: { id: true, address: true, deliveryFee: true, riderId: true, linkGroupId: true, status: true, updatedAt: true, batch: { select: { hubId: true } } } });
   const first = parcels[0];
-  if (parcels.length !== parcelIds.length || !first || parcels.some((parcel) => parcel.linkGroupId || ["DELIVERED", "RETURNED"].includes(parcel.status) || parcel.batch.hubId !== rider.hubId || (user.role !== "SUPERADMIN" && parcel.batch.hubId !== user.hubId))) {
+  if (parcels.length !== parcelIds.length || !first || parcels.some((parcel) => parcel.linkGroupId || ["DELIVERED", "RETURNED", "VOIDED"].includes(parcel.status) || parcel.batch.hubId !== rider.hubId || (user.role !== "SUPERADMIN" && parcel.batch.hubId !== user.hubId))) {
     throw new ApiError(409, "PARCELS_NOT_LINKABLE", "Every parcel must be unlinked, not delivered or returned, and in the responsible rider's hub");
   }
   const baseDeliveryFee = Math.max(...parcels.map((parcel) => parcel.deliveryFee ?? 0));

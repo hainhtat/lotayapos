@@ -271,7 +271,7 @@ export async function dashboardOverview(actor: Actor) {
   const now = new Date();
   return {
     businessDate: businessDate.toISOString().slice(0, 10),
-    totalParcels: allParcels.reduce((sum,row)=>sum+row._count._all,0),
+    totalParcels: allParcels.reduce((sum,row)=>sum+(row.status === "VOIDED" ? 0 : row._count._all),0),
     delivered: allParcels.find((row)=>row.status === "DELIVERED")?._count._all??0,
     pendingReturn: allParcels.find((row)=>row.status === "PENDING_RETURN")?._count._all??0,
     returnsDue: returnMetrics[0],

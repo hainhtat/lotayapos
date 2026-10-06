@@ -53,10 +53,10 @@ async function scopedHub(actor: Actor, requestedHubId: string | undefined, mutat
 }
 
 export async function syncBatchObligation(tx: Prisma.TransactionClient, batchId: string, actorId?: string) {
-  const batch = await tx.batch.findUnique({ where: { id: batchId }, select: { id: true, shopId: true, hubId: true, pickupDate: true, finalizedAt: true, automaticAccounting: true, parcels: { select: { codAmount: true } }, osObligation: true } });
+  const batch = await tx.batch.findUnique({ where: { id: batchId }, select: { id: true, shopId: true, hubId: true, pickupDate: true, finalizedAt: true, automaticAccounting: true, parcels: { select: { codAmount: true, status: true } }, osObligation: true } });
   if (!batch?.hubId) throw new ApiError(409, "BATCH_HUB_REQUIRED", "Batch must belong to a hub");
   if (!batch.finalizedAt) throw new ApiError(409, "BATCH_NOT_FINALIZED", "Finalize the batch before creating its OS obligation");
-  const originalCod = batch.parcels.reduce((sum, parcel) => sum + parcel.codAmount, 0);
+  const originalCod = batch.parcels.reduce((sum, parcel) => sum + (parcel.status === "VOIDED" ? 0 : parcel.codAmount), 0);
   if (!Number.isSafeInteger(originalCod)) throw new ApiError(400, "INVALID_AMOUNT", "Batch COD exceeds the supported amount");
   if (batch.osObligation) {
     if (!batch.automaticAccounting || batch.osObligation.originalCod === originalCod) return batch.osObligation;
@@ -199,7 +199,7 @@ export async function accountRows(db: Db, input: { shopId?: string; hubId: strin
   }) : [];
   for (const batch of projected) obligations.push({
     id: `historical-opening:${batch.id}`, batchId: batch.id, shopId: batch.shopId, hubId: input.hubId,
-    originalCod: batch.parcels.reduce((sum, parcel) => sum + parcel.codAmount, 0), migrated: true,
+    originalCod: batch.parcels.reduce((sum, parcel) => sum + (parcel.status === "VOIDED" ? 0 : parcel.codAmount), 0), migrated: true,
     openingAdjustment: 0, adjustmentReason: null, adjustmentApprovedBy: null, adjustmentApprovedAt: null,
     createdAt: batch.createdAt, updatedAt: batch.createdAt, batch,
   });
