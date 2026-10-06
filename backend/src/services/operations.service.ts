@@ -815,6 +815,7 @@ export async function buildManifestForRiders(input: ManifestQuery, actor: BatchA
       parcels: riderParcels.map((parcel) => {
         const exceptionStatus = (EXCEPTION_NOTE_STATUSES as readonly string[]).includes(parcel.status);
         return {
+          id: parcel.id,
           trackingNumber: parcel.trackingNumber,
           orderId: parcel.orderId,
           status: parcel.status,

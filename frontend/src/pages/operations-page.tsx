@@ -14,6 +14,7 @@ import { isDateChangeReason } from "@/lib/exception-reasons";
 import { hubBusinessDate } from "@/lib/business-date";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { ParcelFieldHistory } from "@/components/parcel-field-history";
+import { ParcelDetailsButton } from "@/components/parcel-details";
 import {
   buildManifestBody,
   MANIFEST_DATE_PRESETS,
@@ -1201,10 +1202,10 @@ function DispatchOperationsPage({ workspace = "dispatch" }: { workspace?: "dispa
                       </td>
                       <td className="py-1.5 pr-2 tabular-nums text-slate-400">{index + 1}</td>
                       <td className="py-1.5 pr-2">
-                        <p className="font-bold text-[#0787df] dark:text-[#5eb8ff]">{p.orderId?.trim() || "—"}</p>
+                        <p className="font-bold text-[#0787df] dark:text-[#5eb8ff]"><ParcelDetailsButton id={p.id} trackingNumber={p.trackingNumber}>{p.orderId?.trim() || p.trackingNumber}</ParcelDetailsButton></p>
                       </td>
                       <td className="py-1.5 pr-2">
-                        <p className="font-mono text-[11px] text-slate-500 dark:text-slate-400">{p.trackingNumber}</p>
+                        {p.orderId?.trim() && <p className="font-mono text-[11px] text-slate-500 dark:text-slate-400">{p.trackingNumber}</p>}
                         {isDateChangeReason(p.reasonCode) ? (
                           <p role="alert" className="mt-1 rounded-md bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
                             {t("dateChangeAlert")}

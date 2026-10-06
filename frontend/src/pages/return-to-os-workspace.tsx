@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, RefreshCw, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ModalPortal } from "@/components/modal-portal";
+import { ParcelDetailsButton } from "@/components/parcel-details";
 import { useAuth } from "@/app/auth";
 import { ApiError, api, apiRaw } from "@/lib/api";
 import { hubBusinessDate } from "@/lib/business-date";
@@ -35,6 +36,17 @@ type PaidToOsPreview = {
     }>;
   }>;
 };
+
+function isPaidToOsPreview(value: unknown): value is PaidToOsPreview {
+  if (!value || typeof value !== "object") return false;
+  const preview = value as Partial<PaidToOsPreview>;
+  return typeof preview.parcelCount === "number" && typeof preview.totalCod === "number"
+    && typeof preview.totalFees === "number" && Array.isArray(preview.sections)
+    && preview.sections.every((section) => section && typeof section.riderName === "string"
+      && Array.isArray(section.parcels)
+      && section.parcels.every((parcel) => parcel && typeof parcel.trackingNumber === "string"
+        && typeof parcel.customerName === "string" && typeof parcel.codAmount === "number"));
+}
 
 type MasterData = {
   shops?: Array<{ id: string; name: string }>;
@@ -80,10 +92,14 @@ export function ReturnToOsWorkspace() {
   }), [dateFrom, dateTo, riderId, shopId]);
   const paidToOs = useQuery({
     queryKey: ["paid-to-os-handover-preview", paidBody],
-    queryFn: () => api<PaidToOsPreview>("/operations/parcels/paid-to-os/preview", {
+    queryFn: async () => {
+      const result = await api<unknown>("/operations/parcels/paid-to-os/preview", {
       method: "POST",
       body: JSON.stringify(paidBody),
-    }).then((result) => result.data),
+      });
+      if (!isPaidToOsPreview(result.data)) throw new Error("INVALID_PAID_TO_OS_PREVIEW");
+      return result.data;
+    },
   });
 
   const download = useMutation({
@@ -156,7 +172,7 @@ export function ReturnToOsWorkspace() {
             </tr></thead>
             <tbody>{physical.map((parcel) => <tr key={parcel.id} className="border-b dark:border-white/10">
               <td className="p-3"><input type="checkbox" aria-label={parcel.trackingNumber} checked={selected.includes(parcel.id)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, parcel.id] : current.filter((id) => id !== parcel.id))}/></td>
-              <td className="p-3 font-mono font-bold">{parcel.trackingNumber}</td><td className="p-3">{parcel.batch.shop.name}</td><td className="p-3">{parcel.customerName}</td><td className="p-3">{parcel.status.replaceAll("_", " ")}</td><td className="p-3 text-right">{money(parcel.codAmount)}</td>
+              <td className="p-3 font-mono font-bold"><ParcelDetailsButton id={parcel.id} trackingNumber={parcel.trackingNumber}/></td><td className="p-3">{parcel.batch.shop.name}</td><td className="p-3">{parcel.customerName}</td><td className="p-3">{parcel.status.replaceAll("_", " ")}</td><td className="p-3 text-right">{money(parcel.codAmount)}</td>
             </tr>)}</tbody>
           </table>
         </div>}
@@ -171,10 +187,10 @@ export function ReturnToOsWorkspace() {
         <label className="text-xs font-bold text-slate-500">{t("rider")}<select aria-label={t("rider")} value={riderId} onChange={(event) => setRiderId(event.target.value)} className={`${control} mt-1 w-full`}><option value="">{t("all")}</option>{(Array.isArray(masters.data?.riders) ? masters.data.riders : []).map((rider) => <option key={rider.id} value={rider.id}>{rider.user.name}</option>)}</select></label>
       </div>
       <p className="mt-4 rounded-xl bg-sky-50 p-3 text-sm dark:bg-sky-950/40">{t("paidToOsHandoverSummary", { count: paidCount, cod: (paidToOs.data?.totalCod ?? 0).toLocaleString(), fees: (paidToOs.data?.totalFees ?? 0).toLocaleString() })}</p>
-      {paidToOs.isLoading ? <p className="py-8 text-center">{t("loading")}</p> : paidCount === 0 ? <p className="py-8 text-center text-sm text-slate-500">{t("paidToOsHandoverEmpty")}</p> :
+      {paidToOs.isLoading ? <p className="py-8 text-center">{t("loading")}</p> : paidToOs.isError ? <div role="alert" className="py-8 text-center text-sm text-rose-600">{t("loadError")} <button type="button" onClick={() => void paidToOs.refetch()} className="ml-2 underline">{t("retry")}</button></div> : paidCount === 0 ? <p className="py-8 text-center text-sm text-slate-500">{t("paidToOsHandoverEmpty")}</p> :
         <div className="mt-4 max-h-96 overflow-auto rounded-xl border dark:border-white/10">
           <table className="w-full min-w-[760px] text-left text-sm"><thead><tr className="border-b bg-slate-50 text-xs uppercase text-slate-500 dark:border-white/10 dark:bg-white/5"><th className="p-3">{t("rider")}</th><th className="p-3">{t("tracking")}</th><th className="p-3">{t("merchant")}</th><th className="p-3">{t("customer")}</th><th className="p-3 text-right">{t("cod")}</th><th className="p-3 text-right">{t("fee")}</th></tr></thead>
-          <tbody>{paidToOs.data?.sections.flatMap((section) => section.parcels.map((parcel) => <tr key={parcel.id ?? parcel.trackingNumber} className="border-b dark:border-white/10"><td className="p-3">{section.riderName}</td><td className="p-3 font-mono font-bold">{parcel.trackingNumber}</td><td className="p-3">{parcel.shopName ?? "—"}</td><td className="p-3">{parcel.customerName}</td><td className="p-3 text-right">{money(parcel.codAmount)}</td><td className="p-3 text-right">{money(parcel.paidToOsFeeIncluded ? parcel.deliveryFee ?? 0 : 0)}</td></tr>))}</tbody></table>
+          <tbody>{paidToOs.data?.sections.flatMap((section) => section.parcels.map((parcel) => <tr key={parcel.id ?? parcel.trackingNumber} className="border-b dark:border-white/10"><td className="p-3">{section.riderName}</td><td className="p-3 font-mono font-bold">{parcel.id ? <ParcelDetailsButton id={parcel.id} trackingNumber={parcel.trackingNumber}/> : parcel.trackingNumber}</td><td className="p-3">{parcel.shopName ?? "—"}</td><td className="p-3">{parcel.customerName}</td><td className="p-3 text-right">{money(parcel.codAmount)}</td><td className="p-3 text-right">{money(parcel.paidToOsFeeIncluded ? parcel.deliveryFee ?? 0 : 0)}</td></tr>))}</tbody></table>
         </div>}
     </section>
 

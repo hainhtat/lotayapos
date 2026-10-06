@@ -1,7 +1,9 @@
 import { useTranslation } from "react-i18next";
 import { manifestStatusLabelKey, type ManifestStatusKey } from "@/lib/manifest-filters";
+import { ParcelDetailsButton } from "@/components/parcel-details";
 
 export type ManifestPreviewParcel = {
+  id?: string;
   trackingNumber: string;
   orderId?: string | null;
   status: string;
@@ -111,7 +113,7 @@ export function DeliveryStatusPanel({
               section.parcels.map((parcel) => (
                 <tr key={`${section.riderName}-${parcel.trackingNumber}`} className="border-t dark:border-white/10">
                   <td className="px-3 py-2 font-semibold">{section.riderName}</td>
-                  <td className="px-3 py-2 font-bold">{parcel.trackingNumber}</td>
+                  <td className="px-3 py-2 font-bold">{parcel.id ? <ParcelDetailsButton id={parcel.id} trackingNumber={parcel.trackingNumber}/> : parcel.trackingNumber}</td>
                   <td className="px-3 py-2">{parcel.orderId || "—"}</td>
                   <td className="px-3 py-2">{parcel.customerName}</td>
                   <td className="px-3 py-2">{parcel.township || "—"}</td>

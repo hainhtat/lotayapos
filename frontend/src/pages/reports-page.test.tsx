@@ -65,7 +65,7 @@ describe("ReportsPage", () => {
               {
                 riderId: "rider-1",
                 riderName: "Aung Aung",
-                parcels: [{ trackingNumber: "LTY-001", orderId: "OS-1", status: "DELIVERED", customerName: "Ma Ma", township: "Yangon", codAmount: 25000, deliveryFee: 1500, address: "No. 1" }],
+                parcels: [{ id: "parcel-1", trackingNumber: "LTY-001", orderId: "OS-1", status: "DELIVERED", customerName: "Ma Ma", township: "Yangon", codAmount: 25000, deliveryFee: 1500, address: "No. 1" }],
               },
             ],
             requested: body,
@@ -177,6 +177,7 @@ describe("ReportsPage", () => {
     fireEvent.change(screen.getByLabelText("Choose a report"), { target: { value: "delivery" } });
     expect(await screen.findByRole("heading", { name: "Daily delivery status" })).toBeInTheDocument();
     expect(await screen.findByText("LTY-001")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View parcel details LTY-001" })).toBeInTheDocument();
     await waitFor(() => {
       const call = apiMock.mock.calls.find(([path]) => path === "/operations/parcels/manifest/preview");
       expect(call?.[1]).toEqual(expect.objectContaining({ method: "POST" }));

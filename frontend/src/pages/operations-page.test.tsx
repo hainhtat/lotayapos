@@ -67,7 +67,9 @@ describe("OperationsPage", () => {
 
   it("does not crash when the return queue has an unexpected response shape", async () => {
     apiRawMock.mockResolvedValue({ json: async () => ({ data: { unexpected: true } }) });
-    apiMock.mockResolvedValue({ data: { riders: [], shops: [] } });
+    apiMock.mockImplementation((path: string) => path === "/operations/parcels/paid-to-os/preview"
+      ? Promise.resolve({ data: { parcelCount: 0, totalCod: 0, totalFees: 0, sections: [] } })
+      : Promise.resolve({ data: { riders: [], shops: [] } }));
     renderReturnsPage();
     expect(await screen.findByRole("alert")).toHaveTextContent("We couldn’t load this data.");
     expect(screen.getByRole("heading", { name: "Return to OS" })).toBeInTheDocument();
@@ -78,6 +80,16 @@ describe("OperationsPage", () => {
     apiMock.mockResolvedValue({ data: { riders: [], shops: [] } });
     renderReturnsPage();
     expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Return to OS" })).toBeInTheDocument();
+  });
+
+  it("keeps Return to OS usable when paid-to-OS preview sections contain a non-array parcel list", async () => {
+    mockParcelList([]);
+    apiMock.mockImplementation((path: string) => path === "/operations/parcels/paid-to-os/preview"
+      ? Promise.resolve({ data: { parcelCount: 1, totalCod: 1000, totalFees: 0, sections: [{ riderName: "Rider", parcels: { items: [] } }] } })
+      : Promise.resolve({ data: { shops: [], riders: [] } }));
+    renderReturnsPage();
+    expect(await screen.findByRole("alert")).toHaveTextContent("We couldn’t load this data.");
     expect(screen.getByRole("heading", { name: "Return to OS" })).toBeInTheDocument();
   });
 
@@ -828,6 +840,8 @@ describe("OperationsPage", () => {
       expect(body.riderId).toBeUndefined();
     });
     expect(await screen.findByText("TRK-PAID")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View parcel details TRK-PAID" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View parcel details TRK-RETURN" })).toBeInTheDocument();
     expect(screen.getByText("1 parcels · COD 50,000 MMK · fees 3,000 MMK")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Paid to OS deliveries" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Download combined OS handover PDF" })).toBeEnabled();

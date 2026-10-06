@@ -189,7 +189,7 @@ describe("manifest status vs exception note mapping", () => {
     expect(parcels).toHaveLength(3);
 
     const assigned = parcels.find((parcel: { trackingNumber: string }) => parcel.trackingNumber === `MSN-ASN-${suffix}`);
-    expect(assigned).toMatchObject({ status: "ASSIGNED", note: null });
+    expect(assigned).toMatchObject({ id: assignedId, status: "ASSIGNED", note: null });
     expect(assigned.note).not.toBe("ASN");
     expect(assigned.note).not.toBe("ASSIGNED");
 
