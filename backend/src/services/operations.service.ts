@@ -21,6 +21,11 @@ const MANIFEST_STATUSES = ["CREATED", "PICKED_UP", "ASSIGNED", "OUT_FOR_DELIVERY
 const EXCEPTION_NOTE_STATUSES = ["FAILED", "PARTIAL", "REJECTED", "PENDING_RETURN", "RETURNED"] as const;
 /** Statuses whose history rows may carry rider/ops exception notes (excludes RETURNED itself). */
 const EXCEPTION_HISTORY_STATUSES = ["FAILED", "PARTIAL", "REJECTED", "PENDING_RETURN"] as const;
+const trackingOrderAsc: Prisma.ParcelOrderByWithRelationInput[] = [
+  { trackingSequence: { sort: "asc", nulls: "last" } },
+  { trackingNumber: "asc" },
+  { id: "asc" },
+];
 
 export function sanitizeManifestFilenamePart(value: string, maxLength = 60) {
   const sanitized = value
@@ -184,7 +189,7 @@ export async function listOverdueUnsentParcels(
         batch: { select: { id: true, label: true, pickupDate: true, shop: { select: { id: true, name: true } } } },
         rider: { select: { id: true, user: { select: { name: true } } } },
       },
-      orderBy: [{ createdAt: "asc" }, { trackingNumber: "asc" }],
+      orderBy: [{ createdAt: "asc" }, ...trackingOrderAsc],
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),
@@ -268,18 +273,22 @@ export async function acquireTrackingAllocationLock(
 
 async function nextTrackingSequenceStartWith(client: TrackingSequenceClient) {
   if (env.databaseProvider === "postgresql") {
-    const rows = await client.$queryRaw<Array<{ max: number | null }>>`
-      SELECT MAX(CAST(SUBSTRING("trackingNumber" FROM 5) AS INTEGER)) AS max
+    const rows = await client.$queryRaw<Array<{ max: bigint | null }>>`
+      SELECT MAX(CASE WHEN "trackingNumber" ~ '^LTY-[0-9]{1,10}$'
+        THEN CAST(SUBSTRING("trackingNumber" FROM 5) AS BIGINT)
+        ELSE NULL END) AS max
       FROM "Parcel"
-      WHERE "trackingNumber" ~ '^LTY-[0-9]+$'
     `;
-    return Number(rows[0]?.max ?? 0) + 1;
+    const highest = rows[0]?.max ?? 0n;
+    if (highest >= 2_147_483_647n) throw new ApiError(409, "TRACKING_SEQUENCE_EXHAUSTED", "Tracking sequence capacity reached");
+    return Number(highest) + 1;
   }
   const parcels = await client.parcel.findMany({ where: { trackingNumber: { startsWith: "LTY-" } }, select: { trackingNumber: true } });
   const highest = parcels.reduce((max, parcel) => {
     const match = /^LTY-(\d+)$/.exec(parcel.trackingNumber);
     return match ? Math.max(max, Number(match[1])) : max;
   }, 0);
+  if (highest >= 2_147_483_647) throw new ApiError(409, "TRACKING_SEQUENCE_EXHAUSTED", "Tracking sequence capacity reached");
   return highest + 1;
 }
 
@@ -291,7 +300,7 @@ export async function getBatchDetail(id:string,actor:BatchActor){
   const user=await assertOperationsReader(actor);
   const batch=await prisma.batch.findFirst({
     where:{id,...(user.role==="SUPERADMIN"?{}:{hubId:user.hubId})},
-    include:{shop:true,hub:true,parcels:{include:{townshipRelation:{include:{district:{include:{regionState:true}}}},zoneRelation:true},orderBy:{trackingNumber:"asc"}}},
+    include:{shop:true,hub:true,parcels:{include:{townshipRelation:{include:{district:{include:{regionState:true}}}},zoneRelation:true},orderBy:trackingOrderAsc}},
   });
   if(!batch)throw new ApiError(404,"BATCH_NOT_FOUND","Batch not found");
   const totalCod=batch.parcels.reduce((sum,parcel)=>sum+(parcel.status === "VOIDED" ? 0 : parcel.codAmount),0);
@@ -380,8 +389,9 @@ export async function bulkCreateParcels(batchId:string,input:{parcels:NewParcelI
     // the bounded retry below also covers a stale read racing another transaction.
     await acquireTrackingAllocationLock(tx);
     const sequenceStart = await nextTrackingSequenceStartWith(tx);
+    if (sequenceStart + input.parcels.length - 1 > 2_147_483_647) throw new ApiError(409, "TRACKING_SEQUENCE_EXHAUSTED", "Tracking sequence capacity reached");
     const trackingNumbers = input.parcels.map((_, index) => formatTrackingNumber(sequenceStart + index));
-    await tx.parcel.createMany({data:input.parcels.map((p,index)=>{const township=townshipById.get(p.townshipId)!;const zone=p.zoneId?zoneById.get(p.zoneId):undefined;return {orderId:p.orderId,customerName:p.customerName,customerPhone:p.customerPhone,address:p.address,codAmount:p.codAmount,townshipId:p.townshipId,zoneId:p.zoneId,zone:zone?.name,township:township.nameEn,deliveryFee:township.deliveryFee,advanceAmount:0,batchId,trackingNumber:trackingNumbers[index]!};})});
+    await tx.parcel.createMany({data:input.parcels.map((p,index)=>{const township=townshipById.get(p.townshipId)!;const zone=p.zoneId?zoneById.get(p.zoneId):undefined;return {orderId:p.orderId,customerName:p.customerName,customerPhone:p.customerPhone,address:p.address,codAmount:p.codAmount,townshipId:p.townshipId,zoneId:p.zoneId,zone:zone?.name,township:township.nameEn,deliveryFee:township.deliveryFee,advanceAmount:0,batchId,trackingNumber:trackingNumbers[index]!,trackingSequence:sequenceStart+index};})});
     return tx.parcel.findMany({where:{batchId,trackingNumber:{in:trackingNumbers}},include:{townshipRelation:{include:{district:{include:{regionState:true}}}},zoneRelation:true}});
   });
 
@@ -665,7 +675,7 @@ export async function bulkAssignParcels(input: { parcelIds: string[]; riderId: s
         await tx.statusHistory.create({ data: { parcelId: parcel.id, fromStatus: "ASSIGNED", toStatus: "OUT_FOR_DELIVERY", actorId: actor.id, note: "Assigned and dispatched" } });
       }
     }
-    return tx.parcel.findMany({ where: { id: { in: uniqueParcelIds } }, select: { id: true, trackingNumber: true, customerName: true, customerPhone: true, address: true, codAmount: true, deliveryFee: true, zone: true, township: true, batch: { select: { label: true, pickupDate: true, shop: { select: { name: true } } } } }, orderBy: { trackingNumber: "asc" } });
+    return tx.parcel.findMany({ where: { id: { in: uniqueParcelIds } }, select: { id: true, trackingNumber: true, customerName: true, customerPhone: true, address: true, codAmount: true, deliveryFee: true, zone: true, township: true, batch: { select: { label: true, pickupDate: true, shop: { select: { name: true } } } } }, orderBy: trackingOrderAsc });
   });
   return { rider: { id: rider.id, name: rider.user.name, hubId: rider.hubId }, parcels: assigned, assignedCount: assigned.length };
 }
@@ -797,7 +807,7 @@ export async function buildManifestForRiders(input: ManifestQuery, actor: BatchA
         select: { note: true, reasonCode: true },
       },
     },
-    orderBy: [{ riderId: "asc" }, { trackingNumber: "asc" }],
+    orderBy: [{ riderId: "asc" }, ...trackingOrderAsc],
     take: 501,
   });
 
@@ -926,7 +936,7 @@ export async function buildReturnToOsHandover(input: { parcelIds: string[]; hubI
   if (!user || !user.active || user.role !== actor.role || !manifestReadRoles.includes(user.role)) throw new ApiError(403, "FORBIDDEN", "You may not view return handovers");
   if (user.role !== "SUPERADMIN" && input.hubId && input.hubId !== user.hubId) throw new ApiError(403, "FORBIDDEN", "Hub is outside your scope");
   const hubId = user.role === "SUPERADMIN" ? input.hubId ?? user.hubId : user.hubId;
-  const parcels = await prisma.parcel.findMany({ where: { id: { in: ids }, status: { in: ["PENDING_RETURN", "REJECTED"] }, ...(hubId ? { batch: { hubId } } : {}) }, select:{id:true,trackingNumber:true,orderId:true,customerName:true,customerPhone:true,address:true,codAmount:true,deliveryFee:true,paidToOsFeeIncluded:true,zone:true,township:true,status:true,reasonCode:true,batch:{select:{label:true,pickupDate:true,shop:{select:{name:true}}}},statusHistory:{orderBy:{createdAt:"desc"},take:1,select:{note:true,reasonCode:true}}}, orderBy: { trackingNumber: "asc" } });
+  const parcels = await prisma.parcel.findMany({ where: { id: { in: ids }, status: { in: ["PENDING_RETURN", "REJECTED"] }, ...(hubId ? { batch: { hubId } } : {}) }, select:{id:true,trackingNumber:true,orderId:true,customerName:true,customerPhone:true,address:true,codAmount:true,deliveryFee:true,paidToOsFeeIncluded:true,zone:true,township:true,status:true,reasonCode:true,batch:{select:{label:true,pickupDate:true,shop:{select:{name:true}}}},statusHistory:{orderBy:{createdAt:"desc"},take:1,select:{note:true,reasonCode:true}}}, orderBy: trackingOrderAsc });
   if (parcels.length !== ids.length) throw new ApiError(409, "PARCELS_NOT_ELIGIBLE", "Return handover only allows selected pending-return or rejected parcels in your hub");
   const manifestParcels = parcels.map((parcel) => {
     const latest = parcel.statusHistory[0];
@@ -1014,7 +1024,7 @@ export async function buildPaidToOsHandover(input: PaidToOsHandoverQuery, actor:
       rider: { select: { id: true, user: { select: { name: true } } } },
       batch: { select: { label: true, pickupDate: true, hub: { select: { name: true } }, shop: { select: { name: true } } } },
     },
-    orderBy: [{ riderId: "asc" }, { trackingNumber: "asc" }],
+    orderBy: [{ riderId: "asc" }, ...trackingOrderAsc],
     take: 501,
   });
   if (parcels.length > 500) throw new ApiError(400, "BATCH_TOO_LARGE", "Paid-to-OS handover may include at most 500 parcels");

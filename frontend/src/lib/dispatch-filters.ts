@@ -11,11 +11,14 @@ export type DispatchFilters = {
   status: string;
   from: string;
   to: string;
+  sortBy: string;
+  sortDirection: string;
 };
 
 export const emptyDispatchFilters: DispatchFilters = {
   queue: "", shopId: "", batchId: "", riderId: "", assignmentStatus: "", township: "",
   trackingNumber: "", orderId: "", customerName: "", status: "", from: "", to: "",
+  sortBy: "", sortDirection: "",
 };
 
 export function dispatchFiltersFromSearch(params: URLSearchParams, lockedQueue = ""): DispatchFilters {

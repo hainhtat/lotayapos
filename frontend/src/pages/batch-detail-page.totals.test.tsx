@@ -3,16 +3,19 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "@/i18n";
-import { BatchDetailPage, isParcelRowComplete, normalizeManifestRow, parseParcelGrid } from "./batch-detail-page";
+import { BatchDetailPage } from "./batch-detail-page";
+import { isParcelRowComplete, normalizeManifestRow, parseParcelGrid } from "@/features/batches/detail/parcel-draft-rules";
 
 const apiMock = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/api", () => ({ api: apiMock }));
+const apiRawMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/api", () => ({ api: apiMock, apiRaw: apiRawMock }));
 vi.mock("@/app/auth", () => ({ useAuth: () => ({ user: { id: "ops-1", role: "OPERATIONS_MANAGER" } }) }));
 
 describe("BatchDetailPage settlement totals", () => {
   beforeEach(() => {
     localStorage.clear();
     apiMock.mockReset();
+    apiRawMock.mockReset();
     apiMock.mockImplementation((path: string) => {
       if (path === "/operations/batches/batch-1") {
         return Promise.resolve({
@@ -342,5 +345,36 @@ describe("BatchDetailPage settlement totals", () => {
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/saved/i));
     expect(screen.getByLabelText("Customer 1")).toHaveValue("Edited while saving");
     expect(localStorage.getItem("lotaya-parcel-draft:batch-1")).toContain("Edited while saving");
+  });
+
+  it("keeps existing drafts after a failed manifest upload and applies a successful retry only after review", async () => {
+    localStorage.setItem("lotaya-parcel-draft:batch-1", JSON.stringify([
+      { customerName: "Existing draft", address: "Road", townshipId: "t-hlaing", codAmount: 25000 },
+    ]));
+    apiRawMock
+      .mockRejectedValueOnce(new Error("Could not read PDF"))
+      .mockResolvedValueOnce({ json: async () => ({ success: true, data: {
+        rows: [{ customerName: "Imported draft", address: "Street", townshipId: "t-hlaing", codAmount: 12000, sourcePage: 1, confidence: 1, warnings: [] }],
+        pageCount: 1, truncated: false, extraction: "LOCAL_TEXT", saved: false,
+      } }) });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<MemoryRouter initialEntries={["/batches/batch-1"]}><QueryClientProvider client={client}><Routes><Route path="/batches/:id" element={<BatchDetailPage />} /></Routes></QueryClientProvider></MemoryRouter>);
+
+    expect(await screen.findByLabelText("Customer 1")).toHaveValue("Existing draft");
+    const upload = screen.getByLabelText("Upload OS manifest PDF");
+    const file = new File(["%PDF-1.4"], "manifest.pdf", { type: "application/pdf" });
+    fireEvent.change(upload, { target: { files: [file] } });
+    expect(await screen.findByText("Could not read PDF")).toBeInTheDocument();
+    expect(screen.getByLabelText("Customer 1")).toHaveValue("Existing draft");
+
+    fireEvent.change(upload, { target: { files: [file] } });
+    expect(await screen.findByText("Imported draft")).toBeInTheDocument();
+    expect(screen.getByLabelText("Customer 1")).toHaveValue("Existing draft");
+    expect(screen.queryByLabelText("Customer 2")).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "Use as editable draft" }));
+    expect(await screen.findByLabelText("Customer 2")).toHaveValue("Imported draft");
+    expect(localStorage.getItem("lotaya-parcel-draft:batch-1")).toContain("Existing draft");
+    expect(localStorage.getItem("lotaya-parcel-draft:batch-1")).toContain("Imported draft");
+    expect(apiRawMock).toHaveBeenCalledTimes(2);
   });
 });

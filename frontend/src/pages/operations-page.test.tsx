@@ -875,4 +875,37 @@ describe("OperationsPage", () => {
     expect(screen.queryByRole("button", { name: "Assign & dispatch (0)" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Physical returns" })).toBeInTheDocument();
   });
+
+  it("requests server sorting across pages and resets to page one when the sort changes", async () => {
+    const parcel = { id: "sort-1", trackingNumber: "LTY-10000", orderId: "OS-1", customerName: "Customer", status: "CREATED", codAmount: 1000, deliveryFee: 100, batch: { id: "batch-1", label: "Batch", shop: { name: "Shop" } }, rider: null };
+    mockParcelList([parcel], { page: 1, pageSize: 100, total: 201, totalPages: 3 });
+    apiMock.mockImplementation((path: string) => Promise.resolve({ data: path === "/master-data" ? { shops: [], riders: [] } : [] }));
+    renderPage();
+    await screen.findByText("OS-1");
+    fireEvent.click(await screen.findByRole("button", { name: "OS Order ID" }));
+    await waitFor(() => expect(apiRawMock).toHaveBeenCalledWith(expect.stringMatching(/sortBy=orderId&sortDirection=asc/)));
+    expect(await screen.findByRole("columnheader", { name: "OS Order ID" })).toHaveAttribute("aria-sort", "ascending");
+    fireEvent.click(await screen.findByRole("button", { name: "Next" }));
+    await waitFor(() => expect(apiRawMock).toHaveBeenCalledWith(expect.stringMatching(/sortBy=orderId&sortDirection=asc&page=2/)));
+    fireEvent.click(await screen.findByRole("button", { name: "OS Order ID" }));
+    await waitFor(() => expect(apiRawMock).toHaveBeenCalledWith(expect.stringMatching(/sortBy=orderId&sortDirection=desc&page=1/)));
+    expect(await screen.findByRole("columnheader", { name: "OS Order ID" })).toHaveAttribute("aria-sort", "descending");
+  });
+
+  it("offers a previewed void only for eligible parcels and authorized roles", async () => {
+    const parcel = { id: "void-1", trackingNumber: "LTY-1", customerName: "Customer", status: "CREATED", codAmount: 0, deliveryFee: 0, batch: { id: "batch-1", label: "Batch", finalizedAt: "2026-10-01", shop: { name: "Shop" } }, rider: null };
+    mockParcelList([parcel]);
+    apiMock.mockImplementation((path: string) => path.endsWith("/void-preview")
+      ? Promise.resolve({ data: { proposedObligationReduction: 0, currentOsBalance: 0, projectedOsBalance: 0, advancePaid: 0, availableOsCredit: 0, lastZeroing: null } })
+      : Promise.resolve({ data: path === "/master-data" ? { shops: [], riders: [] } : [] }));
+    const view = renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Void parcel entry LTY-1" }));
+    expect(await screen.findByText(/OS outstanding:/)).toBeInTheDocument();
+    expect(apiMock).toHaveBeenCalledWith("/parcels/void-1/void-preview");
+    view.unmount();
+    authState.role = "DISPATCHER";
+    renderPage();
+    await screen.findByText("LTY-1");
+    expect(screen.queryByRole("button", { name: "Void parcel entry LTY-1" })).not.toBeInTheDocument();
+  });
 });

@@ -60,5 +60,5 @@ describe("Superadmin user administration",()=>{
     const demote=await request(app).patch(`/api/v1/users/${adminId}`).set("Authorization",auth()).send({role:"AUDITOR",hubId:null});expect(demote.status).toBe(409);expect(demote.body.error.code).toBe("SELF_PRIVILEGE_CHANGE");
   });
 
-  test("dashboard overview resolves for a persisted active administrator",async()=>{const response=await request(app).get("/api/v1/master-data/dashboard").set("Authorization",auth());expect(response.status).toBe(200);expect(response.body.data).toHaveProperty("businessDate");});
+  test("dashboard overview links delivery alerts to Operations Review",async()=>{const response=await request(app).get("/api/v1/master-data/dashboard").set("Authorization",auth());expect(response.status).toBe(200);expect(response.body.data).toHaveProperty("businessDate");expect(response.body.data.deepLinks.failedPartialAlerts).toBe("/operations/review");});
 });

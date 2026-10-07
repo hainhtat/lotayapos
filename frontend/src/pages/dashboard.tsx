@@ -137,7 +137,7 @@ export function Dashboard() {
       value: data?.failedPartialAlerts ?? 0,
       detail: t("deliveryAlertsDescription"),
       icon: AlertTriangle,
-      to: data?.deepLinks?.failedPartialAlerts ?? "/operations/batches#alerts",
+      to: "/operations/review",
       tone: (data?.failedPartialAlerts ?? 0) > 0 ? "danger" : "default",
     },
     {

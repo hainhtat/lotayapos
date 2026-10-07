@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   BarChart3,
-  Bell,
+  ClipboardList,
   ChevronRight,
   Layers,
   LayoutDashboard,
@@ -16,12 +16,14 @@ import {
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/app/auth";
 import { useTheme } from "@/app/theme";
+import { NotificationsDropdown } from "./notifications-dropdown";
 
 const links = [
   { to: "/", label: "home", icon: LayoutDashboard },
   { to: "/operations/batches", label: "allBatches", icon: Layers },
   { to: "/operations/dispatch", label: "dispatchQueue", icon: Package },
   { to: "/operations/returns", label: "returnToOs", icon: RotateCcw },
+  { to: "/operations/review", label: "operationsReview", icon: ClipboardList },
   { to: "/finance", label: "finance", icon: WalletCards },
   { to: "/reports", label: "reports", icon: BarChart3 },
 ];
@@ -35,6 +37,7 @@ const rolesByPath: Record<string,string[]> = {
   "/operations/batches": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER"],
   "/operations/dispatch": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER","AUDITOR"],
   "/operations/returns": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER","AUDITOR"],
+  "/operations/review": ["SUPERADMIN","OPERATIONS_MANAGER"],
   "/finance": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","AUDITOR"],
   "/reports": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","AUDITOR"],
   "/settings": ["SUPERADMIN","OPERATIONS_MANAGER"],
@@ -126,15 +129,7 @@ export function AppShell() {
             >
               {mode === "dark" ? <Sun size={18} /> : <Moon size={18} />}
             </button>
-            {canSeeAlerts && (
-            <NavLink
-              to="/operations/batches#alerts"
-              aria-label={t("notifications")}
-              className="grid h-10 w-10 place-items-center rounded-xl bg-slate-100 text-slate-600 dark:bg-white/10 dark:text-white"
-            >
-              <Bell size={18} />
-            </NavLink>
-            )}
+            {canSeeAlerts && <NotificationsDropdown />}
             <NavLink
               to="/profile"
               className="hidden items-center gap-2 border-l border-black/10 pl-4 dark:border-white/10 sm:flex"

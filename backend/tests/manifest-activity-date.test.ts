@@ -147,6 +147,42 @@ describe("manifest activity date filter", () => {
     expect(trackingNumbers).toEqual([`MAD-FILTER-${suffix}`]);
   });
 
+  test("orders generated tracking numbers numerically in manifest preview", async () => {
+    const ids = [`mad-numeric-9999-${suffix}`, `mad-numeric-10000-${suffix}`];
+    try {
+      await prisma.parcel.createMany({ data: ids.map((id, index) => ({
+        id,
+        batchId,
+        riderId,
+        trackingNumber: index === 0 ? "LTY-9999" : "LTY-10000",
+        trackingSequence: index === 0 ? 9999 : 10000,
+        customerName: "Numeric tracking",
+        address: "Test address",
+        codAmount: 0,
+        status: "DELIVERED",
+      })) });
+      await prisma.statusHistory.createMany({ data: ids.map((parcelId) => ({
+        parcelId,
+        fromStatus: "OUT_FOR_DELIVERY",
+        toStatus: "DELIVERED",
+        actorId: dispatcherId,
+        createdAt: new Date("2026-08-13T10:30:00.000Z"),
+      })) });
+      const response = await request(app)
+        .post("/api/v1/operations/parcels/manifest/preview")
+        .set("Authorization", `Bearer ${dispatcherToken()}`)
+        .send({ riderIds: [riderId], statuses: ["DELIVERED"], dateFrom: "2026-08-13", dateTo: "2026-08-13" });
+      expect(response.status).toBe(200);
+      const trackingNumbers = response.body.data.sections.flatMap(
+        (section: { parcels: Array<{ trackingNumber: string }> }) => section.parcels.map((parcel) => parcel.trackingNumber),
+      );
+      expect(trackingNumbers).toEqual(["LTY-9999", "LTY-10000", `MAD-FILTER-${suffix}`]);
+    } finally {
+      await prisma.statusHistory.deleteMany({ where: { parcelId: { in: ids } } });
+      await prisma.parcel.deleteMany({ where: { id: { in: ids } } });
+    }
+  });
+
   test("rejects an inverted manifest date range", async () => {
     const response = await request(app)
       .post("/api/v1/operations/parcels/manifest/preview")

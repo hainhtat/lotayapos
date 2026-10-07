@@ -293,7 +293,7 @@ export async function dashboardOverview(actor: Actor) {
       grossProfit: -balance(allAccountLines("DELIVERY_FEE_REVENUE")) - balance(allAccountLines("RIDER_COMMISSION_EXPENSE")) - (allExpenseTotal._sum.amount ?? 0),
       profitComponents: { deliveryFeeRevenue: -balance(allAccountLines("DELIVERY_FEE_REVENUE")), riderCommissionExpense: balance(allAccountLines("RIDER_COMMISSION_EXPENSE")), expenses: allExpenseTotal._sum.amount ?? 0 },
     } : {}),
-    deepLinks: { riderOutstanding: `/finance?tab=settlements&businessDate=${businessDate.toISOString().slice(0, 10)}#rider-outstanding`, onlineShopSettlements: "/finance?tab=settlements#os-settlements", returnsDue: "/operations/dispatch?status=PENDING_RETURN", failedPartialAlerts: "/operations/batches#alerts", expenses: `/finance?businessDate=${businessDate.toISOString().slice(0, 10)}#expenses` },
+    deepLinks: { riderOutstanding: `/finance?tab=settlements&businessDate=${businessDate.toISOString().slice(0, 10)}#rider-outstanding`, onlineShopSettlements: "/finance?tab=settlements#os-settlements", returnsDue: "/operations/dispatch?status=PENDING_RETURN", failedPartialAlerts: "/operations/review", expenses: `/finance?businessDate=${businessDate.toISOString().slice(0, 10)}#expenses` },
     batches,
   };
 }

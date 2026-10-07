@@ -29,7 +29,7 @@ describe("BatchesPage", () => {
   });
   afterEach(async () => { await i18n.changeLanguage("en"); });
 
-  it("filters overdue returns and records a reasoned extension",async()=>{
+  it("keeps return review out of the batches workspace",async()=>{
     apiMock.mockImplementation((path:string,init?:RequestInit)=>{
       if(path==="/finance/os-pending-returns")return Promise.resolve({data:{items:[
         {id:"parcel-1",trackingNumber:"TRK-OVERDUE",status:"PENDING_RETURN",returnDueAt:"2020-01-01T00:00:00.000Z",batch:{id:"batch-1",label:"B-1"},shop:{id:"shop-1",name:"SNMD"}},
@@ -39,14 +39,9 @@ describe("BatchesPage", () => {
       return Promise.resolve({data:[]});
     });
     renderPage();
-    expect(await screen.findByRole("heading",{name:"Operations return queue"})).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button",{name:"Overdue"}));
-    expect(screen.getByText("TRK-OVERDUE")).toBeInTheDocument();expect(screen.queryByText("TRK-FAILED")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button",{name:"Extend"}));
-    fireEvent.change(screen.getByLabelText("Additional days"),{target:{value:"3"}});
-    fireEvent.change(screen.getByLabelText("Reason for extension"),{target:{value:"Customer requested more time"}});
-    fireEvent.click(screen.getByRole("button",{name:"Save extension"}));
-    await waitFor(()=>expect(apiMock).toHaveBeenCalledWith("/operations/parcels/parcel-1/return-extension",{method:"POST",body:JSON.stringify({days:3,reason:"Customer requested more time"})}));
+    expect((await screen.findAllByRole("heading",{name:"All batches"})).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("heading",{name:"Operations return queue"})).not.toBeInTheDocument();
+    expect(apiMock).not.toHaveBeenCalledWith("/finance/os-pending-returns");
   });
 
   it("does not request the restricted queue for dispatchers",async()=>{
@@ -222,7 +217,7 @@ describe("BatchesPage", () => {
     expect(await within(dialog).findByRole("option", { name: "Sanchaung" })).toBeInTheDocument();
   });
 
-  it("shows alerts on the batches page and acknowledges them", async () => {
+  it("does not fetch review alerts on the batches page", async () => {
     apiMock.mockImplementation((path: string, init?: RequestInit) => {
       if (path === "/operations/alerts" && !init) {
         return Promise.resolve({
@@ -232,10 +227,8 @@ describe("BatchesPage", () => {
       return Promise.resolve({ data: {} });
     });
     renderPage();
-    expect(await screen.findByRole("heading", { name: "Alerts" })).toBeInTheDocument();
-    expect(document.getElementById("alerts")).toBeTruthy();
-    expect(await screen.findByText("Delivery failed")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Acknowledge" }));
-    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/operations/alerts/alert-1/acknowledge", { method: "POST" }));
+    expect((await screen.findAllByRole("heading", { name: "All batches" })).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("heading", { name: "Alerts" })).not.toBeInTheDocument();
+    expect(apiMock).not.toHaveBeenCalledWith("/operations/alerts");
   });
 });

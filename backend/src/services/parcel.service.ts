@@ -199,6 +199,8 @@ type Actor = { id: string; role: string };
 type ActorScope = { id: string; role: string; hubId: string | null; riderId: string | null };
 type ParcelResource = { batchHubId: string | null; riderUserId: string | null };
 export type ParcelListFilters = {
+  sortBy?: "orderId" | "trackingNumber" | "pickupDate" | "shopName" | "customerName" | "township" | "deliveryFee" | "codAmount" | "riderName" | "status";
+  sortDirection?: "asc" | "desc";
   queue?: "to-assign" | "with-riders" | "rescheduled" | "return-to-os" | "overdue";
   batchId?: string;
   riderId?: string;
@@ -317,8 +319,24 @@ export async function listParcels(actor: Actor, assignedToMe = false, filters: P
   const where = buildParcelListWhere(scope, assignedToMe, filters);
   const page = filters.page ?? 1;
   const pageSize = filters.pageSize ?? 50;
+  const direction = filters.sortDirection ?? "asc";
+  const sortOrders: Record<NonNullable<ParcelListFilters["sortBy"]>, Prisma.ParcelOrderByWithRelationInput> = {
+    orderId: { orderId: direction },
+    trackingNumber: { trackingSequence: { sort: direction, nulls: "last" } },
+    pickupDate: { batch: { pickupDate: direction } },
+    shopName: { batch: { shop: { name: direction } } },
+    customerName: { customerName: direction },
+    township: { township: direction },
+    deliveryFee: { deliveryFee: direction },
+    codAmount: { codAmount: direction },
+    riderName: { rider: { user: { name: direction } } },
+    status: { status: direction },
+  };
+  const orderBy: Prisma.ParcelOrderByWithRelationInput[] = filters.sortBy
+    ? [sortOrders[filters.sortBy], ...(filters.sortBy === "trackingNumber" ? [{ trackingNumber: direction } satisfies Prisma.ParcelOrderByWithRelationInput] : []), { id: "asc" }]
+    : [{ updatedAt: "desc" }, { id: "asc" }];
   const [items, total] = await Promise.all([
-    prisma.parcel.findMany({ where, orderBy: [{ updatedAt: "desc" }, { id: "asc" }], include: { batch: { include: { shop: true } }, townshipRelation: { include: { district: { include: { regionState: true } } } }, zoneRelation: true, rider: { include: { user: { select: { id: true, email: true, name: true, role: true, locale: true } } } }, linkGroup: { select: { id: true, address: true, baseDeliveryFee: true, totalDeliveryFee: true } } }, skip: (page - 1) * pageSize, take: pageSize }),
+    prisma.parcel.findMany({ where, orderBy, include: { batch: { include: { shop: true } }, townshipRelation: { include: { district: { include: { regionState: true } } } }, zoneRelation: true, rider: { include: { user: { select: { id: true, email: true, name: true, role: true, locale: true } } } }, linkGroup: { select: { id: true, address: true, baseDeliveryFee: true, totalDeliveryFee: true } } }, skip: (page - 1) * pageSize, take: pageSize }),
     prisma.parcel.count({ where }),
   ]);
   return { items, total, page, pageSize };

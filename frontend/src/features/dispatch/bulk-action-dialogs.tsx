@@ -1,0 +1,21 @@
+import { useTranslation } from "react-i18next";
+import { ModalPortal } from "@/components/modal-portal";
+
+const control = "rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-[#1598ef] dark:border-white/10 dark:bg-[#181a1d] dark:text-slate-100";
+type Command = { isPending: boolean; isError: boolean; error: Error | null };
+type Props = {
+  returnOpen: boolean; rescheduleOpen: boolean; selectedCount: number;
+  returnDate: string; onReturnDate: (value: string) => void;
+  returnRequestPending: boolean; confirmReturns: Command;
+  onConfirmReturns: () => void; onCloseReturn: () => void;
+  rescheduleDate: string; onRescheduleDate: (value: string) => void;
+  rescheduleReason: string; onRescheduleReason: (value: string) => void;
+  reschedule: Command; onReschedule: () => void; onCloseReschedule: () => void;
+};
+export function DispatchBulkDialogs({ returnOpen, rescheduleOpen, selectedCount, returnDate, onReturnDate, returnRequestPending, confirmReturns, onConfirmReturns, onCloseReturn, rescheduleDate, onRescheduleDate, rescheduleReason, onRescheduleReason, reschedule, onReschedule, onCloseReschedule }: Props) {
+  const { t } = useTranslation();
+  return <>
+      {returnOpen && <ModalPortal><div className="fixed inset-0 z-[100] grid place-items-center bg-black/55 p-4"><form role="dialog" aria-modal="true" aria-labelledby="return-bulk-title" onSubmit={event => { event.preventDefault(); if (!confirmReturns.isPending) onConfirmReturns(); }} className="w-full max-w-lg rounded-2xl bg-white p-6 dark:bg-[#181a1d]"><h2 id="return-bulk-title" className="text-xl font-bold">{t("confirmReturnedToOs")}</h2><p className="mt-3 text-sm text-slate-500">{t("confirmReturnedToOsHelp", { count: selectedCount })}</p><label className="mt-4 block text-sm font-bold">{t("businessDate")}<input autoFocus required type="date" disabled={Boolean(returnRequestPending)} value={returnDate} onChange={event => onReturnDate(event.target.value)} className={`${control} mt-1 w-full`} /></label>{confirmReturns.isError && <p role="alert" className="mt-3 text-sm text-rose-600">{confirmReturns.error instanceof Error ? confirmReturns.error.message : t("loadError")}</p>}{returnRequestPending && confirmReturns.isError && <p role="alert">{t("paymentRetryUnchanged")}</p>}<div className="mt-5 flex justify-end gap-2"><button type="button" disabled={confirmReturns.isPending || Boolean(returnRequestPending)} onClick={() => onCloseReturn()} className={control}>{t("cancel")}</button><button disabled={confirmReturns.isPending} className="rounded-lg bg-sky-600 px-4 py-2 text-white disabled:opacity-40">{t(confirmReturns.isPending ? "loading" : "confirmReturnedToOs")}</button></div></form></div></ModalPortal>}
+      {rescheduleOpen && <ModalPortal><div className="fixed inset-0 z-[100] grid place-items-center bg-black/55 p-4"><form role="dialog" aria-modal="true" aria-labelledby="reschedule-title" onSubmit={event => { event.preventDefault(); if (!reschedule.isPending) onReschedule(); }} className="w-full max-w-lg rounded-2xl bg-white p-6 dark:bg-[#181a1d]"><h2 id="reschedule-title" className="text-xl font-bold">{t("rescheduleParcels")}</h2><p className="mt-2 text-sm text-slate-500">{t("rescheduleHelp")}</p><label className="mt-4 block text-sm font-bold">{t("plannedDeliveryDate")}<input autoFocus required type="date" value={rescheduleDate} onChange={event => onRescheduleDate(event.target.value)} className={`${control} mt-1 w-full`} /></label><label className="mt-4 block text-sm font-bold">{t("reason")}<textarea required minLength={3} value={rescheduleReason} onChange={event => onRescheduleReason(event.target.value)} className={`${control} mt-1 w-full`} /></label>{reschedule.isError && <p role="alert" className="mt-3 text-sm text-rose-600">{reschedule.error instanceof Error ? reschedule.error.message : t("loadError")}</p>}<div className="mt-5 flex justify-end gap-2"><button type="button" disabled={reschedule.isPending} onClick={() => onCloseReschedule()} className={control}>{t("cancel")}</button><button disabled={reschedule.isPending} className="rounded-lg bg-sky-600 px-4 py-2 text-white disabled:opacity-40">{t(reschedule.isPending ? "loading" : "save")}</button></div></form></div></ModalPortal>}
+  </>;
+}

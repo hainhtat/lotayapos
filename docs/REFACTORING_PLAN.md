@@ -81,6 +81,8 @@ backend/src/validators/finance/
 
 ## Phase 2 — Dispatch workspace decomposition
 
+**Status: complete.** The page is a route wrapper; feature hooks own reads, previews, commands, and invalidation. Queue controls, table, manifests, and outcome/return/link dialogs are separate views.
+
 ### Target modules
 
 ```text
@@ -118,6 +120,8 @@ frontend/src/features/dispatch/
 
 ## Phase 3 — Batch Detail decomposition
 
+**Status: complete.** The page coordinates feature hooks and focused views. Draft rules, storage, parcel entry/editing, manifest import/review, saved parcels, and finalization have separate owners.
+
 ### Target modules
 
 ```text
@@ -142,6 +146,8 @@ frontend/src/features/batches/detail/
 
 ## Phase 4 — Shared UI and cleanup
 
+**Status: complete.** Existing shared parcel-details and manifest-status controls remain reused. Parcel projections stay feature-specific because their fields and permissions differ; no universal parcel table was introduced.
+
 - Adopt shared controls during feature extraction when two or more workflows share the same interface.
 - Consolidate parcel-table behavior only after Dispatch and Batch modules expose matching needs; do not force a universal table abstraction.
 - Remove compatibility exports, dead code, duplicate types, obsolete tests, and stale comments.
@@ -160,3 +166,11 @@ frontend/src/features/batches/detail/
 ## Definition of done
 
 The refactor is complete only when all phase acceptance gates pass, the three monoliths meet their orchestration targets, `finance.service.ts` is removed, no temporary compatibility import remains, and the full repository validation is green. Test counts or line reductions alone do not qualify as architectural completion.
+
+## Completion evidence (2026-10-06)
+
+- Finance: `finance.service.ts` is absent, Finance routes contain 57 lines, and no production or test import points to the old service. The largest Finance domain modules are rider settlements (591 lines) and OS settlements (578 lines).
+- Dispatch: `operations-page.tsx` is 6 lines; its feature workspace, layout view, and controller are 7, 70, and 92 lines. Reads and preview queries live in `use-dispatch-data.ts`; request bodies and invalidation live in `use-dispatch-commands.ts`.
+- Batch Detail: `batch-detail-page.tsx` is 138 lines. Feature hooks own API access, draft storage, and manifest import. Parcel edit, finalization, entry, manifest review, and saved table are focused views. No page or view constructs API requests.
+- No temporary compatibility re-export of the former page helpers remains. The remaining parcel types are distinct API/view projections, so consolidating them would obscure their different data contracts.
+- Verification: backend tests, typecheck, lint, and build passed; frontend tests, typecheck, lint, and build passed. Focused tests cover Dispatch workflows, Batch Detail draft rules and failed manifest retry, and parcel edit behavior.

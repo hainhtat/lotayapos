@@ -4,6 +4,7 @@ const routeRoles: Record<string, AppRole[]> = {
   "/operations/batches": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER"],
   "/operations/dispatch": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER","AUDITOR"],
   "/operations/returns": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER","AUDITOR"],
+  "/operations/review": ["SUPERADMIN","OPERATIONS_MANAGER"],
   "/finance": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","AUDITOR"],
   "/reports": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","AUDITOR"],
   "/settings/users": ["SUPERADMIN"],

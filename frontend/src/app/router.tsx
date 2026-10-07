@@ -9,6 +9,7 @@ const AppShell = lazy(() => import("@/components/app-shell").then((module) => ({
 const Dashboard = lazy(() => import("@/pages/dashboard").then((module) => ({ default: module.Dashboard })));
 const OperationsPage = lazy(() => import("@/pages/operations-page").then((module) => ({ default: module.OperationsPage })));
 const OperationsReturnsPage = lazy(() => import("@/pages/operations-returns-page").then((module) => ({ default: module.OperationsReturnsPage })));
+const OperationsReviewPage = lazy(() => import("@/pages/operations-review-page").then((module) => ({ default: module.OperationsReviewPage })));
 const BatchesPage = lazy(() => import("@/pages/batches-page").then((module) => ({ default: module.BatchesPage })));
 const FinancePage = lazy(() => import("@/pages/finance-page").then((module) => ({ default: module.FinancePage })));
 const SettingsPage = lazy(() => import("@/pages/settings-page").then((module) => ({ default: module.SettingsPage })));
@@ -63,6 +64,7 @@ export const router = createBrowserRouter([
           { path: "operations/batches", element: lazyElement(<BatchesPage />) },
           { path: "operations/dispatch", element: lazyElement(<OperationsPage />) },
           { path: "operations/returns", element: lazyElement(<OperationsReturnsPage />) },
+          { path: "operations/review", element: lazyElement(<OperationsReviewPage />) },
           { path: "finance", element: lazyElement(<FinancePage />) },
           { path: "finance/overview", element: lazyElement(<FinancePage />) },
           { path: "finance/settlements", element: lazyElement(<FinancePage />) },

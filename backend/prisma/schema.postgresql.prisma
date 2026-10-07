@@ -342,6 +342,7 @@ model Parcel {
   batchId                String
   batch                  Batch               @relation(fields: [batchId], references: [id])
   trackingNumber         String              @unique
+  trackingSequence       Int?
   orderId                String?
   customerName           String
   customerPhone          String?
@@ -377,6 +378,7 @@ model Parcel {
   updatedAt              DateTime            @updatedAt
 
   @@index([status])
+  @@index([trackingSequence, trackingNumber, id])
   @@index([orderId])
   @@index([batchId, status, riderId])
   @@index([zone, township])

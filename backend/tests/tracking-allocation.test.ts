@@ -88,6 +88,9 @@ describe("bulk parcel tracking allocation", () => {
     expect(new Set(allocated).size).toBe(2);
     expect(allocated).not.toContain(staleTrackingNumber);
     expect(allocated.every((value: string) => /^LTY-\d+$/.test(value))).toBe(true);
+    const saved = await prisma.parcel.findMany({ where: { batchId, trackingNumber: { in: allocated } }, select: { trackingNumber: true, trackingSequence: true } });
+    expect(saved).toHaveLength(2);
+    expect(saved.every((parcel) => parcel.trackingSequence === Number(parcel.trackingNumber.slice(4)))).toBe(true);
   });
 
   test("accepts new clients that omit tracking previews", async () => {

@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Package, Plus, RefreshCw } from "lucide-react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Plus, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { CreateBatchDialog } from "./create-batch-dialog";
-import { OperationsReturnQueue } from "./operations-return-queue";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { useAuth } from "@/app/auth";
 import { OsAccountsPanel } from "@/components/os-accounts-panel";
@@ -23,7 +22,6 @@ type BatchSummary = {
   shop: { name: string };
   parcels: Array<{ status: string }>;
 };
-type Alert = { id: string; type: string; message: string; createdAt: string };
 
 const control =
   "rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none transition focus:border-[#1598ef] focus:ring-2 focus:ring-[#1598ef]/20 dark:border-white/10 dark:bg-[#121416] dark:text-slate-100";
@@ -40,8 +38,6 @@ export function BatchesPage() {
   const { t } = useTranslation();
   const { user } = useAuth();
   const navigate = useNavigate();
-  const location = useLocation();
-  const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [page, setPage] = useState(1);
   const [view, setView] = useState("active");
@@ -63,23 +59,6 @@ export function BatchesPage() {
     },
     placeholderData: (previous) => previous,
   });
-  const alerts = useQuery({
-    queryKey: ["alerts"],
-    queryFn: () => api<Alert[]>("/operations/alerts").then((r) => r.data),
-  });
-
-  useEffect(() => {
-    if (location.hash !== "#alerts") return;
-    const node = document.getElementById("alerts");
-    if (node) node.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [location.hash, alerts.isFetched]);
-
-  const acknowledge = useMutation({
-    mutationFn: (alertId: string) => api(`/operations/alerts/${alertId}/acknowledge`, { method: "POST" }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["alerts"] });
-    },
-  });
 
   const activeBatchId = new URLSearchParams(window.location.search).get("batchId") ?? "";
 
@@ -90,7 +69,7 @@ export function BatchesPage() {
           <h1 className="font-display text-3xl font-bold">{t("allBatches")}</h1>
           <p className="mt-1 text-sm text-slate-500">{t("allBatchesDescription")}</p>
         </div>
-        <div className="flex gap-2"><button type="button" onClick={() => { void batches.refetch(); void alerts.refetch(); }} className={`${control} flex items-center gap-2 font-bold`}><RefreshCw size={14}/>{t("refresh")}</button><button type="button" onClick={()=>setShowCreate(true)} className="flex items-center gap-2 rounded-md bg-[#1598ef] px-3 py-2 text-xs font-bold text-white"><Plus size={14}/>{t("createNewBatch")}</button></div>
+        <div className="flex gap-2"><button type="button" onClick={() => void batches.refetch()} className={`${control} flex items-center gap-2 font-bold`}><RefreshCw size={14}/>{t("refresh")}</button><button type="button" onClick={()=>setShowCreate(true)} className="flex items-center gap-2 rounded-md bg-[#1598ef] px-3 py-2 text-xs font-bold text-white"><Plus size={14}/>{t("createNewBatch")}</button></div>
       </div>
 
       <section className="mt-5 rounded-xl border border-black/5 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-[#181a1d]">
@@ -188,57 +167,9 @@ export function BatchesPage() {
         )}
       </section>
 
-      <OperationsReturnQueue />
       {view === "history" && user?.role === "SUPERADMIN" && <HistoricalSettlementPanel />}
       {settling && <OsAccountsPanel initialBatchId={settling.id} initialHubId={settling.hubId} onPaymentClose={() => setSettling(null)} />}
 
-      <section
-        id="alerts"
-        className="mt-5 rounded-xl border border-black/5 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-[#181a1d]"
-      >
-        <div className="flex items-center gap-3">
-          <div className="grid h-9 w-9 place-items-center rounded-xl bg-[#fff6e5] text-[#db8d00]">
-            <AlertTriangle size={18} />
-          </div>
-          <div>
-            <h2 className="font-display text-base font-bold">{t("alerts")}</h2>
-            <p className="text-xs text-slate-500">{t("alertsDescription")}</p>
-          </div>
-        </div>
-        <div className="mt-4 space-y-2">
-          {alerts.isLoading ? (
-            <p className="py-6 text-center text-sm text-slate-400">{t("loading")}</p>
-          ) : alerts.isError ? (
-            <p className="py-6 text-center text-sm text-rose-500">{t("loadError")}</p>
-          ) : (
-            (alerts.data ?? []).map((a) => (
-              <div
-                key={a.id}
-                className="flex items-center justify-between gap-4 rounded-xl border border-[#ffe8b5] bg-[#fffaf0] p-3 dark:border-[#654d20] dark:bg-[#2b2416]"
-              >
-                <div>
-                  <p className="text-sm font-semibold">{a.message}</p>
-                  <p className="mt-1 text-xs text-slate-500">{new Date(a.createdAt).toLocaleString()}</p>
-                </div>
-                <button
-                  type="button"
-                  disabled={acknowledge.isPending}
-                  onClick={() => acknowledge.mutate(a.id)}
-                  className="rounded-lg border border-[#db8d00] px-3 py-1.5 text-xs font-bold text-[#a96c00] disabled:opacity-50"
-                >
-                  {t("acknowledge")}
-                </button>
-              </div>
-            ))
-          )}
-          {!alerts.isLoading && !alerts.isError && !alerts.data?.length && (
-            <div className="grid place-items-center py-6 text-center">
-              <Package size={24} className="text-[#12a66a]" />
-              <p className="mt-3 text-sm text-slate-500">{t("allClear")}</p>
-            </div>
-          )}
-        </div>
-      </section>
       {showCreate&&<CreateBatchDialog shops={masters.data?.shops??[]} hubs={masters.data?.hubs??[]} onClose={()=>setShowCreate(false)}/>} 
     </div>
   );

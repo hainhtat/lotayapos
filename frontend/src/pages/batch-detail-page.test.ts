@@ -1,3 +1,4 @@
+import type { ParcelRow } from "@/features/batches/detail/batch-detail-types";
 import { describe, expect, it } from "vitest";
 import {
   appendParcelDraft,
@@ -7,14 +8,14 @@ import {
   hydrateParcelRowLocations,
   isParcelRowComplete,
   isParcelRowLocationConsistent,
+  isStructuredParcelPaste,
   isResolvedTownshipId,
   parseParcelGrid,
   restoreParcelDraft,
   normalizeManifestRow,
   manifestReviewSummary,
   townshipsForRegion,
-  type ParcelRow,
-} from "./batch-detail-page";
+} from "@/features/batches/detail/parcel-draft-rules";
 
 const blankRow = (): ParcelRow => ({
   orderId: "",
@@ -124,6 +125,13 @@ describe("parseParcelGrid", () => {
         codAmount: "10000",
       },
     ]);
+  });
+
+  it("keeps single-cell paste in the focused input while accepting complete CSV or spreadsheet rows", () => {
+    expect(isStructuredParcelPaste("Customer name")).toBe(false);
+    expect(isStructuredParcelPaste("Road, Yangon")).toBe(false);
+    expect(isStructuredParcelPaste('OS-1,Ma Su,"Road, Yangon",Yangon,West Yangon,Hlaing,,09123,25000')).toBe(true);
+    expect(isStructuredParcelPaste("OS-1\tMa Su\tRoad\tYangon\tWest Yangon\tHlaing\t\t09123\t25000")).toBe(true);
   });
 });
 

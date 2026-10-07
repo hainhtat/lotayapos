@@ -2,6 +2,8 @@ import { body, param, query } from "express-validator";
 
 export const parcelListValidation = [
   query("queue").optional().isIn(["to-assign", "with-riders", "rescheduled", "return-to-os", "overdue"]),
+  query("sortBy").optional().isIn(["orderId", "trackingNumber", "pickupDate", "shopName", "customerName", "township", "deliveryFee", "codAmount", "riderName", "status"]),
+  query("sortDirection").optional().isIn(["asc", "desc"]),
   query("assignedToMe").optional().isBoolean(),
   query("batchId").optional().isString().trim().notEmpty(),
   query("riderId").optional().isString().trim().notEmpty(),

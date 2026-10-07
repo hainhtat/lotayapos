@@ -33,7 +33,9 @@ export function VoidParcelDialog({ parcel, batchId, finalized, onClose, onSucces
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["batch", batchId] }),
         queryClient.invalidateQueries({ queryKey: ["batches"] }),
+        queryClient.invalidateQueries({ queryKey: ["operations-batches"] }),
         queryClient.invalidateQueries({ queryKey: ["parcels"] }),
+        queryClient.invalidateQueries({ queryKey: ["overdue-unsent"] }),
         queryClient.invalidateQueries({ queryKey: ["parcel-detail", parcel.id] }),
         queryClient.invalidateQueries({ queryKey: ["parcel-field-history", parcel.id] }),
         queryClient.invalidateQueries({ queryKey: ["os-accounts"] }),

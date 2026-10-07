@@ -569,6 +569,112 @@ describe("protected API contracts", () => {
     expect(response.body.error.code).toBe("VALIDATION_ERROR");
   });
 
+  test("rejects unknown parcel sort fields and directions", async () => {
+    for (const query of ["sortBy=updatedAt", "sortBy=codAmount&sortDirection=sideways"]) {
+      const response = await request(app)
+        .get(`/api/v1/parcels?${query}`)
+        .set("Authorization", `Bearer ${token("OPERATIONS_MANAGER")}`);
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe("VALIDATION_ERROR");
+    }
+  });
+
+  test("sorts parcels before pagination with a stable ID tie-breaker", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const shopId = `sort-shop-${suffix}`;
+    const batchId = `sort-batch-${suffix}`;
+    const ids = ["a", "b", "c", "d"].map((letter) => `sort-parcel-${suffix}-${letter}`);
+    await prisma.onlineShop.create({ data: { id: shopId, name: `Sort shop ${suffix}` } });
+    try {
+      await prisma.batch.create({ data: { id: batchId, shopId, hubId: "contract-hub", pickupDate: new Date("2026-09-15T00:00:00.000Z"), label: `Sort batch ${suffix}` } });
+      await prisma.parcel.createMany({ data: ids.map((id, index) => ({ id, batchId, trackingNumber: `SORT-${suffix}-${index}`, customerName: `Sort ${index}`, address: "Sort address", codAmount: [200, 100, 100, 300][index], status: "CREATED" })) });
+
+      const fetch = async (page: number, direction: "asc" | "desc") => {
+        const response = await request(app)
+          .get(`/api/v1/parcels?batchId=${batchId}&sortBy=codAmount&sortDirection=${direction}&page=${page}&pageSize=2`)
+          .set("Authorization", `Bearer ${token("OPERATIONS_MANAGER")}`);
+        expect(response.status).toBe(200);
+        expect(response.body.pagination).toMatchObject({ page, pageSize: 2, total: 4 });
+        return response.body.data.map((parcel: { id: string }) => parcel.id);
+      };
+      expect([...(await fetch(1, "asc")), ...(await fetch(2, "asc"))]).toEqual([ids[1], ids[2], ids[0], ids[3]]);
+      expect([...(await fetch(1, "desc")), ...(await fetch(2, "desc"))]).toEqual([ids[3], ids[0], ids[1], ids[2]]);
+    } finally {
+      await prisma.parcel.deleteMany({ where: { batchId } });
+      await prisma.batch.deleteMany({ where: { id: batchId } });
+      await prisma.onlineShop.deleteMany({ where: { id: shopId } });
+    }
+  });
+
+  test("sorts generated tracking numbers numerically across pages", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const shopId = `tracking-sort-shop-${suffix}`;
+    const batchId = `tracking-sort-batch-${suffix}`;
+    await prisma.onlineShop.create({ data: { id: shopId, name: `Tracking sort shop ${suffix}` } });
+    try {
+      await prisma.batch.create({ data: { id: batchId, shopId, hubId: "contract-hub", pickupDate: new Date("2026-09-17T00:00:00.000Z"), label: `Tracking sort batch ${suffix}` } });
+      await prisma.parcel.createMany({ data: [
+        { batchId, trackingNumber: "LTY-9998", trackingSequence: 9998, customerName: "A", address: "A", codAmount: 0 },
+        { batchId, trackingNumber: "LTY-9999", trackingSequence: 9999, customerName: "B", address: "B", codAmount: 0 },
+        { batchId, trackingNumber: "LTY-10000", trackingSequence: 10000, customerName: "C", address: "C", codAmount: 0 },
+        { batchId, trackingNumber: `CUSTOM-${suffix}`, customerName: "D", address: "D", codAmount: 0 },
+      ] });
+      const fetch = async (page: number, direction: "asc" | "desc") => {
+        const response = await request(app)
+          .get(`/api/v1/parcels?batchId=${batchId}&sortBy=trackingNumber&sortDirection=${direction}&page=${page}&pageSize=2`)
+          .set("Authorization", `Bearer ${token("OPERATIONS_MANAGER")}`);
+        expect(response.status).toBe(200);
+        return response.body.data.map((parcel: { trackingNumber: string }) => parcel.trackingNumber);
+      };
+      expect([...(await fetch(1, "asc")), ...(await fetch(2, "asc"))]).toEqual(["LTY-9998", "LTY-9999", "LTY-10000", `CUSTOM-${suffix}`]);
+      expect([...(await fetch(1, "desc")), ...(await fetch(2, "desc"))]).toEqual(["LTY-10000", "LTY-9999", "LTY-9998", `CUSTOM-${suffix}`]);
+      const detail = await request(app)
+        .get(`/api/v1/operations/batches/${batchId}`)
+        .set("Authorization", `Bearer ${token("OPERATIONS_MANAGER")}`);
+      expect(detail.status).toBe(200);
+      expect(detail.body.data.parcels.map((parcel: { trackingNumber: string }) => parcel.trackingNumber))
+        .toEqual(["LTY-9998", "LTY-9999", "LTY-10000", `CUSTOM-${suffix}`]);
+    } finally {
+      await prisma.parcel.deleteMany({ where: { batchId } });
+      await prisma.batch.deleteMany({ where: { id: batchId } });
+      await prisma.onlineShop.deleteMany({ where: { id: shopId } });
+    }
+  });
+
+  test("sorts parcels by related pickup date and shop name", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const shopIds = [`sort-shop-a-${suffix}`, `sort-shop-z-${suffix}`];
+    const batchIds = [`sort-batch-a-${suffix}`, `sort-batch-z-${suffix}`];
+    const parcelIds = [`sort-related-a-${suffix}`, `sort-related-z-${suffix}`];
+    try {
+      await prisma.onlineShop.createMany({ data: [
+        { id: shopIds[0]!, name: `A shop ${suffix}` },
+        { id: shopIds[1]!, name: `Z shop ${suffix}` },
+      ] });
+      await prisma.batch.createMany({ data: [
+        { id: batchIds[0]!, shopId: shopIds[0]!, hubId: "contract-hub", pickupDate: new Date("2026-09-16T00:00:00.000Z"), label: `A batch ${suffix}` },
+        { id: batchIds[1]!, shopId: shopIds[1]!, hubId: "contract-hub", pickupDate: new Date("2026-09-15T00:00:00.000Z"), label: `Z batch ${suffix}` },
+      ] });
+      await prisma.parcel.createMany({ data: [
+        { id: parcelIds[0]!, batchId: batchIds[0]!, trackingNumber: `SORT-REL-A-${suffix}`, customerName: "A", address: "Address", codAmount: 0 },
+        { id: parcelIds[1]!, batchId: batchIds[1]!, trackingNumber: `SORT-REL-Z-${suffix}`, customerName: "Z", address: "Address", codAmount: 0 },
+      ] });
+      const sortedIds = async (sortBy: "pickupDate" | "shopName") => {
+        const response = await request(app)
+          .get(`/api/v1/parcels?trackingNumber=SORT-REL-&sortBy=${sortBy}&sortDirection=asc`)
+          .set("Authorization", `Bearer ${token("OPERATIONS_MANAGER")}`);
+        expect(response.status).toBe(200);
+        return response.body.data.map((parcel: { id: string }) => parcel.id);
+      };
+      expect(await sortedIds("pickupDate")).toEqual([parcelIds[1], parcelIds[0]]);
+      expect(await sortedIds("shopName")).toEqual([parcelIds[0], parcelIds[1]]);
+    } finally {
+      await prisma.parcel.deleteMany({ where: { id: { in: parcelIds } } });
+      await prisma.batch.deleteMany({ where: { id: { in: batchIds } } });
+      await prisma.onlineShop.deleteMany({ where: { id: { in: shopIds } } });
+    }
+  });
+
   test("validates configured reason-code creation", async () => {
     const response = await request(app)
       .post("/api/v1/master-data/reason-codes")
