@@ -6,6 +6,22 @@ import { useDebouncedValue } from "@/lib/use-debounced-value";
 import type { DispatchFilters as Filters } from "@/lib/dispatch-filters";
 import type { Parcel, Township, Zone, BatchSummary, MasterData, ReasonCode, OsReturnListPreview, PaidToOsHandoverPreview } from "./dispatch-types";
 
+function responseItems<T>(data: unknown, label: string): T[] {
+  if (Array.isArray(data)) return data as T[];
+  if (data && typeof data === "object" && "items" in data && Array.isArray(data.items)) return data.items as T[];
+  throw new Error(`Invalid ${label} list response`);
+}
+
+function masterData(data: unknown): MasterData {
+  if (!data || typeof data !== "object" || !("riders" in data) || !Array.isArray(data.riders)) {
+    throw new Error("Invalid master data response");
+  }
+  if ("shops" in data && data.shops != null && !Array.isArray(data.shops)) {
+    throw new Error("Invalid master data response");
+  }
+  return data as MasterData;
+}
+
 export function useDispatchData(filters: Filters, page: number, editing: Parcel | null, townshipId: string) {
   const debouncedTextFilters=useDebouncedValue({trackingNumber:filters.trackingNumber,orderId:filters.orderId,customerName:filters.customerName,township:filters.township},350);
   const queryFilters={...filters,...debouncedTextFilters};
@@ -19,10 +35,10 @@ export function useDispatchData(filters: Filters, page: number, editing: Parcel 
     queryFn: async () => {
       const response = await apiRaw(`/parcels?${queryString}`);
       const body = (await response.json()) as {
-        data: Parcel[];
+        data: unknown;
         pagination?: { page: number; pageSize: number; total: number; totalPages: number };
       };
-      return { items: body.data ?? [], pagination: body.pagination };
+      return { items: responseItems<Parcel>(body.data, "parcel"), pagination: body.pagination };
     },
   });
   const overdueUnsent = useQuery({
@@ -34,11 +50,11 @@ export function useDispatchData(filters: Filters, page: number, editing: Parcel 
   });
   const masters = useQuery({
     queryKey: ["master-data"],
-    queryFn: () => api<MasterData>("/master-data").then((r) => r.data),
+    queryFn: () => api<unknown>("/master-data").then((r) => masterData(r.data)),
   });
   const batches = useQuery({
     queryKey: ["operations-batches"],
-    queryFn: () => api<BatchSummary[]>("/operations/batches").then((r) => r.data),
+    queryFn: () => api<unknown>("/operations/batches").then((r) => responseItems<BatchSummary>(r.data, "batch")),
   });
   const reasons = useQuery({
     queryKey: ["reason-codes"],

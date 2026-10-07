@@ -65,6 +65,42 @@ describe("OperationsPage", () => {
     await waitFor(() => expect(apiRawMock).toHaveBeenCalledWith(expect.stringMatching(/^\/parcels\?queue=return-to-os/)));
   });
 
+  it("keeps Dispatch usable when the batch list arrives inside an items object", async () => {
+    mockParcelList([]);
+    apiMock.mockImplementation((path: string) => Promise.resolve({
+      data: path === "/operations/batches"
+        ? { items: [{ id: "batch-1", label: "October", shop: { name: "Shop" } }] }
+        : path === "/master-data"
+          ? { riders: [], shops: [] }
+          : [],
+    }));
+    renderPage();
+    expect(await screen.findByRole("option", { name: "October · Shop" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Dispatch queue" })).toBeInTheDocument();
+  });
+
+  it("shows a retryable error for an invalid batch-list response", async () => {
+    mockParcelList([]);
+    apiMock.mockImplementation((path: string) => Promise.resolve({
+      data: path === "/operations/batches" ? { unexpected: true } : path === "/master-data" ? { riders: [], shops: [] } : [],
+    }));
+    renderPage();
+    expect(await screen.findByRole("alert")).toHaveTextContent("We couldn’t load this data.");
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Dispatch queue" })).toBeInTheDocument();
+  });
+
+  it("keeps Dispatch open when master data contains invalid lists", async () => {
+    mockParcelList([]);
+    apiMock.mockImplementation((path: string) => Promise.resolve({
+      data: path === "/master-data" ? { riders: {}, shops: {} } : [],
+    }));
+    renderPage();
+    expect(await screen.findByRole("alert")).toHaveTextContent("We couldn’t load this data.");
+    expect(screen.getByRole("heading", { level: 1, name: "Dispatch queue" })).toBeInTheDocument();
+    expect(screen.getAllByRole("option", { name: "All" }).length).toBeGreaterThan(0);
+  });
+
   it("does not crash when the return queue has an unexpected response shape", async () => {
     apiRawMock.mockResolvedValue({ json: async () => ({ data: { unexpected: true } }) });
     apiMock.mockImplementation((path: string) => path === "/operations/parcels/paid-to-os/preview"

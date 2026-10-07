@@ -170,6 +170,22 @@ export function DispatchQueuePanel({ model }: { model: ReturnType<typeof useDisp
             />
           </label>
         </div>
+        {batches.isError && (
+          <div className="mt-3 text-sm text-rose-600 dark:text-rose-400">
+            <p role="alert">{t("loadError")}</p>
+            <button type="button" onClick={() => void batches.refetch()} className="mt-1 font-bold underline">
+              {t("retry")}
+            </button>
+          </div>
+        )}
+        {masters.isError && (
+          <div className="mt-3 text-sm text-rose-600 dark:text-rose-400">
+            <p role="alert">{t("loadError")}</p>
+            <button type="button" onClick={() => void masters.refetch()} className="mt-1 font-bold underline">
+              {t("retry")}
+            </button>
+          </div>
+        )}
         <div className="mt-2 flex justify-end">
           <button
             type="button"
