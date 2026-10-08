@@ -86,6 +86,7 @@ export function PostPickupAdvancesPanel({
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["operations-batches"] }),
         queryClient.invalidateQueries({ queryKey: ["ledger"] }),
+        queryClient.invalidateQueries({ queryKey: ["wallet-alerts"] }),
       ]);
     },
     onError: (error) => onMessage(error instanceof Error ? error.message : t("loadError")),

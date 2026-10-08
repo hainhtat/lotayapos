@@ -137,6 +137,7 @@ describe("OperationsPage", () => {
     await waitFor(() => expect(apiRawMock).toHaveBeenCalledWith(expect.stringMatching(/^\/parcels\?queue=overdue/)));
     const last = apiRawMock.mock.calls.filter(([path]) => path.startsWith("/parcels?")).at(-1)![0];
     expect(last).not.toContain("assignmentStatus");
+    expect(new URLSearchParams(last.split("?")[1]).get("excludeVoided")).toBe("true");
   });
 
   it("submits the backend status field with actual COD collected", async () => {

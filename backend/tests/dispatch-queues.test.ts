@@ -5,6 +5,17 @@ const scope = { id: "manager", role: "OPERATIONS_MANAGER", hubId: "hub-a", rider
 describe("dispatch work queues", () => {
   afterEach(() => jest.restoreAllMocks());
 
+  test("excludes voided entries when requested without changing the audit list", () => {
+    expect(buildParcelListWhere(scope, false, { excludeVoided: true })).toEqual({ AND: [
+      { batch: { hubId: "hub-a" } },
+      { status: { not: "VOIDED" } },
+    ] });
+    expect(buildParcelListWhere(scope, false, { status: "VOIDED" })).toEqual({ AND: [
+      { batch: { hubId: "hub-a" } },
+      { status: "VOIDED" },
+    ] });
+  });
+
   test("overdue uses first recorded timestamp and keeps hub and batch scope", () => {
     jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-16T12:00:00Z"));
     expect(buildParcelListWhere(scope, false, { queue: "overdue", batchId: "old-batch" })).toEqual({ AND: [

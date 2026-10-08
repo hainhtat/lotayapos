@@ -202,6 +202,7 @@ export type ParcelListFilters = {
   sortBy?: "orderId" | "trackingNumber" | "pickupDate" | "shopName" | "customerName" | "township" | "deliveryFee" | "codAmount" | "riderName" | "status";
   sortDirection?: "asc" | "desc";
   queue?: "to-assign" | "with-riders" | "rescheduled" | "return-to-os" | "overdue";
+  excludeVoided?: boolean;
   batchId?: string;
   riderId?: string;
   assignmentStatus?: "ASSIGNED" | "UNASSIGNED";
@@ -285,6 +286,7 @@ export function buildParcelListWhere(scope: ActorScope, assignedToMe = false, fi
   if (dateFrom && dateTo && dateFrom >= dateTo) throw new ApiError(400, "INVALID_DATE_RANGE", "dateFrom must be before dateTo");
   const conditions: Prisma.ParcelWhereInput[] = [];
   if (base) conditions.push(base);
+  if (filters.excludeVoided) conditions.push({ status: { not: "VOIDED" } });
   if (filters.queue) {
     const rescheduleCodes = ["DATE_CHANGE", "DELIVERY_DATE_CHANGE", "RESCHEDULE"];
     const notRescheduled = { OR: [{ reasonCode: null }, { reasonCode: { notIn: rescheduleCodes } }] };

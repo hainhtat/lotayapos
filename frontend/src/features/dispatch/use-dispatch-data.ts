@@ -28,7 +28,7 @@ export function useDispatchData(filters: Filters, page: number, editing: Parcel 
   const query = Object.entries(queryFilters)
     .filter(([, value]) => value)
     .map(([key, value]) => [key === "from" ? "dateFrom" : key === "to" ? "dateTo" : key, value]);
-  const queryString = new URLSearchParams([...query, ["page", String(page)], ["pageSize", "100"]]).toString();
+  const queryString = new URLSearchParams([...query, ["page", String(page)], ["pageSize", "100"], ["excludeVoided", "true"]]).toString();
 
   const parcels = useQuery({
     queryKey: ["parcels", queryString],

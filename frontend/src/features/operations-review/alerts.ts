@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useAuth } from "@/app/auth";
 
 export type OperationsAlert = {
   id: string;
@@ -10,7 +11,8 @@ export type OperationsAlert = {
 };
 
 export function useOperationsAlerts(enabled = true) {
-  return useQuery({ queryKey: ["alerts"], queryFn: () => api<OperationsAlert[]>("/operations/alerts").then((response) => response.data), enabled, refetchInterval: 60_000 });
+  const user = useAuth().user;
+  return useQuery({ queryKey: ["alerts", user?.id ?? null], queryFn: () => api<OperationsAlert[]>("/operations/alerts").then((response) => response.data), enabled: enabled && Boolean(user), refetchInterval: 60_000 });
 }
 
 export function useAcknowledgeAlert() {

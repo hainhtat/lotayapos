@@ -8,4 +8,9 @@ describe("route access", () => {
     expect(canAccessRoute("SUPERADMIN", "/settings/users")).toBe(true);
     expect(canAccessRoute("OPERATIONS_MANAGER", "/settings/users")).toBe(false);
   });
+
+  it("lets Finance review wallet alerts without granting dispatchers access", () => {
+    expect(canAccessRoute("FINANCE", "/operations/review")).toBe(true);
+    expect(canAccessRoute("DISPATCHER", "/operations/review")).toBe(false);
+  });
 });

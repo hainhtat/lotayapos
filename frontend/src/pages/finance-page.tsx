@@ -58,7 +58,7 @@ function WalletAdjustmentDialog({ wallet, currentBalance, hubs, onClose, onSaved
       return api("/finance/cashbook/adjustments", { method: "POST", body: JSON.stringify({ businessDate, ...(hubId ? { hubId } : {}), wallet, amount: Math.abs(difference), direction: difference > 0 ? "INCREASE" : "DECREASE", reason: reason.trim(), idempotencyKey: idempotencyKey.current }) });
     },
     onSuccess: async () => {
-      await Promise.all(["ledger", "dashboard", "operations-batches"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+      await Promise.all(["ledger", "dashboard", "operations-batches", "wallet-alerts"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
       onSaved();
       onClose();
     },

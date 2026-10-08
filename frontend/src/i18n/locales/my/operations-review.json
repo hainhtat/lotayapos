@@ -14,5 +14,11 @@
   "reviewAlertType_PARTIAL": "တစ်စိတ်တစ်ပိုင်း ပို့ဆောင်မှု",
   "reviewAlertType_DATE_CHANGE": "ပို့ဆောင်ရက် ပြောင်းလဲထားသည်",
   "reviewOverdueReturns": "ရက်လွန် ပြန်အပ်စောင့် ပါဆယ်များ",
-  "reviewOverdueReturnsDescription": "ရက်လွန်နေသော Pending Return ပါဆယ်များ။ အခြား Return များကို စစ်ရန် Filter ကို သုံးပါ"
+  "reviewOverdueReturnsDescription": "ရက်လွန်နေသော Pending Return ပါဆယ်များ။ အခြား Return များကို စစ်ရန် Filter ကို သုံးပါ",
+  "walletAlertsTitle": "Wallet လက်ကျန် အနုတ်ပြမှုများ",
+  "walletAlertsDescription": "Wallet လက်ကျန် သုည သို့မဟုတ် အထက်သို့ ပြန်ရောက်သောအခါ ဤအသိပေးချက်များ အလိုအလျောက် ပျောက်သွားမည်",
+  "walletAlertsReviewDescription": "ငွေဖြည့်ရန် သို့မဟုတ် မှတ်တမ်းတင် ပြင်ဆင်ရန် လိုအပ်သော Wallet လက်ကျန်များကို စစ်ဆေးပါ",
+  "negativeWalletBalance": "Wallet လက်ကျန် အနုတ်ပြနေသည်",
+  "walletCurrentBalance": "လက်ကျန်: {{amount}} MMK",
+  "walletShortfall": "လိုနေသောငွေ: {{amount}} MMK"
 }

@@ -512,6 +512,8 @@ model JournalLine {
   account String
   debit   Int          @default(0)
   credit  Int          @default(0)
+
+  @@index([account, entryId])
 }
 
 model CashbookDay {

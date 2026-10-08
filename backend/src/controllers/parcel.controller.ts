@@ -4,6 +4,7 @@ import * as service from "../services/parcel.service.js";
 export const list: RequestHandler = async (req, res) => {
   const result = await service.listParcels({ id: req.auth!.sub, role: req.auth!.role }, req.query.assignedToMe === "true", {
   queue: req.query.queue as service.ParcelListFilters["queue"],
+  excludeVoided: req.query.excludeVoided === "true",
   sortBy: req.query.sortBy as service.ParcelListFilters["sortBy"],
   sortDirection: req.query.sortDirection as service.ParcelListFilters["sortDirection"],
   batchId: typeof req.query.batchId === "string" ? req.query.batchId : undefined,

@@ -14,5 +14,11 @@
   "reviewAlertType_PARTIAL": "Partial delivery",
   "reviewAlertType_DATE_CHANGE": "Delivery date changed",
   "reviewOverdueReturns": "Overdue pending returns",
-  "reviewOverdueReturnsDescription": "Pending Return parcels past their return due date. Use the filters to inspect other return items."
+  "reviewOverdueReturnsDescription": "Pending Return parcels past their return due date. Use the filters to inspect other return items.",
+  "walletAlertsTitle": "Negative wallet balances",
+  "walletAlertsDescription": "These alerts clear automatically when the wallet balance reaches zero or above.",
+  "walletAlertsReviewDescription": "Review wallet shortfalls that need funding or a recorded correction.",
+  "negativeWalletBalance": "Negative wallet balance",
+  "walletCurrentBalance": "Balance: {{amount}} MMK",
+  "walletShortfall": "Shortfall: {{amount}} MMK"
 }

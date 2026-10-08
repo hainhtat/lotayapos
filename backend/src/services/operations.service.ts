@@ -1,7 +1,7 @@
 import { prisma } from "../config/database.js";
 import { createHash } from "node:crypto";
 import { env } from "../config/env.js";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { ApiError } from "../utils/api-error.js";
 import { assertCashbookOpen } from "./finance/cashbook-policy.js";
 import { buildRiderCommissionLines, buildRiderReceivableRecognitionLines, calculateCommissionAmount, journalEntryIsUnreversed, nextVersionedJournalSourceId } from "./parcel.service.js";
@@ -506,6 +506,49 @@ export async function postPickupAdvances(batchId: string, input: { fundingWallet
 export async function listAlerts(actor: BatchActor) {
   const user = await assertOperationsReader(actor);
   return prisma.alert.findMany({ where: { acknowledgedAt: null, ...(user.role === "SUPERADMIN" ? {} : { parcel: { batch: { hubId: user.hubId } } }) }, include: { parcel: true }, orderBy: { createdAt: "desc" }, take: 50 });
+}
+
+const alertWallets = [
+  { account: "WALLET_CASH", wallet: "CASH" },
+  { account: "WALLET_KBZ_PAY", wallet: "KBZ_PAY" },
+  { account: "WALLET_WAVE_PAY", wallet: "WAVE_PAY" },
+] as const;
+
+export function negativeWalletAlerts(hubs: Array<{
+  id: string;
+  name: string;
+  lines: Array<{ account: string; _sum: { debit: number | null; credit: number | null } }>;
+}>) {
+  return hubs.flatMap((hub) => alertWallets.flatMap(({ account, wallet }) => {
+    const line = hub.lines.find((item) => item.account === account);
+    const debit = line?._sum.debit ?? 0;
+    const credit = line?._sum.credit ?? 0;
+    const balance = debit - credit;
+    if (![debit, credit, balance].every(Number.isSafeInteger)) throw new ApiError(422, "BALANCE_OUT_OF_RANGE", "Balance exceeds the supported amount range");
+    return balance < 0 ? [{ id: `${hub.id}:${wallet}`, hubId: hub.id, hubName: hub.name, wallet, balance, shortfall: -balance }] : [];
+  })).sort((left, right) => right.shortfall - left.shortfall);
+}
+
+export async function listNegativeWalletAlerts(actor: BatchActor) {
+  const user = await assertOperationsReader(actor);
+  if (!["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Wallet alerts are limited to finance and operations managers");
+  const hubs = await prisma.hub.findMany({
+    where: user.role === "SUPERADMIN" ? {} : { id: user.hubId! },
+    select: { id: true, name: true },
+  });
+  if (!hubs.length) return [];
+  const rows = await prisma.$queryRaw<Array<{ hubId: string; account: string; debit: bigint; credit: bigint }>>(Prisma.sql`
+    SELECT e."hubId" AS "hubId", l."account" AS "account", SUM(l."debit") AS "debit", SUM(l."credit") AS "credit"
+    FROM "JournalLine" l JOIN "JournalEntry" e ON e."id" = l."entryId"
+    WHERE e."hubId" IN (${Prisma.join(hubs.map((hub) => hub.id))})
+      AND l."account" IN (${Prisma.join(alertWallets.map(({ account }) => account))})
+    GROUP BY e."hubId", l."account"
+  `);
+  const balances = hubs.map((hub) => ({
+    ...hub,
+    lines: rows.filter((row) => row.hubId === hub.id).map((row) => ({ account: row.account, _sum: { debit: Number(row.debit), credit: Number(row.credit) } })),
+  }));
+  return negativeWalletAlerts(balances);
 }
 
 export async function acknowledgeAlert(alertId: string, actor: BatchActor) {

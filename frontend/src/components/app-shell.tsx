@@ -37,7 +37,7 @@ const rolesByPath: Record<string,string[]> = {
   "/operations/batches": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER"],
   "/operations/dispatch": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER","AUDITOR"],
   "/operations/returns": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","DISPATCHER","AUDITOR"],
-  "/operations/review": ["SUPERADMIN","OPERATIONS_MANAGER"],
+  "/operations/review": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE"],
   "/finance": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","AUDITOR"],
   "/reports": ["SUPERADMIN","OPERATIONS_MANAGER","FINANCE","AUDITOR"],
   "/settings": ["SUPERADMIN","OPERATIONS_MANAGER"],
@@ -75,7 +75,7 @@ export function AppShell() {
   const { user, logout } = useAuth();
   const { mode, toggle } = useTheme();
   const location = useLocation();
-  const canSeeAlerts = ["SUPERADMIN", "OPERATIONS_MANAGER"].includes(user?.role ?? "");
+  const canSeeAlerts = ["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE"].includes(user?.role ?? "");
   return (
     <div className="min-h-screen bg-[var(--color-canvas)] text-[var(--color-text-primary)]">
       <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r border-black/5 bg-white px-5 py-6 dark:border-[var(--color-border)] dark:bg-[var(--color-surface)] lg:flex">

@@ -20,6 +20,7 @@ describe("Operations review", () => {
     role.current = "OPERATIONS_MANAGER";
     apiMock.mockReset();
     apiMock.mockImplementation((path: string) => {
+      if (path === "/operations/wallet-alerts") return Promise.resolve({ data: [] });
       if (path === "/operations/alerts") return Promise.resolve({ data: [{ id: "alert-1", type: "FAILED", message: "Parcel LTY-1929 requires operations review", createdAt: "2026-10-07T06:00:00Z", parcel: { id: "parcel-1", trackingNumber: "LTY-1929", orderId: "OS-55", status: "FAILED", reasonCode: "NO_ANSWER" } }] });
       if (path === "/finance/os-pending-returns") return Promise.resolve({ data: { items: [], summary: { count: 0, totalRecoverableAmount: 0 } } });
       if (path.startsWith("/operations/parcels/overdue-unsent")) return Promise.resolve({ data: [{ id: "parcel-2", trackingNumber: "LTY-1930", status: "ASSIGNED", createdAt: "2026-10-01T00:00:00Z", batch: { id: "batch-1", label: "October", shop: { name: "Shop" } } }], pagination: { page: 1, pageSize: 25, total: 1, totalPages: 1 } });
@@ -46,8 +47,22 @@ describe("Operations review", () => {
     expect(apiMock).not.toHaveBeenCalled();
   });
 
+  it("shows Finance only hub wallet shortfalls, without parcel review data", async () => {
+    role.current = "FINANCE";
+    apiMock.mockImplementation((path: string) => path === "/operations/wallet-alerts"
+      ? Promise.resolve({ data: [{ id: "hub-1:KBZ_PAY", hubId: "hub-1", hubName: "Yangon", wallet: "KBZ_PAY", balance: -2000, shortfall: 2000 }] })
+      : Promise.resolve({ data: {} }));
+    renderPage();
+    expect(await screen.findByText("Shortfall: 2,000 MMK")).toBeInTheDocument();
+    expect(screen.getByText("Yangon · KBZ Pay")).toBeInTheDocument();
+    expect(apiMock).not.toHaveBeenCalledWith("/operations/alerts");
+    expect(apiMock.mock.calls.some(([path]) => path.startsWith("/operations/parcels/overdue-unsent"))).toBe(false);
+    expect(screen.queryByRole("heading", { name: "Overdue pending returns" })).not.toBeInTheDocument();
+  });
+
   it("shows overdue return deadlines and records a reasoned extension", async () => {
     apiMock.mockImplementation((path: string) => {
+      if (path === "/operations/wallet-alerts") return Promise.resolve({ data: [] });
       if (path === "/operations/alerts") return Promise.resolve({ data: [] });
       if (path === "/finance/os-pending-returns") return Promise.resolve({ data: { items: [{ id: "parcel-return", trackingNumber: "LTY-1940", status: "PENDING_RETURN", returnDueAt: "2020-01-01T00:00:00Z", batch: { id: "batch-1", label: "October" }, shop: { id: "shop-1", name: "Shop" } }, { id: "parcel-future", trackingNumber: "LTY-1941", status: "FAILED", returnDueAt: null, batch: { id: "batch-1", label: "October" }, shop: { id: "shop-1", name: "Shop" } }], summary: { count: 2, totalRecoverableAmount: 0 } } });
       if (path.startsWith("/operations/parcels/overdue-unsent")) return Promise.resolve({ data: [], pagination: { page: 1, pageSize: 25, total: 0, totalPages: 0 } });
@@ -67,6 +82,7 @@ describe("Operations review", () => {
 
   it("shows only overdue Pending Return parcels in the review return queue", async () => {
     apiMock.mockImplementation((path: string) => {
+      if (path === "/operations/wallet-alerts") return Promise.resolve({ data: [] });
       if (path === "/operations/alerts") return Promise.resolve({ data: [] });
       if (path === "/finance/os-pending-returns") return Promise.resolve({ data: { items: [
         { id: "overdue", trackingNumber: "LTY-2001", status: "PENDING_RETURN", returnDueAt: "2020-01-01T00:00:00Z", batch: { id: "batch-1", label: "October" }, shop: { id: "shop-1", name: "Shop" } },

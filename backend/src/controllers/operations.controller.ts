@@ -44,6 +44,7 @@ export const createBatch: RequestHandler = async (req, res) => res.status(201).j
 export const postPickupAdvances: RequestHandler = async (req, res) => res.json({ success: true, data: await service.postPickupAdvances(String(req.params.id), req.body, actor(req)) });
 export const finalizeBatch: RequestHandler = async (req, res) => res.json({ success: true, data: await service.finalizeBatch(String(req.params.id), actor(req)) });
 export const alerts: RequestHandler = async (req, res) => res.json({ success: true, data: await service.listAlerts(actor(req)) });
+export const walletAlerts: RequestHandler = async (req, res) => res.json({ success: true, data: await service.listNegativeWalletAlerts(actor(req)) });
 export const acknowledgeAlert: RequestHandler = async (req, res) => res.json({ success: true, data: await service.acknowledgeAlert(String(req.params.id), actor(req)) });
 
 export const bulkAssign: RequestHandler = async (req, res) => {
