@@ -30,7 +30,7 @@ export function DispatchWorkspaceView({ model, workspace = "dispatch" }: { model
         </button>
       </div>
 
-      {workspace === "dispatch" && <DispatchQueueTabs activeQueue={filters.queue} onChange={(value) => { setPage(1); setSelected([]); const next = { ...emptyFilters, batchId: filters.batchId, queue: value }; setFilters(next); setSearchParams(dispatchFiltersToSearch(next), { replace: true }); }} />}
+      {workspace === "dispatch" && <DispatchQueueTabs activeQueue={filters.queue} onChange={(value) => { setPage(1); setSelected([]); const next = { ...emptyFilters, batchId: filters.batchId, showCompleted: filters.showCompleted, queue: value }; setFilters(next); setSearchParams(dispatchFiltersToSearch(next), { replace: true }); }} />}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "DISPATCHER"].includes(user?.role ?? "") && (
           <button

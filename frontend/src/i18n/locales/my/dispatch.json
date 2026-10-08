@@ -50,6 +50,7 @@
   "returned": "ပြန်အပ်ပြီး",
   "dispatchQueue": "Dispatch Queue",
   "dispatchQueueDescription": "ပါဆယ် တာဝန်ပေးခြင်း၊ အခြေအနေနှင့် Manifest ဇယား",
+  "showDeliveredAndReturned": "ပို့ပြီးနှင့် ပြန်အပ်ပြီး ပါဆယ်များကို ပြမည်",
   "assignmentStatus": "တာဝန်ပေးမှု အခြေအနေ",
   "unassigned": "မပေးရသေး",
   "assigned": "ပေးပြီး",

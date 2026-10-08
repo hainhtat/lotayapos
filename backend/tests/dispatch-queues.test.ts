@@ -16,6 +16,20 @@ describe("dispatch work queues", () => {
     ] });
   });
 
+  test("excludes completed parcels before pagination while preserving other filters", () => {
+    expect(buildParcelListWhere(scope, false, { excludeVoided: true, excludeCompleted: true, shopId: "shop-a" })).toEqual({ AND: [
+      { batch: { hubId: "hub-a" } },
+      { status: { not: "VOIDED" } },
+      { status: { notIn: ["DELIVERED", "RETURNED"] } },
+      { batch: { shopId: "shop-a" } },
+    ] });
+    expect(buildParcelListWhere(scope, false, { excludeVoided: true, status: "DELIVERED" })).toEqual({ AND: [
+      { batch: { hubId: "hub-a" } },
+      { status: { not: "VOIDED" } },
+      { status: "DELIVERED" },
+    ] });
+  });
+
   test("overdue uses first recorded timestamp and keeps hub and batch scope", () => {
     jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-16T12:00:00Z"));
     expect(buildParcelListWhere(scope, false, { queue: "overdue", batchId: "old-batch" })).toEqual({ AND: [

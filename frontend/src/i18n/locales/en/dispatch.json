@@ -50,6 +50,7 @@
   "returned": "Returned",
   "dispatchQueue": "Dispatch queue",
   "dispatchQueueDescription": "Dense parcel board for assign, status, and manifest actions.",
+  "showDeliveredAndReturned": "Show delivered and returned parcels",
   "assignmentStatus": "Assignment",
   "unassigned": "Unassigned",
   "assigned": "Assigned",

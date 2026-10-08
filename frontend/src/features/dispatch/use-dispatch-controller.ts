@@ -10,7 +10,7 @@ const OPS_CORRECTION_NOTE = "Ops correction";
 export function useDispatchController({ workspace = "dispatch" }: { workspace?: "dispatch" | "returns" }) {
   const state = useDispatchState({ workspace });
   const commands = useDispatchCommands(state);
-  const { t, searchParams, setSearchParams, setFilters, setPage, selected, setSelected, setManifestOpen, setManifestRiderIds, setManifestStatuses, setManifestDatePreset, setManifestDateFrom, setManifestDateTo, setPartial, setDeliveryChoice, setCorrectingRider, setCorrectRiderId, setCorrectReason, setReasonPrompt, setFailedDecision, setRejectAsCancelled, setActualCod, setCollectionWallet, setReasonCode, setReasonNote, setMessage, masters, visible, parcels, queryString } = state;
+  const { t, searchParams, setSearchParams, filters, setFilters, setPage, selected, setSelected, setManifestOpen, setManifestRiderIds, setManifestStatuses, setManifestDatePreset, setManifestDateFrom, setManifestDateTo, setPartial, setDeliveryChoice, setCorrectingRider, setCorrectRiderId, setCorrectReason, setReasonPrompt, setFailedDecision, setRejectAsCancelled, setActualCod, setCollectionWallet, setReasonCode, setReasonNote, setMessage, masters, visible, parcels, queryString } = state;
   const { assign, reassignOne, updateStatus, savePaidToOs, selectedParcels } = commands;
   useEffect(() => {
     const decisionId = searchParams.get("decision");
@@ -26,10 +26,14 @@ export function useDispatchController({ workspace = "dispatch" }: { workspace?: 
   }, [workspace, searchParams, queryString, parcels.isSuccess, visible, setFailedDecision, setSearchParams]);
   const setFilter = (key: keyof Filters, value: string) => {
     setPage(1);
-    setFilters((current) => ({ ...current, [key]: value }));
+    const completedStatus = key === "status" && (value === "DELIVERED" || value === "RETURNED");
+    const clearCompletedStatus = key === "showCompleted" && value !== "true" && (filters.status === "DELIVERED" || filters.status === "RETURNED");
+    setFilters((current) => ({ ...current, [key]: value, ...(completedStatus ? { showCompleted: "true" } : {}), ...(clearCompletedStatus ? { status: "" } : {}) }));
     const next = new URLSearchParams(searchParams);
     if (value) next.set(key, value);
     else next.delete(key);
+    if (completedStatus) next.set("showCompleted", "true");
+    if (clearCompletedStatus) next.delete("status");
     setSearchParams(next, { replace: true });
   };
   const eligible = (parcel: Parcel) => !parcel.rider && assignmentEligibleStatuses.has(parcel.status);

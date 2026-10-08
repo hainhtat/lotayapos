@@ -170,6 +170,10 @@ export function DispatchQueuePanel({ model }: { model: ReturnType<typeof useDisp
             />
           </label>
         </div>
+        <label className="mt-3 inline-flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
+          <input type="checkbox" checked={filters.showCompleted === "true"} onChange={(event) => setFilter("showCompleted", event.target.checked ? "true" : "")} className="h-4 w-4 accent-[#1598ef]" />
+          {t("showDeliveredAndReturned")}
+        </label>
         {batches.isError && (
           <div className="mt-3 text-sm text-rose-600 dark:text-rose-400">
             <p role="alert">{t("loadError")}</p>

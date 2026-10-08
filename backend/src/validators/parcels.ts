@@ -6,6 +6,7 @@ export const parcelListValidation = [
   query("sortDirection").optional().isIn(["asc", "desc"]),
   query("assignedToMe").optional().isBoolean(),
   query("excludeVoided").optional().isBoolean(),
+  query("excludeCompleted").optional().isBoolean(),
   query("batchId").optional().isString().trim().notEmpty(),
   query("riderId").optional().isString().trim().notEmpty(),
   query("assignmentStatus").optional().isIn(["ASSIGNED", "UNASSIGNED"]),

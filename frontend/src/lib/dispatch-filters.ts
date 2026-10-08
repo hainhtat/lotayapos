@@ -9,6 +9,7 @@ export type DispatchFilters = {
   orderId: string;
   customerName: string;
   status: string;
+  showCompleted: string;
   from: string;
   to: string;
   sortBy: string;
@@ -17,13 +18,14 @@ export type DispatchFilters = {
 
 export const emptyDispatchFilters: DispatchFilters = {
   queue: "", shopId: "", batchId: "", riderId: "", assignmentStatus: "", township: "",
-  trackingNumber: "", orderId: "", customerName: "", status: "", from: "", to: "",
+  trackingNumber: "", orderId: "", customerName: "", status: "", showCompleted: "", from: "", to: "",
   sortBy: "", sortDirection: "",
 };
 
 export function dispatchFiltersFromSearch(params: URLSearchParams, lockedQueue = ""): DispatchFilters {
   const filters = { ...emptyDispatchFilters };
   for (const key of Object.keys(filters) as Array<keyof DispatchFilters>) filters[key] = params.get(key) ?? "";
+  if (filters.status === "DELIVERED" || filters.status === "RETURNED") filters.showCompleted = "true";
   if (lockedQueue) filters.queue = lockedQueue;
   return filters;
 }

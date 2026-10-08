@@ -26,9 +26,9 @@ export function useDispatchData(filters: Filters, page: number, editing: Parcel 
   const debouncedTextFilters=useDebouncedValue({trackingNumber:filters.trackingNumber,orderId:filters.orderId,customerName:filters.customerName,township:filters.township},350);
   const queryFilters={...filters,...debouncedTextFilters};
   const query = Object.entries(queryFilters)
-    .filter(([, value]) => value)
+    .filter(([key, value]) => key !== "showCompleted" && value)
     .map(([key, value]) => [key === "from" ? "dateFrom" : key === "to" ? "dateTo" : key, value]);
-  const queryString = new URLSearchParams([...query, ["page", String(page)], ["pageSize", "100"], ["excludeVoided", "true"]]).toString();
+  const queryString = new URLSearchParams([...query, ["page", String(page)], ["pageSize", "100"], ["excludeVoided", "true"], ["excludeCompleted", String(filters.showCompleted !== "true")]]).toString();
 
   const parcels = useQuery({
     queryKey: ["parcels", queryString],

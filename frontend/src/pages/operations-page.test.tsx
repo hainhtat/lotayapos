@@ -138,6 +138,21 @@ describe("OperationsPage", () => {
     const last = apiRawMock.mock.calls.filter(([path]) => path.startsWith("/parcels?")).at(-1)![0];
     expect(last).not.toContain("assignmentStatus");
     expect(new URLSearchParams(last.split("?")[1]).get("excludeVoided")).toBe("true");
+    expect(new URLSearchParams(last.split("?")[1]).get("excludeCompleted")).toBe("true");
+  });
+
+  it("includes completed parcels through the checkbox and keeps status filtering consistent", async () => {
+    mockParcelList([]); apiMock.mockResolvedValue({ data: [] }); renderPage();
+    const checkbox = screen.getByRole("checkbox", { name: "Show delivered and returned parcels" });
+    expect(checkbox).not.toBeChecked();
+    await waitFor(() => expect(apiRawMock).toHaveBeenCalledWith(expect.stringContaining("excludeCompleted=true")));
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(apiRawMock).toHaveBeenCalledWith(expect.stringContaining("excludeCompleted=false")));
+    fireEvent.change(screen.getByLabelText("Status", { selector: "select" }), { target: { value: "DELIVERED" } });
+    await waitFor(() => expect(apiRawMock).toHaveBeenCalledWith(expect.stringMatching(/status=DELIVERED.*excludeCompleted=false/)));
+    fireEvent.click(checkbox);
+    expect(screen.getByLabelText("Status", { selector: "select" })).toHaveValue("");
+    await waitFor(() => expect(apiRawMock).toHaveBeenCalledWith(expect.stringContaining("excludeCompleted=true")));
   });
 
   it("submits the backend status field with actual COD collected", async () => {

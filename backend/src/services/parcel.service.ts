@@ -203,6 +203,7 @@ export type ParcelListFilters = {
   sortDirection?: "asc" | "desc";
   queue?: "to-assign" | "with-riders" | "rescheduled" | "return-to-os" | "overdue";
   excludeVoided?: boolean;
+  excludeCompleted?: boolean;
   batchId?: string;
   riderId?: string;
   assignmentStatus?: "ASSIGNED" | "UNASSIGNED";
@@ -287,6 +288,7 @@ export function buildParcelListWhere(scope: ActorScope, assignedToMe = false, fi
   const conditions: Prisma.ParcelWhereInput[] = [];
   if (base) conditions.push(base);
   if (filters.excludeVoided) conditions.push({ status: { not: "VOIDED" } });
+  if (filters.excludeCompleted) conditions.push({ status: { notIn: ["DELIVERED", "RETURNED"] } });
   if (filters.queue) {
     const rescheduleCodes = ["DATE_CHANGE", "DELIVERY_DATE_CHANGE", "RESCHEDULE"];
     const notRescheduled = { OR: [{ reasonCode: null }, { reasonCode: { notIn: rescheduleCodes } }] };
