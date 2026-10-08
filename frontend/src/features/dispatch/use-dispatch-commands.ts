@@ -88,17 +88,17 @@ export function useDispatchCommands(state: ReturnType<typeof useDispatchState>) 
           ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
           ...(input.collectionMode ? { collectionMode: input.collectionMode } : {}),
           ...(input.returnToOs ? { returnToOs: true } : {}),
-          ...(input.note ? { note: input.note } : { note: OPS_CORRECTION_NOTE }),
+          ...(input.note ? { note: input.note } : input.status === "FAILED" ? {} : { note: OPS_CORRECTION_NOTE }),
         }),
       }),
     onSuccess: async (_result, input) => {
+      if (input.status === "FAILED") setFailedDecision(visible.find((parcel) => parcel.id === input.parcelId) ?? null);
       setDeliveryChoice(null);
       setReasonPrompt(null);
       setReasonCode("");
       setReasonNote("");
       setMessage(t("statusUpdated"));
       await invalidateParcels();
-      if (input.status === "FAILED") setFailedDecision(visible.find((parcel) => parcel.id === input.parcelId) ?? null);
       if (input.status === "REJECTED" && input.returnToOs) setMessage(t("cancelledMovedToReturn"));
     },
     onError: (e) => setMessage(e instanceof Error ? e.message : t("loadError")),

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "../src/config/database.js";
 import { rescheduleParcels } from "../src/services/parcel.service.js";
-import { bulkAssignParcels, getBatchDetail, listBatches } from "../src/services/operations.service.js";
+import { bulkAssignParcels, decideFailedParcel, getBatchDetail, listBatches } from "../src/services/operations.service.js";
 import { receiveOsReturnsBulk } from "../src/services/finance/os-returns.js";
 
 describe("simple dispatch and physical OS handover", () => {
@@ -75,6 +75,15 @@ describe("simple dispatch and physical OS handover", () => {
     const terminal = await parcel("DELIVERED");
     await expect(rescheduleParcels({ ...input, parcelIds: [p.id, terminal.id], plannedDeliveryDate: "2037-01-06" }, actor)).rejects.toMatchObject({ code: "PARCEL_NOT_RESCHEDULABLE" });
     expect((await prisma.parcel.findUniqueOrThrow({ where: { id: p.id } })).plannedDeliveryDate).toEqual(new Date("2037-01-05"));
+  });
+
+  test("failed-parcel reschedule keeps the chosen date and explanation in its history", async () => {
+    const p = await parcel("FAILED");
+    await decideFailedParcel(p.id, { action: "RESCHEDULE", plannedDeliveryDate: "2037-01-05", reason: "Customer unavailable", note: "Customer requested Friday" }, actor);
+    expect(await prisma.parcel.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ status: "PICKED_UP", reasonCode: "RESCHEDULE", plannedDeliveryDate: new Date("2037-01-05") });
+    expect(await prisma.statusHistory.findMany({ where: { parcelId: p.id }, select: { fromStatus: true, toStatus: true, reasonCode: true, note: true } })).toEqual([
+      { fromStatus: "FAILED", toStatus: "PICKED_UP", reasonCode: "RESCHEDULE", note: "2037-01-05: Customer unavailable | Customer requested Friday" },
+    ]);
   });
 
   test("assign and dispatch creates one open way and rolls back an ineligible selection", async () => {

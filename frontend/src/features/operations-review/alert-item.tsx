@@ -17,7 +17,7 @@ export function AlertItem({ alert, compact = false }: { alert: OperationsAlert; 
     {alert.parcel && <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{alert.parcel.trackingNumber}{alert.parcel.orderId ? ` · ${t("orderId")}: ${alert.parcel.orderId}` : ""}{status ? ` · ${status}` : ""}{alert.parcel.reasonCode ? ` · ${t("reason")}: ${alert.parcel.reasonCode}` : ""}</p>}
     <div className="mt-3 flex flex-wrap items-center gap-3">
       {alert.parcel && <ParcelDetailsButton id={alert.parcel.id} trackingNumber={alert.parcel.trackingNumber}>{t("viewParcelDetails")}</ParcelDetailsButton>}
-      {alert.parcel && <Link to={`/operations/dispatch?trackingNumber=${encodeURIComponent(alert.parcel.trackingNumber)}`} className="text-xs font-bold text-sky-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-sky-500 dark:text-sky-300">{t("openInDispatch")}</Link>}
+      {alert.parcel && <Link to={`/operations/dispatch?trackingNumber=${encodeURIComponent(alert.parcel.trackingNumber)}${alert.parcel.status === "FAILED" ? `&decision=${encodeURIComponent(alert.parcel.id)}` : ""}`} className="text-xs font-bold text-sky-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-sky-500 dark:text-sky-300">{alert.parcel.status === "FAILED" ? t("openFailedDecision") : t("openInDispatch")}</Link>}
       <button type="button" disabled={acknowledge.isPending} onClick={() => acknowledge.mutate(alert.id)} className="rounded-lg border border-amber-600 px-2.5 py-1 text-xs font-bold text-amber-800 disabled:opacity-50 dark:text-amber-300">{t("acknowledge")}</button>
       {acknowledge.isError && <span role="alert" className="text-xs text-rose-600">{t("reviewAcknowledgeError")}</span>}
     </div>

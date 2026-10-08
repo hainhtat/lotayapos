@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
+import { Link, MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "@/i18n";
 import { datePresetRange } from "@/lib/date-presets";
@@ -342,6 +342,7 @@ describe("OperationsPage", () => {
         return Promise.resolve({ data: { riders: [{ id: "rider-1", user: { name: "Rider" } }] } });
       }
       if (path === "/operations/batches") return Promise.resolve({ data: [] });
+      if (path === "/parcels/parcel-1") return Promise.resolve({ data: { status: "FAILED", statusHistory: [{ toStatus: "FAILED", reasonCode: "NO_ANSWER", note: "Called twice" }] } });
       return Promise.resolve({ data: {} });
     });
 
@@ -369,10 +370,54 @@ describe("OperationsPage", () => {
       ),
     );
     const decision = await screen.findByRole("dialog", { name: "What should happen next?" });
-    expect(within(decision).getByRole("button", { name: "Return to OS" })).toBeDisabled();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(within(decision).getByRole("button", { name: "Confirm next step" })).toBeDisabled();
+    fireEvent.click(within(decision).getByRole("radio", { name: "Return to OS" }));
     fireEvent.change(within(decision).getByLabelText("Next-step reason"), { target: { value: "Customer asked us to return it" } });
-    fireEvent.click(within(decision).getByRole("button", { name: "Return to OS" }));
+    fireEvent.click(within(decision).getByRole("button", { name: "Confirm next step" }));
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/operations/parcels/parcel-1/failed-decision", expect.objectContaining({ method: "POST", body: JSON.stringify({ action: "RETURN_TO_OS", reason: "Customer asked us to return it" }) })));
+  });
+
+  it("opens a rider failure from the alert link directly at its decision step", async () => {
+    mockParcelList([{ id: "parcel-1", trackingNumber: "TRK-1", customerName: "Customer", address: "Address", status: "FAILED", reasonCode: "CUSTOMER_UNAVAILABLE", codAmount: 25000, batch: { label: "Batch", shop: { name: "Shop" } }, rider: { id: "rider-1", user: { name: "Rider" } } }]);
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/master-data") return Promise.resolve({ data: { riders: [] } });
+      if (path === "/parcels/parcel-1") return Promise.resolve({ data: { status: "FAILED", statusHistory: [{ toStatus: "FAILED", reasonCode: "CUSTOMER_UNAVAILABLE", note: "Customer asked for Friday" }] } });
+      return Promise.resolve({ data: [] });
+    });
+    renderPage("/operations/dispatch?trackingNumber=TRK-1&decision=parcel-1");
+    const decision = await screen.findByRole("dialog", { name: "What should happen next?" });
+    expect(await within(decision).findByText("Customer asked for Friday")).toBeInTheDocument();
+    expect(apiMock).not.toHaveBeenCalledWith("/parcels/parcel-1/status", expect.anything());
+    fireEvent.click(within(decision).getByRole("radio", { name: "Reschedule date" }));
+    fireEvent.change(within(decision).getByLabelText("Reschedule date", { selector: "input[type=date]" }), { target: { value: "2099-01-05" } });
+    fireEvent.change(within(decision).getByLabelText("Next-step reason"), { target: { value: "Customer requested Friday" } });
+    fireEvent.click(within(decision).getByRole("button", { name: "Confirm next step" }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/operations/parcels/parcel-1/failed-decision", expect.objectContaining({ method: "POST", body: JSON.stringify({ action: "RESCHEDULE", plannedDeliveryDate: "2099-01-05", reason: "Customer requested Friday" }) })));
+  });
+
+  it("waits for the newly filtered parcel before consuming a same-page decision link", async () => {
+    const oldParcel = { id: "old", trackingNumber: "TRK-OLD", customerName: "Old", address: "Address", status: "ASSIGNED", codAmount: 1000, batch: { label: "Batch", shop: { name: "Shop" } }, rider: null };
+    const failedParcel = { ...oldParcel, id: "failed", trackingNumber: "TRK-FAILED", status: "FAILED" };
+    apiRawMock.mockImplementation((path: string) => Promise.resolve({ json: async () => ({ data: [path.includes("TRK-FAILED") ? failedParcel : oldParcel], pagination: { page: 1, pageSize: 100, total: 1, totalPages: 1 } }) }));
+    apiMock.mockImplementation((path: string) => path === "/master-data" ? Promise.resolve({ data: { riders: [] } }) : path === "/parcels/failed" ? Promise.resolve({ data: { status: "FAILED", statusHistory: [{ toStatus: "FAILED", note: "No answer" }] } }) : Promise.resolve({ data: [] }));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<MemoryRouter initialEntries={["/operations/dispatch?trackingNumber=TRK-OLD"]}><QueryClientProvider client={queryClient}><Link to="/operations/dispatch?trackingNumber=TRK-FAILED&decision=failed">Open alert</Link><OperationsPage /></QueryClientProvider></MemoryRouter>);
+    await screen.findByText("TRK-OLD");
+    fireEvent.click(screen.getByRole("link", { name: "Open alert" }));
+    expect(await screen.findByRole("dialog", { name: "What should happen next?" })).toHaveTextContent("TRK-FAILED");
+  });
+
+  it("does not allow a failed decision without loading the rider's failure details", async () => {
+    mockParcelList([{ id: "failed", trackingNumber: "TRK-FAILED", customerName: "Customer", address: "Address", status: "FAILED", codAmount: 1000, batch: { label: "Batch", shop: { name: "Shop" } }, rider: null }]);
+    apiMock.mockImplementation((path: string) => path === "/master-data" ? Promise.resolve({ data: { riders: [] } }) : path === "/parcels/failed" ? Promise.reject(new Error("Offline")) : Promise.resolve({ data: [] }));
+    renderPage("/operations/dispatch?trackingNumber=TRK-FAILED&decision=failed");
+    const dialog = await screen.findByRole("dialog", { name: "What should happen next?" });
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Could not load the rider's failure details");
+    fireEvent.click(within(dialog).getByRole("radio", { name: "Try again tomorrow" }));
+    fireEvent.change(within(dialog).getByLabelText("Next-step reason"), { target: { value: "Retry requested" } });
+    expect(within(dialog).getByRole("button", { name: "Confirm next step" })).toBeDisabled();
+    expect(apiMock).not.toHaveBeenCalledWith("/operations/parcels/failed/failed-decision", expect.anything());
   });
 
   it("opens the edit parcel modal for assigned parcels", async () => {

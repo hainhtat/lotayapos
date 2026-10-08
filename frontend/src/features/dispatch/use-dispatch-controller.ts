@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { TO_DELIVER_STATUSES } from "@/lib/manifest-filters";
 import type { Parcel } from "./dispatch-types";
 import type { DispatchFilters as Filters } from "@/lib/dispatch-filters";
@@ -9,8 +10,20 @@ const OPS_CORRECTION_NOTE = "Ops correction";
 export function useDispatchController({ workspace = "dispatch" }: { workspace?: "dispatch" | "returns" }) {
   const state = useDispatchState({ workspace });
   const commands = useDispatchCommands(state);
-  const { t, searchParams, setSearchParams, setFilters, setPage, selected, setSelected, setManifestOpen, setManifestRiderIds, setManifestStatuses, setManifestDatePreset, setManifestDateFrom, setManifestDateTo, setPartial, setDeliveryChoice, setCorrectingRider, setCorrectRiderId, setCorrectReason, setReasonPrompt, setRejectAsCancelled, setActualCod, setCollectionWallet, setReasonCode, setReasonNote, setMessage, masters, visible } = state;
+  const { t, searchParams, setSearchParams, setFilters, setPage, selected, setSelected, setManifestOpen, setManifestRiderIds, setManifestStatuses, setManifestDatePreset, setManifestDateFrom, setManifestDateTo, setPartial, setDeliveryChoice, setCorrectingRider, setCorrectRiderId, setCorrectReason, setReasonPrompt, setFailedDecision, setRejectAsCancelled, setActualCod, setCollectionWallet, setReasonCode, setReasonNote, setMessage, masters, visible, parcels, queryString } = state;
   const { assign, reassignOne, updateStatus, savePaidToOs, selectedParcels } = commands;
+  useEffect(() => {
+    const decisionId = searchParams.get("decision");
+    if (workspace !== "dispatch" || !decisionId || !parcels.isSuccess) return;
+    // The text filter is debounced. Keep the link intact until this result set
+    // belongs to the tracking number requested by the alert.
+    if (new URLSearchParams(queryString).get("trackingNumber") !== searchParams.get("trackingNumber")) return;
+    const parcel = visible.find((item) => item.id === decisionId && item.status === "FAILED");
+    if (parcel) setFailedDecision(parcel);
+    const next = new URLSearchParams(searchParams);
+    next.delete("decision");
+    setSearchParams(next, { replace: true });
+  }, [workspace, searchParams, queryString, parcels.isSuccess, visible, setFailedDecision, setSearchParams]);
   const setFilter = (key: keyof Filters, value: string) => {
     setPage(1);
     setFilters((current) => ({ ...current, [key]: value }));

@@ -1,11 +1,12 @@
 import { ModalPortal } from "@/components/modal-portal";
 import { X } from "lucide-react";
 import type { useDispatchController } from "./use-dispatch-controller";
+import { FailedWorkflowDialog } from "./failed-workflow-dialog";
 const control = "rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none transition focus:border-[#1598ef] focus:ring-2 focus:ring-[#1598ef]/20 dark:border-white/10 dark:bg-[#121416] dark:text-slate-100";
 function money(value: number | null | undefined) { if (value == null) return "—"; return value.toLocaleString(); }
 const OPS_CORRECTION_NOTE = "Ops correction";
 export function DeliveryOutcomeDialogs({ model }: { model: ReturnType<typeof useDispatchController> }) {
-  const { t, reasonCode, deliveryChoice, setDeliveryChoice, paidToOs, setPaidToOs, bulkDeliveryChoice, setBulkDeliveryChoice, bulkPaidToOs, setBulkPaidToOs, includeDeliveryFee, setIncludeDeliveryFee, reasonPrompt, setReasonPrompt, rejectAsCancelled, setRejectAsCancelled, setReasonCode, reasonNote, setReasonNote, rescheduleDate, setRescheduleDate, failedDecision, setFailedDecision, failedDecisionReason, setFailedDecisionReason, reasonList, reasonLabel, promptReasons, updateStatus, decideFailed, savePaidToOs, bulkPaidToOsHasLinkedParcel, applyStatusBulk } = model;
+  const { t, reasonCode, deliveryChoice, setDeliveryChoice, paidToOs, setPaidToOs, bulkDeliveryChoice, setBulkDeliveryChoice, bulkPaidToOs, setBulkPaidToOs, includeDeliveryFee, setIncludeDeliveryFee, reasonPrompt, setReasonPrompt, rejectAsCancelled, setRejectAsCancelled, setReasonCode, reasonNote, setReasonNote, reasonList, reasonLabel, promptReasons, updateStatus, decideFailed, savePaidToOs, bulkPaidToOsHasLinkedParcel, applyStatusBulk } = model;
   return <>
       {deliveryChoice && (
         <ModalPortal><div role="dialog" aria-modal="true" aria-labelledby="delivery-choice-title" className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-black/40 p-4">
@@ -71,7 +72,7 @@ export function DeliveryOutcomeDialogs({ model }: { model: ReturnType<typeof use
         </div></ModalPortal>
       )}
 
-      {reasonPrompt && (
+      {reasonPrompt && reasonPrompt.status !== "FAILED" && (
         <ModalPortal><div role="dialog" aria-modal="true" aria-labelledby="reason-prompt-title" className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-black/40 p-4">
           <form
             onSubmit={(e) => {
@@ -158,7 +159,7 @@ export function DeliveryOutcomeDialogs({ model }: { model: ReturnType<typeof use
           </form>
         </div></ModalPortal>
       )}
-      {failedDecision && <ModalPortal><div role="dialog" aria-modal="true" aria-labelledby="failed-decision-title" className="fixed inset-0 z-[100] grid place-items-center bg-black/55 p-4"><section className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl dark:bg-[#181a1d]"><div className="flex items-start justify-between gap-3"><div><h2 id="failed-decision-title" className="text-xl font-bold">{t("failedDeliveryNextStep")}</h2><p className="mt-2 text-sm text-slate-500">{t("failedDeliveryNextStepHelp", { tracking: failedDecision.trackingNumber })}</p></div><button type="button" aria-label={t("close")} onClick={()=>setFailedDecision(null)} className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-white/10"><X size={18}/></button></div><label className="mt-4 block text-xs font-bold text-slate-500">{t("reason")}<textarea aria-label={t("failedDecisionReason")} required minLength={3} value={failedDecisionReason} onChange={event=>setFailedDecisionReason(event.target.value)} className={`${control} mt-1 w-full`}/></label><div className="mt-5 grid gap-3"><button type="button" disabled={decideFailed.isPending||failedDecisionReason.trim().length<3} onClick={()=>decideFailed.mutate({parcel:failedDecision,action:"RETRY_TOMORROW"})} className="rounded-xl border border-sky-200 p-4 text-left font-bold text-sky-800 disabled:opacity-40 dark:border-sky-800 dark:text-sky-200">{t("tryAgainTomorrow")}</button><button type="button" disabled={decideFailed.isPending||failedDecisionReason.trim().length<3} onClick={()=>decideFailed.mutate({parcel:failedDecision,action:"RESCHEDULE",plannedDeliveryDate:rescheduleDate})} className="rounded-xl border border-slate-200 p-4 text-left font-bold disabled:opacity-40 dark:border-white/10">{t("rescheduleDate")}</button><button type="button" disabled={decideFailed.isPending||failedDecisionReason.trim().length<3} onClick={()=>decideFailed.mutate({parcel:failedDecision,action:"RETURN_TO_OS"})} className="rounded-xl border border-amber-300 p-4 text-left font-bold text-amber-800 disabled:opacity-40 dark:border-amber-800 dark:text-amber-200">{t("returnToOs")}</button></div><label className="mt-4 block text-xs font-bold text-slate-500">{t("rescheduleDate")}<input aria-label={t("rescheduleDate")} type="date" value={rescheduleDate} onChange={event=>setRescheduleDate(event.target.value)} className={`${control} mt-1 w-full`}/></label>{decideFailed.isError&&<p role="alert" className="mt-3 text-sm text-rose-600">{decideFailed.error instanceof Error?decideFailed.error.message:t("loadError")}</p>}<p className="mt-4 text-xs text-slate-500">{t("cancelledDeliveryHelp")}</p></section></div></ModalPortal>}
+      <FailedWorkflowDialog model={model} />
 
   </>;
 }

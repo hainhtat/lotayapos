@@ -24,6 +24,7 @@ type ParcelDetail = {
   rider: { user: { name: string } } | null;
   statusHistory: Array<{ id: string; fromStatus: string | null; toStatus: string; reasonCode: string | null; note: string | null; createdAt: string }>;
 };
+type ReasonLabel = { code: string; labelEn: string; labelMy: string };
 
 function isParcelDetail(value: unknown): value is ParcelDetail {
   if (!value || typeof value !== "object") return false;
@@ -49,6 +50,15 @@ function ParcelDetailsModal({ id, onClose }: { id: string; onClose: () => void }
     if (!isParcelDetail(result.data)) throw new Error("Invalid parcel detail response");
     return result.data;
   } });
+  const reasons = useQuery({
+    queryKey: ["reason-codes"],
+    queryFn: async (): Promise<ReasonLabel[]> => {
+      const result = await api<unknown>("/master-data/reason-codes");
+      if (!Array.isArray(result.data)) throw new Error("Invalid reason code response");
+      return result.data.filter((row): row is ReasonLabel => row && typeof row.code === "string" && typeof row.labelEn === "string" && typeof row.labelMy === "string");
+    },
+    enabled: Boolean(detail.data && (detail.data.reasonCode || detail.data.statusHistory.some((row) => row.reasonCode))),
+  });
   useEffect(() => {
     closeRef.current?.focus();
     const appRoot = document.getElementById("root");
@@ -71,15 +81,47 @@ function ParcelDetailsModal({ id, onClose }: { id: string; onClose: () => void }
   const formatDate = (value: string) => new Intl.DateTimeFormat(i18n.resolvedLanguage === "my" ? "my-MM" : "en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
   const money = (value: number | null | undefined) => `${(value ?? 0).toLocaleString()} MMK`;
   const statusText = (status: string) => status === "VOIDED" ? t("parcelVoidedStatus") : t(`parcelStatus_${status}`, { defaultValue: status.replaceAll("_", " ") });
+  const reasonText = (code: string | null) => {
+    if (!code) return null;
+    const configured = reasons.data?.find((reason) => reason.code === code);
+    if (configured) return i18n.resolvedLanguage === "my" ? configured.labelMy : configured.labelEn;
+    const readableCode = code.replaceAll("_", " ").toLowerCase().replace(/^./, (letter) => letter.toUpperCase());
+    return t(`parcelReason_${code}`, { defaultValue: readableCode });
+  };
+  const eventTitle = (row: ParcelDetail["statusHistory"][number]) => {
+    if (row.reasonCode === "RETRY_TOMORROW" && row.toStatus === "PICKED_UP") return t("parcelJourneyRetry");
+    if (row.reasonCode === "RESCHEDULE" && row.toStatus === "PICKED_UP") {
+      const plannedDate = row.note?.match(/^(\d{4}-\d{2}-\d{2})(?=\s*:)/)?.[1];
+      const date = plannedDate ? new Date(`${plannedDate}T00:00:00.000Z`) : null;
+      if (date && Number.isFinite(date.getTime())) {
+        const formatted = new Intl.DateTimeFormat(i18n.resolvedLanguage === "my" ? "my-MM" : "en-GB", { dateStyle: "medium", timeZone: "UTC" }).format(date);
+        return t("parcelJourneyRescheduledFor", { date: formatted });
+      }
+      return t("parcelJourneyRescheduled");
+    }
+    if (row.reasonCode === "RETURN_TO_OS" && row.toStatus === "PENDING_RETURN") return t("parcelJourneyReturnToOs");
+    if (row.reasonCode === "RETURN_EXTENSION") return t("parcelJourneyReturnExtended");
+    if (row.reasonCode === "PAID_TO_OS_CORRECTION") return t("parcelJourneyPaymentCorrected");
+    return statusText(row.toStatus);
+  };
+  const showReasonCode = (row: ParcelDetail["statusHistory"][number]) => {
+    const code = row.reasonCode;
+    if (!code) return false;
+    return !(
+      (row.toStatus === "PICKED_UP" && ["RETRY_TOMORROW", "RESCHEDULE"].includes(code))
+      || (row.toStatus === "PENDING_RETURN" && code === "RETURN_TO_OS")
+      || ["RETURN_EXTENSION", "PAID_TO_OS_CORRECTION"].includes(code)
+    );
+  };
 
   return <ModalPortal><div className="fixed inset-0 z-[100] grid place-items-center bg-black/55 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="parcel-details-title" className="max-h-[calc(100dvh-2rem)] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-5 text-slate-950 shadow-2xl dark:bg-[#181a1d] dark:text-white sm:p-6">
       <div className="flex items-start justify-between gap-4"><div><h2 id="parcel-details-title" className="font-display text-xl font-bold">{t("parcelDetails")}</h2><p className="mt-1 font-mono text-sm text-slate-500">{parcel?.trackingNumber ?? t("loading")}</p></div><button ref={closeRef} type="button" aria-label={t("close")} onClick={onClose} className="rounded-lg border border-slate-200 p-2 dark:border-white/10"><X size={18}/></button></div>
       {detail.isLoading ? <p className="py-10 text-center text-sm">{t("loading")}</p> : detail.isError || !parcel ? <div className="py-10 text-center"><p role="alert" className="text-sm text-rose-600">{t("loadError")}</p><button type="button" onClick={() => void detail.refetch()} className="mt-2 text-sm font-bold text-sky-600">{t("retry")}</button></div> : <>
         <dl className="mt-6 grid gap-4 rounded-xl bg-slate-50 p-4 dark:bg-white/5 sm:grid-cols-2"><Detail label={t("orderId")} value={parcel.orderId}/><Detail label={t("status")} value={statusText(parcel.status)}/><Detail label={t("customer")} value={parcel.customerName}/><Detail label={t("customerPhone")} value={parcel.customerPhone}/><Detail label={t("address")} value={parcel.address}/><Detail label={t("township")} value={parcel.township}/><Detail label={t("batch")} value={parcel.batch.label}/><Detail label={t("onlineShop")} value={parcel.batch.shop.name}/><Detail label={t("rider")} value={parcel.rider?.user.name}/></dl>
-        <dl className="mt-4 grid gap-4 rounded-xl border border-slate-200 p-4 dark:border-white/10 sm:grid-cols-3"><Detail label={t("cod")} value={money(parcel.codAmount)}/><Detail label={t("deliveryFee")} value={money(parcel.deliveryFee)}/><Detail label={t("total")} value={money(parcel.codAmount + (parcel.deliveryFee ?? 0))}/><Detail label={t("collectionMode")} value={t(`collectionMode_${parcel.collectionMode}`, { defaultValue: parcel.collectionMode.replaceAll("_", " ") })}/><Detail label={t("actualCodCollected")} value={parcel.actualCodCollected == null ? null : money(parcel.actualCodCollected)}/>{parcel.collectionMode === "PAID_BY_OS" && <Detail label={t("feeIncludedInOsCredit")} value={parcel.paidToOsFeeIncluded ? t("yes") : t("no")}/>}<Detail label={t("reason")} value={parcel.reasonCode === "ENTERED_IN_ERROR" ? t("parcelEnteredInErrorReason") : parcel.reasonCode}/></dl>
-        <h3 className="mt-6 font-display text-base font-bold">{t("statusHistory")}</h3>
-        {!parcel.statusHistory.length ? <p className="mt-2 text-sm text-slate-500">{t("empty")}</p> : <ol className="mt-3 space-y-2">{parcel.statusHistory.map((row) => <li key={row.id} className="rounded-xl border border-slate-200 p-3 text-sm dark:border-white/10"><div className="flex flex-wrap justify-between gap-2"><span className="font-semibold">{row.fromStatus ? `${statusText(row.fromStatus)} → ` : ""}{statusText(row.toStatus)}</span><time className="text-xs text-slate-500" dateTime={row.createdAt}>{formatDate(row.createdAt)}</time></div>{row.reasonCode && <p className="mt-1 text-slate-600 dark:text-slate-300">{t("reason")}: {row.reasonCode}</p>}{row.note && <p className="mt-1 break-words text-slate-600 dark:text-slate-300">{row.note}</p>}</li>)}</ol>}
+        <dl className="mt-4 grid gap-4 rounded-xl border border-slate-200 p-4 dark:border-white/10 sm:grid-cols-3"><Detail label={t("cod")} value={money(parcel.codAmount)}/><Detail label={t("deliveryFee")} value={money(parcel.deliveryFee)}/><Detail label={t("total")} value={money(parcel.codAmount + (parcel.deliveryFee ?? 0))}/><Detail label={t("collectionMode")} value={t(`collectionMode_${parcel.collectionMode}`, { defaultValue: parcel.collectionMode.replaceAll("_", " ") })}/><Detail label={t("actualCodCollected")} value={parcel.actualCodCollected == null ? null : money(parcel.actualCodCollected)}/>{parcel.collectionMode === "PAID_BY_OS" && <Detail label={t("feeIncludedInOsCredit")} value={parcel.paidToOsFeeIncluded ? t("yes") : t("no")}/>}<Detail label={t("reason")} value={reasonText(parcel.reasonCode)}/></dl>
+        <h3 className="mt-6 font-display text-base font-bold">{t("parcelJourney")}</h3>
+        {!parcel.statusHistory.length ? <p className="mt-2 text-sm text-slate-500">{t("empty")}</p> : <ol className="mt-3 border-l-2 border-slate-200 pl-4 dark:border-white/15">{parcel.statusHistory.map((row) => <li key={row.id} className="relative pb-5 pl-2 text-sm last:pb-0 before:absolute before:-left-[1.42rem] before:top-1 before:size-3 before:rounded-full before:border-2 before:border-white before:bg-sky-500 dark:before:border-[#181a1d]"><div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1"><span className="font-semibold">{eventTitle(row)}</span><time className="text-xs text-slate-500" dateTime={row.createdAt}>{formatDate(row.createdAt)}</time></div>{showReasonCode(row) && <p className="mt-1 text-slate-600 dark:text-slate-300">{t("reason")}: {reasonText(row.reasonCode)}</p>}{row.note && <p className="mt-1 break-words text-slate-600 dark:text-slate-300">{row.note}</p>}</li>)}</ol>}
       </>}
     </section>
   </div></ModalPortal>;

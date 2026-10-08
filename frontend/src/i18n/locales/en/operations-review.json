@@ -8,6 +8,7 @@
   "reviewViewAll": "View all",
   "reviewAcknowledgeError": "Could not acknowledge. Please retry.",
   "reviewNoParcelLink": "This alert has no linked parcel.",
+  "openFailedDecision": "Choose next step",
   "notificationsTitle": "Notifications",
   "reviewAlertType_FAILED": "Failed delivery",
   "reviewAlertType_PARTIAL": "Partial delivery",

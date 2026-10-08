@@ -8,6 +8,7 @@
   "reviewViewAll": "အားလုံးကြည့်မည်",
   "reviewAcknowledgeError": "အတည်ပြု၍ မရပါ။ ပြန်ကြိုးစားပါ",
   "reviewNoParcelLink": "ဤသတိပေးချက်တွင် ချိတ်ဆက်ထားသော ပါဆယ် မရှိပါ",
+  "openFailedDecision": "နောက်အဆင့်ကို ရွေးပါ",
   "notificationsTitle": "အသိပေးချက်များ",
   "reviewAlertType_FAILED": "ပို့ဆောင်မှု မအောင်မြင်ပါ",
   "reviewAlertType_PARTIAL": "တစ်စိတ်တစ်ပိုင်း ပို့ဆောင်မှု",

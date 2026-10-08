@@ -925,7 +925,8 @@ export async function decideFailedParcel(parcelId: string, input: { action: "RET
   return prisma.$transaction(async (tx) => {
     const changed = await tx.parcel.updateMany({ where: { id: parcel.id, status: "FAILED" }, data: { status: toStatus, plannedDeliveryDate, returnDueAt, reasonCode: input.action === "RETURN_TO_OS" ? "RETURN_TO_OS" : input.action } });
     if (changed.count !== 1) throw new ApiError(409, "STATUS_CONFLICT", "Parcel status changed; refresh and retry");
-    await tx.statusHistory.create({ data: { parcelId: parcel.id, fromStatus: "FAILED", toStatus, actorId: actor.id, reasonCode: input.action, note: `${input.reason.trim()}${input.note?.trim() ? ` | ${input.note.trim()}` : ""}` } });
+    const decisionNote = `${input.reason.trim()}${input.note?.trim() ? ` | ${input.note.trim()}` : ""}`;
+    await tx.statusHistory.create({ data: { parcelId: parcel.id, fromStatus: "FAILED", toStatus, actorId: actor.id, reasonCode: input.action, note: input.action === "RESCHEDULE" ? `${plannedDeliveryDate!.toISOString().slice(0, 10)}: ${decisionNote}` : decisionNote } });
     return tx.parcel.findUniqueOrThrow({ where: { id: parcel.id } });
   });
 }

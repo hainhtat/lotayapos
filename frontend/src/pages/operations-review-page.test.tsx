@@ -32,7 +32,7 @@ describe("Operations review", () => {
     expect(await screen.findByText("Parcel LTY-1929 requires operations review")).toBeInTheDocument();
     expect(screen.getByText(/OS-55/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "View parcel details LTY-1929" })).toBeInTheDocument();
-    expect(screen.getAllByRole("link", { name: "Open in Dispatch" }).some((link) => link.getAttribute("href") === "/operations/dispatch?trackingNumber=LTY-1929")).toBe(true);
+    expect(screen.getByRole("link", { name: "Choose next step" })).toHaveAttribute("href", "/operations/dispatch?trackingNumber=LTY-1929&decision=parcel-1");
     expect(screen.getByText(/In hand since/)).toBeInTheDocument();
     expect(apiMock).not.toHaveBeenCalledWith("/operations/alerts/alert-1/acknowledge", expect.anything());
     fireEvent.click(screen.getByRole("button", { name: "Acknowledge" }));
