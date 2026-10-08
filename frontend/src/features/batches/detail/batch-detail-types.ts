@@ -18,6 +18,7 @@ export type SavedParcel = {
   customerPhone?: string | null;
   address: string;
   status: string;
+  createdAt?: string;
   codAmount: number;
   deliveryFee?: number | null;
   townshipId?: string | null;
@@ -44,6 +45,7 @@ export type Batch = {
   nextTrackingSequence: number;
   shop: { name: string };
   parcels: SavedParcel[];
+  threeDaysInHand?: { parcelIds: string[]; nextDueAt: string | null; calculatedAt: string };
   finalizedAt?: string | null;
   automaticAccounting?: boolean;
   availableOsCredit?: number;

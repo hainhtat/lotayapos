@@ -9,6 +9,7 @@ import { accountRows, finalizeAutomaticBatchAccounting, postedAdvanceByBatch, sy
 import { resolveCommissionRateBps } from "../utils/commission.js";
 import { buildDeliveryCollectionLines } from "./ledger.service.js";
 import { businessDateUtcBoundary, nextCalendarDate } from "../utils/business-date.js";
+import { threeDaysInHandSnapshot } from "../utils/parcel-age.js";
 
 export type FundingWallet = "CASH" | "KBZ_PAY" | "WAVE_PAY";
 const walletAccounts: Record<FundingWallet, string> = { CASH: "WALLET_CASH", KBZ_PAY: "WALLET_KBZ_PAY", WAVE_PAY: "WALLET_WAVE_PAY" };
@@ -313,7 +314,7 @@ export async function getBatchDetail(id:string,actor:BatchActor){
   const remainingToOs=account?.outstanding ?? Math.max(0,totalCod-advancePostedAmount-returnedCod);
   const availableOsCredit = balanceError ? 0 : accountRowsForShop.reduce((sum, row) => sum + (row.batchId === batch.id ? 0 : row.creditAvailable), 0);
   const expectedOsCreditApplied = Math.min(Math.max(0, totalCod - batch.advancePaid), availableOsCredit);
-  return {...batch,totalCod,advancePostedAmount,deliveryFeeCredit,availableOsCredit,expectedOsCreditApplied,expectedOutstanding:Math.max(0,totalCod-batch.advancePaid-expectedOsCreditApplied),expectedCarryForwardCredit:Math.max(0,batch.advancePaid-totalCod),osCreditAvailable:account?.creditAvailable ?? 0,osAdvanceCreditApplied:account?.advanceCreditApplied ?? 0,returnedCod,remainingToOs:balanceError?null:remainingToOs,balanceError,paymentPaid:account?.paymentPaid??0,historicalSettledAmount:account?.historicalSettledAmount??0,openingAdjustment:account?.openingAdjustment??0,nextTrackingSequence:await nextTrackingSequenceStart()};
+  return {...batch,totalCod,advancePostedAmount,deliveryFeeCredit,availableOsCredit,expectedOsCreditApplied,expectedOutstanding:Math.max(0,totalCod-batch.advancePaid-expectedOsCreditApplied),expectedCarryForwardCredit:Math.max(0,batch.advancePaid-totalCod),osCreditAvailable:account?.creditAvailable ?? 0,osAdvanceCreditApplied:account?.advanceCreditApplied ?? 0,returnedCod,remainingToOs:balanceError?null:remainingToOs,balanceError,paymentPaid:account?.paymentPaid??0,historicalSettledAmount:account?.historicalSettledAmount??0,openingAdjustment:account?.openingAdjustment??0,threeDaysInHand:threeDaysInHandSnapshot(batch.parcels),nextTrackingSequence:await nextTrackingSequenceStart()};
 }
 
 type NewParcelInput = { trackingNumber?: string; orderId?: string | null; customerName: string; customerPhone?: string; address: string; codAmount: number; townshipId: string; zoneId?: string };

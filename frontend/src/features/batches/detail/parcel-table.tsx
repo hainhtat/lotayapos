@@ -4,19 +4,20 @@ import { useTranslation } from "react-i18next";
 import type { SavedParcel } from "./batch-detail-types";
 
 const SAVED_PARCELS_PAGE_SIZE = 50;
-export function ParcelTable({ parcels, finalized, canVoidParcel, onHistory, onEdit, onVoid }: { parcels: SavedParcel[]; finalized: boolean; canVoidParcel: boolean; onHistory: (parcel: SavedParcel) => void; onEdit: (parcel: SavedParcel) => void; onVoid: (parcel: SavedParcel) => void }) {
+export function ParcelTable({ parcels, threeDaysInHandIds, showThreeDaysInHand, onShowThreeDaysInHandChange, finalized, canVoidParcel, onHistory, onEdit, onVoid }: { parcels: SavedParcel[]; threeDaysInHandIds: Set<string>; showThreeDaysInHand: boolean; onShowThreeDaysInHandChange: (show: boolean) => void; finalized: boolean; canVoidParcel: boolean; onHistory: (parcel: SavedParcel) => void; onEdit: (parcel: SavedParcel) => void; onVoid: (parcel: SavedParcel) => void }) {
   const { t } = useTranslation();
   const [savedPage, setSavedPage] = useState(1);
-  const savedPageCount = Math.max(1, Math.ceil(parcels.length / SAVED_PARCELS_PAGE_SIZE));
-  const pagedSavedParcels = parcels.slice((savedPage - 1) * SAVED_PARCELS_PAGE_SIZE, savedPage * SAVED_PARCELS_PAGE_SIZE);
-  useEffect(() => { setSavedPage(1); }, [parcels.length]);
+  const visibleParcels = showThreeDaysInHand ? parcels.filter((parcel) => threeDaysInHandIds.has(parcel.id)) : parcels;
+  const savedPageCount = Math.max(1, Math.ceil(visibleParcels.length / SAVED_PARCELS_PAGE_SIZE));
+  const pagedSavedParcels = visibleParcels.slice((savedPage - 1) * SAVED_PARCELS_PAGE_SIZE, savedPage * SAVED_PARCELS_PAGE_SIZE);
+  useEffect(() => { setSavedPage(1); }, [parcels.length, showThreeDaysInHand]);
   useEffect(() => { if (savedPage > savedPageCount) setSavedPage(savedPageCount); }, [savedPage, savedPageCount]);
   if (!parcels.length) return null;
   return (
-        <section className="mt-8 rounded-2xl border bg-white p-6 dark:border-white/10 dark:bg-[#181a1d]">
+        <section id="batch-saved-parcels" className="mt-8 scroll-mt-6 rounded-2xl border bg-white p-6 dark:border-white/10 dark:bg-[#181a1d]">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-display text-lg font-bold">{t("savedParcelList")}</h2>
-            {parcels.length > SAVED_PARCELS_PAGE_SIZE && (
+            {visibleParcels.length > SAVED_PARCELS_PAGE_SIZE && (
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-slate-500">{t("savedParcelsPage", { page: savedPage, total: savedPageCount })}</span>
                 <button
@@ -38,7 +39,12 @@ export function ParcelTable({ parcels, finalized, canVoidParcel, onHistory, onEd
               </div>
             )}
           </div>
+          <div role="group" className="mt-4 flex flex-wrap gap-2" aria-label={t("batchParcelView")}>
+            <button type="button" aria-pressed={!showThreeDaysInHand} onClick={() => onShowThreeDaysInHandChange(false)} className={`rounded-lg border px-3 py-1.5 text-xs font-bold ${!showThreeDaysInHand ? "border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-200" : "border-slate-200 dark:border-white/10"}`}>{t("batchAllParcels")}</button>
+            <button type="button" aria-pressed={showThreeDaysInHand} onClick={() => onShowThreeDaysInHandChange(true)} className={`rounded-lg border px-3 py-1.5 text-xs font-bold ${showThreeDaysInHand ? "border-amber-500 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200" : "border-slate-200 dark:border-white/10"}`}>{t("queueOverdue")} ({threeDaysInHandIds.size})</button>
+          </div>
           {canVoidParcel && <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{t("parcelVoidEligibilityNote")}</p>}
+          {showThreeDaysInHand && visibleParcels.length === 0 ? <p className="mt-4 text-sm text-slate-500">{t("batchNoThreeDaysInHand")}</p> :
           <div className="mt-4 overflow-x-auto rounded-xl border dark:border-white/10">
             <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
               <thead>
@@ -78,6 +84,7 @@ export function ParcelTable({ parcels, finalized, canVoidParcel, onHistory, onEd
               </tbody>
             </table>
           </div>
+          }
         </section>
   );
 }

@@ -1,0 +1,17 @@
+{
+  "operationsReview": "လုပ်ငန်း စစ်ဆေးချက်များ",
+  "operationsReviewDescription": "ပါဆယ်ပြဿနာများ၊ ရက်လွန်ပြန်အပ်မှုများနှင့် ၃ ရက်ကျော် ပါဆယ်များကို စစ်ဆေးပါ",
+  "reviewAlertsDescription": "သတိပေးချက် ဖွင့်ကြည့်ရုံဖြင့် မပြီးပြတ်ပါ။ စစ်ဆေးပြီးမှ သိရှိကြောင်း အတည်ပြုပါ",
+  "reviewOverdueDescription": "စနစ်ထဲ စာရင်းသွင်းပြီး ၃ ရက်ကျော်သည်အထိ မပြီးပြတ်သေးသော ပါဆယ်များ",
+  "reviewInHandSince": "{{date}} ကတည်းက လက်ဝယ်ရှိ",
+  "reviewOverduePagination": "၃ ရက်ကျော် ပါဆယ် စာမျက်နှာ",
+  "reviewViewAll": "အားလုံးကြည့်မည်",
+  "reviewAcknowledgeError": "အတည်ပြု၍ မရပါ။ ပြန်ကြိုးစားပါ",
+  "reviewNoParcelLink": "ဤသတိပေးချက်တွင် ချိတ်ဆက်ထားသော ပါဆယ် မရှိပါ",
+  "notificationsTitle": "အသိပေးချက်များ",
+  "reviewAlertType_FAILED": "ပို့ဆောင်မှု မအောင်မြင်ပါ",
+  "reviewAlertType_PARTIAL": "တစ်စိတ်တစ်ပိုင်း ပို့ဆောင်မှု",
+  "reviewAlertType_DATE_CHANGE": "ပို့ဆောင်ရက် ပြောင်းလဲထားသည်",
+  "reviewOverdueReturns": "ရက်လွန် ပြန်အပ်စောင့် ပါဆယ်များ",
+  "reviewOverdueReturnsDescription": "ရက်လွန်နေသော Pending Return ပါဆယ်များ။ အခြား Return များကို စစ်ရန် Filter ကို သုံးပါ"
+}

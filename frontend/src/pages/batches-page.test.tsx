@@ -162,13 +162,13 @@ describe("BatchesPage", () => {
       : Promise.resolve({data:[]}));
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", {name:"ဘတ်ချ်အသစ် ဖန်တီးရန်"}));
-    const dialog = await screen.findByRole("dialog", {name:"ဘတ်ချ်ဖန်တီးမည်"});
-    fireEvent.change(within(dialog).getByLabelText("အွန်လိုင်းဆိုင်"), {target:{value:"shop"}});
-    expect(dialog).toHaveTextContent("ပါဆယ်အားလုံးထည့်ပြီး Batch အပြီးသတ်ချိန်မှသာ OS ခရက်ဒစ်ကို တွက်ချက်အသုံးပြုမည်");
-    expect(within(dialog).getByLabelText("ငွေသား")).toBeInTheDocument();
-    expect(within(dialog).getByLabelText("KBZ Pay")).toBeInTheDocument();
-    expect(within(dialog).getByLabelText("Wave Pay")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", {name:i18n.t("createNewBatch")}));
+    const dialog = await screen.findByRole("dialog", {name:i18n.t("createBatch")});
+    fireEvent.change(within(dialog).getByLabelText(i18n.t("shopName")), {target:{value:"shop"}});
+    expect(dialog).toHaveTextContent("ပါဆယ်အားလုံးထည့်ပြီး Batch အပြီးသတ်မှ OS Credit ကို ဖြတ်တောက်တွက်ချက်ပါမည်");
+    expect(within(dialog).getByLabelText(i18n.t("cash"))).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(i18n.t("kbzPay"))).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(i18n.t("wavePay"))).toBeInTheDocument();
   });
 
   it("filters History on the server and hides redundant single shop and hub filters", async () => {

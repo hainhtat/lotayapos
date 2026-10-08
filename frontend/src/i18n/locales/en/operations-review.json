@@ -1,0 +1,17 @@
+{
+  "operationsReview": "Operations review",
+  "operationsReviewDescription": "Review parcel exceptions, overdue returns, and parcels held for three days or more.",
+  "reviewAlertsDescription": "Opening an alert does not clear it. Acknowledge it when reviewed.",
+  "reviewOverdueDescription": "Unresolved parcels at least three days old, counted from their original entry date.",
+  "reviewInHandSince": "In hand since {{date}}",
+  "reviewOverduePagination": "Three-day parcel pages",
+  "reviewViewAll": "View all",
+  "reviewAcknowledgeError": "Could not acknowledge. Please retry.",
+  "reviewNoParcelLink": "This alert has no linked parcel.",
+  "notificationsTitle": "Notifications",
+  "reviewAlertType_FAILED": "Failed delivery",
+  "reviewAlertType_PARTIAL": "Partial delivery",
+  "reviewAlertType_DATE_CHANGE": "Delivery date changed",
+  "reviewOverdueReturns": "Overdue pending returns",
+  "reviewOverdueReturnsDescription": "Pending Return parcels past their return due date. Use the filters to inspect other return items."
+}

@@ -13,6 +13,7 @@ import { ParcelTable } from "@/features/batches/detail/parcel-table";
 import { BatchDraftWorkspace } from "@/features/batches/detail/batch-draft-workspace";
 import { ParcelEditDialog } from "@/features/batches/detail/parcel-edit-dialog";
 import { FinalizeBatchDialog } from "@/features/batches/detail/finalize-batch-dialog";
+import { isParcelThreeDaysInHand } from "@/features/batches/detail/parcel-age";
 
 import type { SavedParcel, ParcelRow } from "@/features/batches/detail/batch-detail-types";
 import { isParcelRowBlank, isParcelRowComplete, appendParcelDraft, formatTrackingNumber, applyTownshipToParcelRow, isParcelRowLocationConsistent, hydrateParcelRowLocations } from "@/features/batches/detail/parcel-draft-rules";
@@ -36,6 +37,7 @@ function BatchDetailContent() {
   const [voiding, setVoiding] = useState<SavedParcel | null>(null);
   const [historyParcel,setHistoryParcel]=useState<{id:string;trackingNumber:string}|null>(null);
   const [confirmFinalize,setConfirmFinalize]=useState(false);
+  const [showThreeDaysInHand, setShowThreeDaysInHand] = useState(false);
   const [editForm, setEditForm] = useState({ orderId: "", customerName: "", address: "", customerPhone: "", codAmount: "", deliveryFee: "", townshipId: "", zoneId: "" });
   const { batch, regions, allTownships, editZones, finalize, updateParcel, save } = useBatchDetail({
     id, editing, editForm, setEditing, setRows, setMessage, closeFinalize: () => setConfirmFinalize(false),
@@ -56,6 +58,16 @@ function BatchDetailContent() {
   }, [editing]);
   const savedParcels = batch.data?.parcels ?? [];
   const activeParcelCount = savedParcels.filter((parcel) => parcel.status !== "VOIDED").length;
+  const threeDaysInHandIds = new Set(batch.data?.threeDaysInHand?.parcelIds ?? savedParcels.filter((parcel) => isParcelThreeDaysInHand(parcel)).map((parcel) => parcel.id));
+  const nextThreeDaysDueAt = batch.data?.threeDaysInHand?.nextDueAt;
+  const threeDaysCalculatedAt = batch.data?.threeDaysInHand?.calculatedAt;
+  useEffect(() => {
+    if (!nextThreeDaysDueAt || !threeDaysCalculatedAt) return;
+    const delay = Math.max(0, Date.parse(nextThreeDaysDueAt) - Date.parse(threeDaysCalculatedAt)) + 100;
+    if (!Number.isFinite(delay)) return;
+    const timer = window.setTimeout(() => { void batch.refetch(); }, delay);
+    return () => window.clearTimeout(timer);
+  }, [nextThreeDaysDueAt, threeDaysCalculatedAt, batch.refetch]);
   const remainingToOs = batch.data?.remainingToOs ?? 0;
   const returnedCod = batch.data?.returnedCod ?? 0;
   const finalized = Boolean(batch.data?.finalizedAt);
@@ -124,10 +136,10 @@ function BatchDetailContent() {
   };
   return (
     <div className="mx-auto max-w-[1600px]">
-      <BatchWorkspaceSummary shopName={batch.data?.shop.name} label={batch.data?.label} finalized={finalized} canFinalize={!finalized&&canFinalize} parcelCount={activeParcelCount} totalCod={batch.data?.totalCod??0} advancePaid={batch.data?.advancePaid??0} remainingToOs={finalized ? remainingToOs : (batch.data?.expectedOutstanding ?? remainingToOs)} balanceError={batch.data?.balanceError} accountBreakdown={t("batchAccountBreakdown",{cod:(batch.data?.totalCod??0).toLocaleString(),advance:(batch.data?.advancePostedAmount??batch.data?.advancePaid??0).toLocaleString(),paid:(batch.data?.paymentPaid??0).toLocaleString(),returns:returnedCod.toLocaleString(),historical:(batch.data?.historicalSettledAmount??0).toLocaleString(),adjustment:(batch.data?.openingAdjustment??0).toLocaleString()})} onFinalize={()=>setConfirmFinalize(true)} />
+      <BatchWorkspaceSummary shopName={batch.data?.shop.name} label={batch.data?.label} finalized={finalized} canFinalize={!finalized&&canFinalize} parcelCount={activeParcelCount} threeDaysInHandCount={threeDaysInHandIds.size} totalCod={batch.data?.totalCod??0} advancePaid={batch.data?.advancePaid??0} remainingToOs={finalized ? remainingToOs : (batch.data?.expectedOutstanding ?? remainingToOs)} balanceError={batch.data?.balanceError} accountBreakdown={t("batchAccountBreakdown",{cod:(batch.data?.totalCod??0).toLocaleString(),advance:(batch.data?.advancePostedAmount??batch.data?.advancePaid??0).toLocaleString(),paid:(batch.data?.paymentPaid??0).toLocaleString(),returns:returnedCod.toLocaleString(),historical:(batch.data?.historicalSettledAmount??0).toLocaleString(),adjustment:(batch.data?.openingAdjustment??0).toLocaleString()})} onFinalize={()=>setConfirmFinalize(true)} onShowThreeDaysInHand={() => setShowThreeDaysInHand(true)} />
       {finalized && <p role="status" className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200">{t("finalizedBatchLocked")}</p>}
       {!finalized && <BatchDraftWorkspace entryMode={entryMode} setEntryMode={setEntryMode} rows={rows} setRows={setRows} gridRef={gridRef} townships={allTownships.data ?? []} regions={regions.data ?? []} hubId={batch.data?.hubId} uploadPending={manifest.upload.isPending} onUpload={(file) => manifest.upload.mutate(file)} savePending={save.isPending} onSave={(entries) => save.mutate(entries)} nextSave={nextSave} message={message} preview={manifest.preview} onClearPreview={manifest.clearPreview} onApplyPreview={manifest.applyPreview} invalid={invalid} saveableCount={saveable.length} populated={populated} storageFailed={storageFailed} trackingForIndex={trackingForIndex} update={update} applyRowRegion={applyRowRegion} applyRowTownship={applyRowTownship} move={move} onOpenForm={() => setFormOpen(true)} />}
-      <ParcelTable parcels={savedParcels} finalized={finalized} canVoidParcel={canVoidParcel} onHistory={(parcel) => setHistoryParcel({ id: parcel.id, trackingNumber: parcel.trackingNumber })} onEdit={setEditing} onVoid={setVoiding} />
+      <ParcelTable parcels={savedParcels} threeDaysInHandIds={threeDaysInHandIds} showThreeDaysInHand={showThreeDaysInHand} onShowThreeDaysInHandChange={setShowThreeDaysInHand} finalized={finalized} canVoidParcel={canVoidParcel} onHistory={(parcel) => setHistoryParcel({ id: parcel.id, trackingNumber: parcel.trackingNumber })} onEdit={setEditing} onVoid={setVoiding} />
       {voiding && <VoidParcelDialog parcel={voiding} batchId={id} finalized={finalized} onClose={() => setVoiding(null)} onSuccess={(success) => { setVoiding(null); setMessage(success); }} />}
       {formOpen && <ParcelEntryForm townships={allTownships.data ?? []} hubId={batch.data?.hubId} preferMyanmar={preferMyanmar} onClose={() => setFormOpen(false)} onCommit={(row) => setRows((current) => appendParcelDraft(current, row))} />}
       {editing && <ParcelEditDialog parcel={editing} fields={editForm} setFields={setEditForm} townships={allTownships.data ?? []} zones={editZones.data ?? []} pending={updateParcel.isPending} onSave={() => updateParcel.mutate()} onClose={() => setEditing(null)} onHistory={() => { setHistoryParcel({ id: editing.id, trackingNumber: editing.trackingNumber }); setEditing(null); }} />}
