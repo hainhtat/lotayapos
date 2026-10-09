@@ -2,7 +2,7 @@
 # Exercise each configured vhost through local nginx, with real TLS hostname
 # verification. Public DNS/ISP availability is checked separately by operators.
 set -euo pipefail
-for hostname in lotaya.mmds.site lt.mmds.site; do
+for hostname in lotaya.mmds.site; do
   for path in / /app/ /api/v1/health/ready; do
     response="$(curl --noproxy '*' --resolve "${hostname}:443:127.0.0.1" --fail --silent --show-error --max-time 10 "https://${hostname}${path}")"
     if [[ "${path}" == /api/v1/health/ready ]]; then

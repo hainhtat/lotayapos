@@ -8,7 +8,7 @@ if [[ "${NODE_MAJOR}" -ne 22 || "${NODE_MINOR}" -lt 13 ]]; then
   exit 1
 fi
 CERT_DIR="${LOTAYA_CERT_DIR:-/etc/letsencrypt/live/lotaya.mmds.site}"
-LOTAYA_HOSTNAMES="${LOTAYA_HOSTNAMES:-lotaya.mmds.site lt.mmds.site}"
+LOTAYA_HOSTNAMES="${LOTAYA_HOSTNAMES:-lotaya.mmds.site}"
 for file in fullchain.pem privkey.pem; do
   [[ -s "${CERT_DIR}/${file}" ]] || { echo "Missing TLS prerequisite: ${CERT_DIR}/${file}. Provision a valid lotaya.mmds.site certificate before deploying." >&2; exit 1; }
 done

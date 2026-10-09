@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploys only the Lotaya application, on its two configured hostnames.
+# Deploys only the Lotaya application on lotaya.mmds.site.
 # Never edits nginx sites for pos.mmds.site, snmd, delilist, or other vhosts.
 set -euo pipefail
 
@@ -89,8 +89,7 @@ rsync -a node_modules/ "${RELEASE}/backend/node_modules/"
 install -m 600 "${SHARED}/lotaya.env" "${RELEASE}/backend/.env"
 
 cd "${REPO}/frontend"
-# Use same-origin API/download defaults so every configured Lotaya hostname
-# (lotaya.mmds.site, lt.mmds.site, etc.) authenticates against itself.
+# Use same-origin API/download defaults so the Lotaya site authenticates against itself.
 export VITE_API_BASE_URL="${VITE_API_BASE_URL:-/api/v1}"
 export VITE_RIDER_ANDROID_DOWNLOAD_URL="${VITE_RIDER_ANDROID_DOWNLOAD_URL:-/app/lotaya-rider.apk}"
 npm ci --include=dev

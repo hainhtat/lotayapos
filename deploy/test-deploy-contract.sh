@@ -6,16 +6,20 @@ if LOTAYA_NODE_VERSION=21.0.0 LOTAYA_CERT_DIR="${TMP}/missing" bash "${REPO}/dep
 if LOTAYA_NODE_VERSION=22.12.0 LOTAYA_CERT_DIR="${TMP}/missing" bash "${REPO}/deploy/check-deploy-prerequisites.sh" >/dev/null 2>&1; then echo "outdated Node.js was accepted" >&2;exit 1;fi
 if LOTAYA_NODE_VERSION=22.22.1 LOTAYA_CERT_DIR="${TMP}/missing" bash "${REPO}/deploy/check-deploy-prerequisites.sh" >/dev/null 2>&1; then echo "missing TLS certificate was accepted" >&2;exit 1;fi
 mkdir -p "${TMP}/cert"
+openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj '/CN=wrong.example' -addext 'subjectAltName=DNS:wrong.example' -keyout "${TMP}/cert/privkey.pem" -out "${TMP}/cert/fullchain.pem" >/dev/null 2>&1
+if LOTAYA_NODE_VERSION=22.22.1 LOTAYA_CERT_DIR="${TMP}/cert" bash "${REPO}/deploy/check-deploy-prerequisites.sh" >/dev/null 2>&1; then echo "certificate missing the Lotaya hostname was accepted" >&2;exit 1;fi
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj '/CN=lotaya.mmds.site' -addext 'subjectAltName=DNS:lotaya.mmds.site' -keyout "${TMP}/cert/privkey.pem" -out "${TMP}/cert/fullchain.pem" >/dev/null 2>&1
-if LOTAYA_NODE_VERSION=22.22.1 LOTAYA_CERT_DIR="${TMP}/cert" bash "${REPO}/deploy/check-deploy-prerequisites.sh" >/dev/null 2>&1; then echo "certificate missing alternate domain was accepted" >&2;exit 1;fi
-openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj '/CN=lotaya.mmds.site' -addext 'subjectAltName=DNS:lotaya.mmds.site,DNS:lt.mmds.site' -keyout "${TMP}/cert/privkey.pem" -out "${TMP}/cert/fullchain.pem" >/dev/null 2>&1
 LOTAYA_NODE_VERSION=22.22.1 LOTAYA_CERT_DIR="${TMP}/cert" bash "${REPO}/deploy/check-deploy-prerequisites.sh" >/dev/null
+if grep -q 'lt.mmds.site' "${REPO}/deploy/nginx/lotaya.mmds.site.conf" "${REPO}/deploy/check-release-domains.sh"; then echo "retired hostname remains in deploy configuration" >&2;exit 1;fi
 grep -q 'listen 443 ssl;' "${REPO}/deploy/nginx/lotaya.mmds.site.conf"
 grep -q 'http2 on;' "${REPO}/deploy/nginx/lotaya.mmds.site.conf"
 if grep -q 'listen .*http2' "${REPO}/deploy/nginx/lotaya.mmds.site.conf"; then echo "deprecated listen http2 syntax remains" >&2;exit 1;fi
 grep -q 'return 308 https://' "${REPO}/deploy/nginx/lotaya.mmds.site.conf"
 ASSET_LOCATION="$(sed -n '/location \^~ \/assets\//,/^    }/p' "${REPO}/deploy/nginx/lotaya.mmds.site.conf")"
 INDEX_LOCATION="$(sed -n '/location = \/index.html/,/^    }/p' "${REPO}/deploy/nginx/lotaya.mmds.site.conf")"
+APP_INDEX_LOCATION="$(sed -n '/location = \/app\//,/^    }/p' "${REPO}/deploy/nginx/lotaya.mmds.site.conf")"
+grep -Fq 'root /opt/lotaya/current;' <<<"${APP_INDEX_LOCATION}"
+grep -Fq 'try_files /app/index.html =404;' <<<"${APP_INDEX_LOCATION}"
 grep -Fq 'try_files $uri =404;' <<<"${ASSET_LOCATION}"
 grep -Fq 'Cache-Control "public, max-age=31536000, immutable";' <<<"${ASSET_LOCATION}"
 grep -Fq 'Strict-Transport-Security' <<<"${ASSET_LOCATION}"

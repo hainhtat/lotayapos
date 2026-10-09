@@ -8,7 +8,7 @@ mkdir -p "${scratch}/bin"
 cat >"${scratch}/bin/curl" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${CALL_LOG}"
-if [[ "${FAIL_ALIAS:-0}" == 1 && "$*" == *'https://lt.mmds.site/'* ]]; then exit 22; fi
+if [[ "${FAIL_PRIMARY:-0}" == 1 && "$*" == *'https://lotaya.mmds.site/'* ]]; then exit 22; fi
 if [[ "$*" == *'/health/ready'* ]]; then
   printf '%s' "${READY_BODY:-{\"success\":true}}"
 else
@@ -18,7 +18,8 @@ SH
 chmod +x "${scratch}/bin/curl"
 export PATH="${scratch}/bin:${PATH}" CALL_LOG="${scratch}/calls"
 bash "${REPO}/deploy/check-release-domains.sh" >/dev/null
-[[ "$(wc -l <"${CALL_LOG}" | tr -d ' ')" == 6 ]]
-if FAIL_ALIAS=1 bash "${REPO}/deploy/check-release-domains.sh" >/dev/null 2>&1; then echo "Alternate-host failure was accepted" >&2; exit 1; fi
+[[ "$(wc -l <"${CALL_LOG}" | tr -d ' ')" == 3 ]]
+if grep -q 'lt.mmds.site' "${CALL_LOG}"; then echo "Retired hostname was checked" >&2; exit 1; fi
+if FAIL_PRIMARY=1 bash "${REPO}/deploy/check-release-domains.sh" >/dev/null 2>&1; then echo "Primary-host failure was accepted" >&2; exit 1; fi
 if READY_BODY='<html>wrong upstream</html>' bash "${REPO}/deploy/check-release-domains.sh" >/dev/null 2>&1; then echo "HTML health response was accepted" >&2; exit 1; fi
-echo "Both-domain response/failure checks passed."
+echo "Primary-domain response/failure checks passed."
