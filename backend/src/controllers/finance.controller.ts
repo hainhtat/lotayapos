@@ -45,7 +45,13 @@ export const createExpense: RequestHandler = async (req, res) => res.status(201)
 export const ledger: RequestHandler = async (req, res) => res.json({ success: true, data: await ledgerService.getLedgerReport(req.query, actor(req)) });
 export const ledgerSummary: RequestHandler = async (req, res) => res.json({ success: true, data: await ledgerService.getLedgerSummary(req.query, actor(req)) });
 export const walletTransactions: RequestHandler = async (req, res) => {
-  const data = await listWalletTransactions(req.query as unknown as import("../services/finance/wallet-transactions.js").WalletTransactionQuery, actor(req));
+  // Express 5 recreates req.query on access, so express-validator's toInt()
+  // sanitization does not persist here. Parse the already-validated values.
+  const data = await listWalletTransactions({
+    ...req.query as unknown as import("../services/finance/wallet-transactions.js").WalletTransactionQuery,
+    page: typeof req.query.page === "string" ? Number(req.query.page) : undefined,
+    pageSize: typeof req.query.pageSize === "string" ? Number(req.query.pageSize) : undefined,
+  }, actor(req));
   if (req.query.format === "csv") {
     const escapeCell = (value: unknown) => {
       const raw = value == null ? "" : String(value);

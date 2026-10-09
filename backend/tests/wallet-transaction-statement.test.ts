@@ -57,6 +57,14 @@ describe("wallet transaction statement", () => {
     expect(response.body.data.pagination.total).toBe(1);
   });
 
+  test("accepts the page and page size sent by the browser", async () => {
+    const response = await request(app).get("/api/v1/finance/transactions")
+      .set("Authorization", `Bearer ${token}`)
+      .query({ from: "2039-04-10", to: "2039-04-10", hubId, page: "1", pageSize: "50" });
+    expect(response.status).toBe(200);
+    expect(response.body.data.pagination).toMatchObject({ page: 1, pageSize: 50, total: 1 });
+  });
+
   test("enforces hub scope and exports a complete CSV", async () => {
     const forbidden = await request(app).get("/api/v1/finance/transactions")
       .set("Authorization", `Bearer ${token}`)
