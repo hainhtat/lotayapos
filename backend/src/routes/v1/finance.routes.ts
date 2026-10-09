@@ -5,7 +5,8 @@ import { asyncHandler } from "../../utils/async-handler.js";
 import { ledgerSummary } from "../../controllers/finance.controller.js";
 import { osHistoryRouter } from "./os-history.routes.js";
 import { receiveOsReturnsBulk } from "../../controllers/finance.controller.js";
-import { adjustment, amendOsSettlement, approveOsCutoverAdjustment, approveVariance, close, createExpense, createExpenseCategory, createOsPayment, createOsSettlement, declareSettlement, deliveryCollection, editOsSettlementDraft, expenseCategories, expenses, ledger, openingBalance, osAccountHistory, osAccounts, osPendingReturns, osSettlementDetail, osSettlementDrafts, osSettlementPreview, osSettlements, receiveOsReturn, reopen, replaceOsPayment, reversal, reverseOsSettlement, returnDeduction, riderOutstanding, savedOsSettlementDrafts, saveOsSettlementDraft, settlement, settlementPreview, voidOsPayment, walletTransfer } from "../../controllers/finance.controller.js";
+import { adjustment, amendOsSettlement, approveOsCutoverAdjustment, approveVariance, close, createExpense, createExpenseCategory, createOsPayment, createOsSettlement, declareSettlement, deliveryCollection, editOsSettlementDraft, expenseCategories, expenses, ledger, openingBalance, osAccountHistory, osAccounts, osPendingReturns, osSettlementDetail, osSettlementDrafts, osSettlementPreview, osSettlements, receiveOsReturn, reopen, replaceOsPayment, reversal, reverseOsSettlement, returnDeduction, riderOutstanding, savedOsSettlementDrafts, saveOsSettlementDraft, settlement, settlementPreview, voidOsPayment, walletTransfer, walletTransactions, transactionHubs } from "../../controllers/finance.controller.js";
+import { walletTransactionValidators } from "../../validators/finance/wallet-transactions.js";
 import { createRiderSettlementValidators, declareRiderSettlementValidators, riderOutstandingValidators, riderSettlementPreviewValidators } from "../../validators/finance/rider-settlements.js";
 import { approveCashbookVarianceValidators, cashbookAdjustmentValidators, closeCashbookValidators, openingBalanceValidators, reopenCashbookValidators, walletTransferValidators } from "../../validators/finance/cashbook.js";
 import { createExpenseCategoryValidators, createExpenseValidators, listExpensesValidators } from "../../validators/finance/expenses.js";
@@ -19,6 +20,8 @@ financeRouter.use("/os-history", osHistoryRouter);
 financeRouter.post("/os-returns/receive-bulk", requireAuth, requireRoles("SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER"), receiveOsReturnsBulkValidators, validation, asyncHandler(receiveOsReturnsBulk));
 
 financeRouter.get("/ledger", requireAuth, requireRoles("SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER", "AUDITOR"), ledgerListValidators, validation, asyncHandler(ledger));
+financeRouter.get("/transactions", requireAuth, requireRoles("SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER", "AUDITOR"), walletTransactionValidators, validation, asyncHandler(walletTransactions));
+financeRouter.get("/transactions/hubs", requireAuth, requireRoles("SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER", "AUDITOR"), asyncHandler(transactionHubs));
 financeRouter.get("/ledger/summary", requireAuth, requireRoles("SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER", "AUDITOR"), ledgerListValidators, validation, asyncHandler(ledgerSummary));
 financeRouter.post("/ledger/delivery-collections", requireAuth, requireRoles("SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER"), deliveryCollectionValidators, validation, asyncHandler(deliveryCollection));
 financeRouter.post("/ledger/return-deductions", requireAuth, requireRoles("SUPERADMIN", "FINANCE", "OPERATIONS_MANAGER"), returnDeductionValidators, validation, asyncHandler(returnDeduction));

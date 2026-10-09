@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ArrowUpRight, WalletCards, X } from "lucide-react";
+import { ArrowUpRight, Banknote, WalletCards, X } from "lucide-react";
 import { OsCashbookOverview } from "@/components/os-cashbook-overview";
 import { PostPickupAdvancesPanel } from "@/components/post-pickup-advances-panel";
 import { api } from "@/lib/api";
@@ -12,6 +12,7 @@ import { SettlementWorkspaces } from "./settlement-workspaces";
 import { useAuth } from "@/app/auth";
 import { hubBusinessDate } from "@/lib/business-date";
 import { ModalPortal } from "@/components/modal-portal";
+import { TransactionsPanel } from "@/features/finance/transactions-panel";
 
 type Batch = {
   id: string;
@@ -23,7 +24,7 @@ type Batch = {
   parcels: Array<{ status: string }>;
 };
 type LedgerFilters = { from: string; to: string; account: string };
-type FinanceTab = "overview" | "settlements";
+type FinanceTab = "overview" | "transactions" | "settlements";
 type Hub = { id: string; name: string };
 type Wallet = "CASH" | "KBZ_PAY" | "WAVE_PAY";
 
@@ -31,6 +32,7 @@ const control =
   "rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#1598ef] dark:border-white/10 dark:bg-[#121416]";
 
 function resolveFinanceTab(searchParams: URLSearchParams, hash: string, pathname = ""): FinanceTab {
+  if (pathname.endsWith("/transactions") || searchParams.get("tab") === "transactions") return "transactions";
   if (pathname.endsWith("/settlements")) return "settlements";
   if (searchParams.get("tab") === "settlements") return "settlements";
   if (hash === "#os-settlements" || hash === "#os-pending-returns" || hash === "#rider-outstanding") return "settlements";
@@ -106,8 +108,8 @@ export function FinancePage() {
     setTab(next);
     const params = new URLSearchParams(searchParams);
     if (next === "overview") params.delete("tab");
-    else params.set("tab", "settlements");
-    const pathname = location.pathname.startsWith("/finance/") ? `/finance/${next === "overview" ? "overview" : "settlements"}` : location.pathname;
+    else params.set("tab", next);
+    const pathname = location.pathname.startsWith("/finance/") ? `/finance/${next}` : location.pathname;
     navigate({ pathname, search: params.toString() ? `?${params}` : "" }, { replace: true });
   };
 
@@ -129,8 +131,11 @@ export function FinancePage() {
   const moveTab = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
-    selectTab(tab === "overview" ? "settlements" : "overview");
-    requestAnimationFrame(() => document.getElementById(tab === "overview" ? "finance-settlements-tab" : "finance-overview-tab")?.focus());
+    const sequence: FinanceTab[] = ["overview", "transactions", "settlements"];
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const next = sequence[(sequence.indexOf(tab) + direction + sequence.length) % sequence.length];
+    selectTab(next);
+    requestAnimationFrame(() => document.getElementById(`finance-${next}-tab`)?.focus());
   };
 
   return (
@@ -144,6 +149,9 @@ export function FinancePage() {
           <button id="finance-overview-tab" type="button" role="tab" aria-controls="finance-overview-panel" tabIndex={tab === "overview" ? 0 : -1} aria-selected={tab === "overview"} className={tabClass(tab === "overview")} onClick={() => selectTab("overview")}>
             {t("financeOverview")}
           </button>
+          <button id="finance-transactions-tab" type="button" role="tab" aria-controls="finance-transactions-panel" tabIndex={tab === "transactions" ? 0 : -1} aria-selected={tab === "transactions"} className={tabClass(tab === "transactions")} onClick={() => selectTab("transactions")}>
+            {t("transactionTab")}
+          </button>
           <button id="finance-settlements-tab" type="button" role="tab" aria-controls="finance-settlements-panel" tabIndex={tab === "settlements" ? 0 : -1} aria-selected={tab === "settlements"} className={tabClass(tab === "settlements")} onClick={() => selectTab("settlements")}>
             {t("financeOsAndRiders")}
           </button>
@@ -153,20 +161,19 @@ export function FinancePage() {
 
       {tab === "overview" ? (
         <div id="finance-overview-panel" role="tabpanel" aria-labelledby="finance-overview-tab">
-          <OsCashbookOverview ledger={currentBalances.data ?? []} hubs={hubs.data ?? []} />
           <section className="mt-6" aria-labelledby="wallet-health-heading">
           <div className="mb-3"><h2 id="wallet-health-heading" className="font-display text-lg font-bold">{t("walletHealth")}</h2><p className="text-sm text-slate-500">{t("walletHealthDescription")}</p></div>
-          <div className="rounded-2xl border border-sky-200 bg-sky-50 px-5 py-4 dark:border-sky-900/60 dark:bg-sky-950/20">
-            <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">{t("totalWalletBalance")}</p>
+          <div className="rounded-2xl bg-[#101318] p-5 text-white">
+            <WalletCards className="text-[#4db7ff]" size={20} aria-hidden="true" />
+            <p className="mt-4 text-sm text-slate-400">{t("totalWalletBalance")}</p>
             <p className="mt-1 font-display text-2xl font-bold" aria-live="polite">{currentBalances.data ? `${totalWalletBalance.toLocaleString()} MMK` : currentBalances.isError ? t("loadError") : "…"}</p>
           </div>
           <div className="mt-6 grid gap-4 sm:grid-cols-3">
-            <div className="rounded-2xl bg-[#101318] p-5 text-white">
-              <WalletCards className="text-[#4db7ff]" size={20} />
-              <p className="mt-6 text-sm text-slate-400">{t("cashWallet")}</p>
-              <p className="mt-1 font-display text-2xl font-bold">{formatBalance("WALLET_CASH")}</p>
-              <p className="mt-2 text-xs text-slate-400">{walletMeaning("WALLET_CASH")}</p>
-              {user?.role === "SUPERADMIN" && <button type="button" onClick={() => setAdjustingWallet("CASH")} className="mt-3 text-xs font-bold text-[#4db7ff]">{t("walletAdjustment")}</button>}
+            <div className="rounded-2xl bg-white p-5 shadow-sm dark:bg-[#181a1d]">
+              <div className="flex items-center gap-2"><Banknote className="size-9 rounded-lg bg-sky-50 p-2 text-[#0787df] dark:bg-sky-950/40" aria-hidden="true" /><p className="text-sm text-slate-500">{t("cashWallet")}</p></div>
+              <p className="mt-6 font-display text-2xl font-bold">{formatBalance("WALLET_CASH")}</p>
+              <p className="mt-2 text-xs text-slate-500">{walletMeaning("WALLET_CASH")}</p>
+              {user?.role === "SUPERADMIN" && <button type="button" onClick={() => setAdjustingWallet("CASH")} className="mt-3 text-xs font-bold text-[#0787df]">{t("walletAdjustment")}</button>}
             </div>
             <div className="rounded-2xl bg-white p-5 shadow-sm dark:bg-[#181a1d]">
               <div className="flex items-center gap-2"><img src="/brands/kbzpay.png" alt="" className="size-9 rounded-lg object-cover" /><p className="text-sm text-slate-500">{t("kbzPay")}</p></div>
@@ -182,6 +189,7 @@ export function FinancePage() {
             </div>
           </div>
           </section>
+          <OsCashbookOverview ledger={currentBalances.data ?? []} hubs={hubs.data ?? []} />
 
           <details className="mt-6 rounded-2xl border border-amber-200 bg-white shadow-sm dark:border-amber-900/60 dark:bg-[#181a1d]">
             <summary className="cursor-pointer list-none p-5 font-display font-bold">{t("reconciliationIssues")}</summary>
@@ -265,6 +273,8 @@ export function FinancePage() {
           <CashbookExpenses hubs={hubs.data ?? []} />
           {adjustingWallet && <WalletAdjustmentDialog wallet={adjustingWallet} currentBalance={walletBalance(adjustingWallet === "CASH" ? "WALLET_CASH" : adjustingWallet === "KBZ_PAY" ? "WALLET_KBZ_PAY" : "WALLET_WAVE_PAY")} hubs={hubs.data ?? []} onClose={() => setAdjustingWallet(null)} onSaved={() => setMessage(t("walletAdjustmentSaved"))} />}
         </div>
+      ) : tab === "transactions" ? (
+        <div id="finance-transactions-panel" role="tabpanel" aria-labelledby="finance-transactions-tab"><TransactionsPanel /></div>
       ) : (
         <div id="finance-settlements-panel" role="tabpanel" aria-labelledby="finance-settlements-tab"><SettlementWorkspaces /></div>
       )}

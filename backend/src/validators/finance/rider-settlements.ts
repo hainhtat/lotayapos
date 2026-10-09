@@ -21,7 +21,7 @@ export const riderSettlementPreviewValidators = [
   query("riderId").optional().isString().trim().notEmpty(),
 ];
 
-export const riderOutstandingValidators = [query("businessDate").isISO8601()];
+export const riderOutstandingValidators = [query("businessDate").isISO8601(), query("hubId").optional().isString().trim().notEmpty()];
 
 export const declareRiderSettlementValidators = [
   body("businessDate").isISO8601(),

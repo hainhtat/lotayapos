@@ -237,16 +237,18 @@ export async function previewRiderSettlement(
 }
 
 export async function listRiderOutstanding(
-  input: { businessDate: string },
+  input: { businessDate: string; hubId?: string },
   actor: FinanceActor,
 ) {
   const user = await assertFinanceActor(actor);
+  if (input.hubId && user.role !== "SUPERADMIN" && input.hubId !== user.hubId)
+    throw new ApiError(403, "FORBIDDEN", "Resource is outside your hub scope");
   const date = businessDay(input.businessDate);
   const riders = await prisma.rider.findMany({
     where:
-      user.role === "SUPERADMIN"
+      user.role === "SUPERADMIN" && !input.hubId
         ? { user: { active: true } }
-        : { hubId: user.hubId ?? "__none__", user: { active: true } },
+        : { hubId: input.hubId ?? user.hubId ?? "__none__", user: { active: true } },
     include: {
       user: { select: { name: true, username: true } },
       hub: { select: { name: true } },

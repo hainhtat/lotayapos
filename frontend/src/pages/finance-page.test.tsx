@@ -44,11 +44,12 @@ describe("FinancePage",()=>{
 
   it("renders wallet cards from ledger balances",async()=>{
     renderPage();
-    await waitFor(()=>expect(within(screen.getByText("Cash wallet").parentElement!).getByText("100,000 MMK")).toBeInTheDocument());
+    await waitFor(()=>expect(within(screen.getByText("Cash wallet").parentElement!.parentElement!).getByText("100,000 MMK")).toBeInTheDocument());
     expect(within(screen.getByText("Total wallet balance").parentElement!).getByText("200,000 MMK")).toBeInTheDocument();
     expect(document.querySelector('img[src="/brands/kbzpay.png"]')).toBeInTheDocument();
     expect(document.querySelector('img[src="/brands/wavepay.png"]')).toBeInTheDocument();
     expect(screen.getByText("OS cashbook snapshot")).toBeInTheDocument();
+    expect(screen.getByText("Total wallet balance").compareDocumentPosition(screen.getByText("OS cashbook snapshot")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect((await screen.findAllByText("OS credits recorded")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("75,000 MMK").length).toBeGreaterThan(0);
     expect(screen.getAllByText("25,000 MMK").length).toBeGreaterThan(0);

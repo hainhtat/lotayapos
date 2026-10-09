@@ -5,6 +5,7 @@ import * as osSettlementDraftService from "../services/finance/os-settlement-dra
 import * as osReturnService from "../services/finance/os-returns.js";
 import * as cashbookCloseService from "../services/finance/cashbook-close.js";
 import * as ledgerService from "../services/ledger.service.js";
+import { listTransactionHubs, listWalletTransactions } from "../services/finance/wallet-transactions.js";
 import * as osAccountService from "../services/os-account.service.js";
 import * as expenseService from "../services/finance/expenses.js";
 import * as cashbookPostingService from "../services/finance/cashbook-postings.js";
@@ -13,7 +14,7 @@ const actor = (req: Parameters<RequestHandler>[0]) => ({ id: req.auth!.sub, role
 
 export const settlement: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await riderSettlementService.createRiderSettlement(req.body, actor(req)) });
 export const settlementPreview: RequestHandler = async (req, res) => res.json({ success: true, data: await riderSettlementService.previewRiderSettlement({ businessDate: String(req.query.businessDate), riderId: typeof req.query.riderId === "string" ? req.query.riderId : undefined }, actor(req)) });
-export const riderOutstanding: RequestHandler = async (req, res) => res.json({ success: true, data: await riderSettlementService.listRiderOutstanding({ businessDate: String(req.query.businessDate) }, actor(req)) });
+export const riderOutstanding: RequestHandler = async (req, res) => res.json({ success: true, data: await riderSettlementService.listRiderOutstanding({ businessDate: String(req.query.businessDate), hubId: typeof req.query.hubId === "string" ? req.query.hubId : undefined }, actor(req)) });
 export const osSettlementDrafts: RequestHandler = async (req, res) => res.json({ success: true, data: await osSettlementService.listOsSettlementDrafts({ shopId: typeof req.query.shopId === "string" ? req.query.shopId : undefined }, actor(req)) });
 export const savedOsSettlementDrafts: RequestHandler = async (req, res) => res.json({ success: true, data: await osSettlementDraftService.listSavedOsSettlementDrafts({ shopId: typeof req.query.shopId === "string" ? req.query.shopId : undefined, hubId: typeof req.query.hubId === "string" ? req.query.hubId : undefined }, actor(req)) });
 export const saveOsSettlementDraft: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await osSettlementDraftService.createOsSettlementDraft(req.body, actor(req)) });
@@ -43,6 +44,29 @@ export const expenses: RequestHandler = async (req, res) => res.json({ success: 
 export const createExpense: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await expenseService.postExpense(req.body, actor(req)) });
 export const ledger: RequestHandler = async (req, res) => res.json({ success: true, data: await ledgerService.getLedgerReport(req.query, actor(req)) });
 export const ledgerSummary: RequestHandler = async (req, res) => res.json({ success: true, data: await ledgerService.getLedgerSummary(req.query, actor(req)) });
+export const walletTransactions: RequestHandler = async (req, res) => {
+  const data = await listWalletTransactions(req.query as unknown as import("../services/finance/wallet-transactions.js").WalletTransactionQuery, actor(req));
+  if (req.query.format === "csv") {
+    const escapeCell = (value: unknown) => {
+      const raw = value == null ? "" : String(value);
+      // Prevent spreadsheet formula execution when a statement is opened in Excel/Sheets.
+      const safe = typeof value !== "number" && /^[\s]*[=+@-]/.test(raw) ? `'${raw}` : raw;
+      return `"${safe.replaceAll('"', '""')}"`;
+    };
+    const columns = ["Business date", "Recorded at", "Type", "Description", "Reference", "Counterparty", "Recorded by", "Cash", "KBZ Pay", "Wave Pay", "Cash balance after", "KBZ Pay balance after", "Wave Pay balance after"];
+    const rows = data.items.map((item) => [
+      item.businessDate, item.createdAt.toISOString(), item.type, item.description,
+      item.reference, item.counterparty, item.recordedBy,
+      ...(["CASH", "KBZ_PAY", "WAVE_PAY"] as const).map((wallet) => item.wallets.find((split) => split.wallet === wallet)?.amount ?? 0),
+      ...(["CASH", "KBZ_PAY", "WAVE_PAY"] as const).map((wallet) => item.balancesAfter.find((balance) => balance.wallet === wallet)?.balance ?? ""),
+    ]);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="wallet-transactions-${req.query.from}-${req.query.to}.csv"`);
+    return res.send(`\uFEFF${[columns, ...rows].map((row) => row.map(escapeCell).join(",")).join("\r\n")}`);
+  }
+  return res.json({ success: true, data });
+};
+export const transactionHubs: RequestHandler = async (req, res) => res.json({ success: true, data: await listTransactionHubs(actor(req)) });
 export const deliveryCollection: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await ledgerService.postDeliveryCollection(req.body, actor(req)) });
 export const returnDeduction: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await ledgerService.postReturnDeduction(req.body, actor(req)) });
 export const reversal: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await ledgerService.reverseJournalEntry(req.body, actor(req)) });

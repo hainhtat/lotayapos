@@ -70,6 +70,7 @@ export const router = createBrowserRouter([
           { path: "finance", element: lazyElement(<FinancePage />) },
           { path: "finance/overview", element: lazyElement(<FinancePage />) },
           { path: "finance/settlements", element: lazyElement(<FinancePage />) },
+          { path: "finance/transactions", element: lazyElement(<FinancePage />) },
           { path: "finance/expenses", element: lazyElement(<FinancePage />) },
           { path: "reports", element: lazyElement(<ReportsPage />) },
           { path: "settings", element: <Navigate to="/settings/locations" replace /> },
