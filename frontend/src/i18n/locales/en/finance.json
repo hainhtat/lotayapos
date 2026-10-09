@@ -16,6 +16,7 @@
   "paymentRetryUnchanged": "The payment result is uncertain. Retry this same request to confirm it without creating a duplicate.",
   "financeDescription": "Wallet reconciliation and double-entry ledger visibility.",
   "walletHealth": "Current wallet health",
+  "totalWalletBalance": "Total wallet balance",
   "walletHealthDescription": "Current ledger position before older reconciliation work.",
   "walletFundsAvailable": "Funds available in this wallet",
   "walletFundsOut": "Net funds paid out or awaiting reconciliation",

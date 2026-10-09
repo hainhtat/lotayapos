@@ -45,6 +45,9 @@ describe("FinancePage",()=>{
   it("renders wallet cards from ledger balances",async()=>{
     renderPage();
     await waitFor(()=>expect(within(screen.getByText("Cash wallet").parentElement!).getByText("100,000 MMK")).toBeInTheDocument());
+    expect(within(screen.getByText("Total wallet balance").parentElement!).getByText("200,000 MMK")).toBeInTheDocument();
+    expect(document.querySelector('img[src="/brands/kbzpay.png"]')).toBeInTheDocument();
+    expect(document.querySelector('img[src="/brands/wavepay.png"]')).toBeInTheDocument();
     expect(screen.getByText("OS cashbook snapshot")).toBeInTheDocument();
     expect((await screen.findAllByText("OS credits recorded")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("75,000 MMK").length).toBeGreaterThan(0);
@@ -52,6 +55,14 @@ describe("FinancePage",()=>{
     expect(screen.getAllByText("150,000 MMK").length).toBeGreaterThan(0);
     expect(screen.getAllByText("40,000 MMK")).toHaveLength(2);
     expect(screen.getAllByText("60,000 MMK")).toHaveLength(2);
+  });
+
+  it("includes a negative wallet balance in the combined total", async () => {
+    apiMock.mockImplementation((path: string) => path === "/finance/ledger/summary"
+      ? Promise.resolve({ data: { ...ledgerReport, accounts: ledger.map((line) => line.account === "WALLET_CASH" ? { ...line, balance: -10000 } : line) } })
+      : Promise.resolve({ data: [] }));
+    renderPage();
+    expect(await within(screen.getByText("Total wallet balance").parentElement!).findByText("90,000 MMK")).toBeInTheDocument();
   });
 
   it("lets a Superadmin set an actual wallet balance through an auditable adjustment", async () => {

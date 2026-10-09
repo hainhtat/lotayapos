@@ -112,6 +112,7 @@ export function FinancePage() {
   };
 
   const walletBalance = (name: string) => currentBalances.data?.find((line) => line.account === name)?.balance ?? 0;
+  const totalWalletBalance = walletBalance("WALLET_CASH") + walletBalance("WALLET_KBZ_PAY") + walletBalance("WALLET_WAVE_PAY");
   const formatBalance = (name: string) => {
     if (!currentBalances.data) return currentBalances.isError ? t("loadError") : "…";
     const balance = walletBalance(name);
@@ -155,6 +156,10 @@ export function FinancePage() {
           <OsCashbookOverview ledger={currentBalances.data ?? []} hubs={hubs.data ?? []} />
           <section className="mt-6" aria-labelledby="wallet-health-heading">
           <div className="mb-3"><h2 id="wallet-health-heading" className="font-display text-lg font-bold">{t("walletHealth")}</h2><p className="text-sm text-slate-500">{t("walletHealthDescription")}</p></div>
+          <div className="rounded-2xl border border-sky-200 bg-sky-50 px-5 py-4 dark:border-sky-900/60 dark:bg-sky-950/20">
+            <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">{t("totalWalletBalance")}</p>
+            <p className="mt-1 font-display text-2xl font-bold" aria-live="polite">{currentBalances.data ? `${totalWalletBalance.toLocaleString()} MMK` : currentBalances.isError ? t("loadError") : "…"}</p>
+          </div>
           <div className="mt-6 grid gap-4 sm:grid-cols-3">
             <div className="rounded-2xl bg-[#101318] p-5 text-white">
               <WalletCards className="text-[#4db7ff]" size={20} />
@@ -164,14 +169,14 @@ export function FinancePage() {
               {user?.role === "SUPERADMIN" && <button type="button" onClick={() => setAdjustingWallet("CASH")} className="mt-3 text-xs font-bold text-[#4db7ff]">{t("walletAdjustment")}</button>}
             </div>
             <div className="rounded-2xl bg-white p-5 shadow-sm dark:bg-[#181a1d]">
-              <p className="text-sm text-slate-500">{t("kbzPay")}</p>
-              <p className="mt-7 font-display text-2xl font-bold">{formatBalance("WALLET_KBZ_PAY")}</p>
+              <div className="flex items-center gap-2"><img src="/brands/kbzpay.png" alt="" className="size-9 rounded-lg object-cover" /><p className="text-sm text-slate-500">{t("kbzPay")}</p></div>
+              <p className="mt-6 font-display text-2xl font-bold">{formatBalance("WALLET_KBZ_PAY")}</p>
               <p className="mt-2 text-xs text-slate-500">{walletMeaning("WALLET_KBZ_PAY")}</p>
               {user?.role === "SUPERADMIN" && <button type="button" onClick={() => setAdjustingWallet("KBZ_PAY")} className="mt-3 text-xs font-bold text-[#0787df]">{t("walletAdjustment")}</button>}
             </div>
             <div className="rounded-2xl bg-white p-5 shadow-sm dark:bg-[#181a1d]">
-              <p className="text-sm text-slate-500">{t("wavePay")}</p>
-              <p className="mt-7 font-display text-2xl font-bold">{formatBalance("WALLET_WAVE_PAY")}</p>
+              <div className="flex items-center gap-2"><img src="/brands/wavepay.png" alt="" className="size-9 rounded-lg object-cover" /><p className="text-sm text-slate-500">{t("wavePay")}</p></div>
+              <p className="mt-6 font-display text-2xl font-bold">{formatBalance("WALLET_WAVE_PAY")}</p>
               <p className="mt-2 text-xs text-slate-500">{walletMeaning("WALLET_WAVE_PAY")}</p>
               {user?.role === "SUPERADMIN" && <button type="button" onClick={() => setAdjustingWallet("WAVE_PAY")} className="mt-3 text-xs font-bold text-[#0787df]">{t("walletAdjustment")}</button>}
             </div>

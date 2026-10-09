@@ -16,6 +16,7 @@
   "paymentRetryUnchanged": "ပေးချေမှုအခြေအနေ မသေချာပါ။ ငွေနှစ်ခါမပြတ်စေရန် မူလအတိုင်းသာ ထပ်စမ်းပါ",
   "financeDescription": "Wallet များနှင့် ငွေစာရင်း နှစ်ဖက်စာရင်းကို စစ်ဆေးပါ",
   "walletHealth": "လက်ရှိ Wallet အခြေအနေ",
+  "totalWalletBalance": "Wallet စုစုပေါင်းလက်ကျန်",
   "walletHealthDescription": "စာရင်းမညှိမီ လက်ရှိ စာရင်းအခြေအနေ",
   "walletFundsAvailable": "သုံးနိုင်သော လက်ကျန်ငွေ",
   "walletFundsOut": "ပေးချေပြီး/စာရင်းညှိရန် ကျန်ငွေ",
