@@ -45,7 +45,6 @@
     "pino-http": "latest"
   },
   "devDependencies": {
-    "@types/bcryptjs": "latest",
     "@types/cors": "^2.8.19",
     "@types/express": "latest",
     "@types/jest": "latest",
@@ -64,6 +63,7 @@
   "overrides": {
     "deepmerge-ts": "8.0.2",
     "mysql2": "3.24.4",
-    "proxy-addr": "2.0.8"
+    "proxy-addr": "2.0.8",
+    "handlebars": "4.7.10"
   }
 }

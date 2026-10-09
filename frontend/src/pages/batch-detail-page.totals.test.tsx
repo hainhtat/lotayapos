@@ -414,6 +414,7 @@ describe("BatchDetailPage settlement totals", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Form" }));
     fireEvent.click(screen.getByRole("button", { name: "Add parcel" }));
     const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByLabelText("Customer phone").compareDocumentPosition(within(dialog).getByLabelText("Customer")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.change(within(dialog).getByLabelText("Customer phone"), { target: { value: "09123456789" } });
     fireEvent.click(await within(dialog).findByRole("button", { name: "Use this location" }));
     expect(within(dialog).getByLabelText("Customer")).toHaveValue("Ma Su");
@@ -440,5 +441,30 @@ describe("BatchDetailPage settlement totals", () => {
     expect(customer).toHaveValue("Ma Su");
     expect(screen.getByLabelText("Address 1")).toHaveValue("Saved road");
     expect(screen.getByLabelText("Township 1")).toHaveValue("t-hlaing");
+  });
+
+  it("explains when a spreadsheet phone has no saved location", async () => {
+    const original = apiMock.getMockImplementation()!;
+    apiMock.mockImplementation((path: string, options: { body?: string }) => path.endsWith("/location-suggestions")
+      ? Promise.resolve({ data: { rows: [{ index: 0, kind: "NONE", candidates: [] }] } }) : original(path, options));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<MemoryRouter initialEntries={["/batches/batch-1"]}><QueryClientProvider client={client}><Routes><Route path="/batches/:id" element={<BatchDetailPage />} /></Routes></QueryClientProvider></MemoryRouter>);
+    const phone = await screen.findByLabelText("Customer phone 1");
+    fireEvent.focus(phone);
+    fireEvent.change(phone, { target: { value: "09123456789" } });
+    expect(await screen.findByText("No saved location found")).toBeInTheDocument();
+  });
+
+  it("explains when a manual form phone has no saved location", async () => {
+    const original = apiMock.getMockImplementation()!;
+    apiMock.mockImplementation((path: string, options: { body?: string }) => path.endsWith("/location-suggestions")
+      ? Promise.resolve({ data: { rows: [{ index: 0, kind: "NONE", candidates: [] }] } }) : original(path, options));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<MemoryRouter initialEntries={["/batches/batch-1"]}><QueryClientProvider client={client}><Routes><Route path="/batches/:id" element={<BatchDetailPage />} /></Routes></QueryClientProvider></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("button", { name: "Form" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add parcel" }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Customer phone"), { target: { value: "09123456789" } });
+    expect(await within(dialog).findByText("No saved location found")).toBeInTheDocument();
   });
 });
