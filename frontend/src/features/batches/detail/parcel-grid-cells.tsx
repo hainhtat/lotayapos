@@ -48,11 +48,11 @@ export function LocationCells({
     <>
       <td>
         <select
-          data-cell={`${index}-4`}
+          data-cell={`${index}-5`}
           aria-label={`${t("region")} ${index + 1}`}
           value={resolvedRegion && regions.some((item) => item.id === resolvedRegion) ? resolvedRegion : ""}
           onChange={(event) => onChangeRegion(event.target.value)}
-          onKeyDown={(event) => onMove(event, 4)}
+          onKeyDown={(event) => onMove(event, 5)}
           className={cell}
         >
           <option value="">—</option>
@@ -68,11 +68,11 @@ export function LocationCells({
       </td>
       <td>
         <select
-          data-cell={`${index}-6`}
+          data-cell={`${index}-7`}
           aria-label={`${t("township")} ${index + 1}`}
           value={resolvedTownship && regionTownships.some((item) => item.id === resolvedTownship) ? resolvedTownship : ""}
           onChange={(event) => onApplyTownship(event.target.value)}
-          onKeyDown={(event) => onMove(event, 6)}
+          onKeyDown={(event) => onMove(event, 7)}
           className={cell}
           disabled={!resolvedRegion || !regions.some((item) => item.id === resolvedRegion)}
         >
@@ -86,14 +86,14 @@ export function LocationCells({
       </td>
       <td>
         <select
-          data-cell={`${index}-7`}
+          data-cell={`${index}-8`}
           aria-label={`${t("zone")} ${index + 1}`}
           value={match(
             (zones.data ?? []).map((zone) => ({ id: zone.id, nameEn: zone.name })),
             row.zoneId,
           )}
           onChange={(event) => onChangeZone(event.target.value)}
-          onKeyDown={(event) => onMove(event, 7)}
+          onKeyDown={(event) => onMove(event, 8)}
           className={cell}
           disabled={!resolvedTownship || !regionTownships.some((item) => item.id === resolvedTownship)}
         >

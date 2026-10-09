@@ -51,6 +51,15 @@ export const bulkParcelCreateValidation = [
   body("parcels.*.zoneId").optional().isString().trim().notEmpty(),
 ];
 
+export const parcelLocationSuggestionsValidation = [
+  param("id").isString().trim().notEmpty(),
+  body("rows").isArray({ min: 1, max: 500 }),
+  body("rows.*.customerName").isString().trim().isLength({ max: 255 }),
+  body("rows.*.customerPhone").optional().isString().trim().isLength({ max: 50 }),
+  body("rows.*.address").optional().isString().trim().isLength({ max: 1000 }),
+  body("rows.*.townshipId").optional().isString().trim().isLength({ max: 100 }),
+];
+
 export const pickupAdvanceValidation = [
   body("fundingWallet").isIn(["CASH", "KBZ_PAY", "WAVE_PAY"]),
 ];

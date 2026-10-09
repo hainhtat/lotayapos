@@ -1,19 +1,22 @@
-import { Fragment, type KeyboardEvent, type RefObject, type Dispatch, type SetStateAction } from "react";
+import { Fragment, useState, type KeyboardEvent, type RefObject, type Dispatch, type SetStateAction } from "react";
 import { ClipboardPaste, LayoutGrid, ListPlus, Plus, Save, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { Location, ManifestPreview, ParcelRow, Township } from "./batch-detail-types";
+import type { Location, LocationSuggestion, LocationSuggestionCandidate, ManifestPreview, ParcelRow, Township } from "./batch-detail-types";
 import { blank, hydrateParcelRowLocations, isStructuredParcelPaste, parseParcelGrid, parcelRowErrorKeys, prependParcelDrafts } from "./parcel-draft-rules";
 import { ManifestImportReview, ManifestUploadControl } from "./manifest-import";
 import { LocationCells, DeliveryFeeCell, cell } from "./parcel-grid-cells";
+import { RowPhoneSuggestion } from "./row-phone-suggestion";
+import { hasLookupPhone } from "./use-location-suggestion";
 
 type DraftEntry = { row: ParcelRow; index: number };
-export function BatchDraftWorkspace({ entryMode, setEntryMode, rows, setRows, gridRef, townships, regions, hubId, uploadPending, onUpload, savePending, onSave, nextSave, message, preview, onClearPreview, onApplyPreview, invalid, saveableCount, populated, storageFailed, trackingForIndex, update, applyRowRegion, applyRowTownship, move, onOpenForm }: {
+export function BatchDraftWorkspace({ entryMode, setEntryMode, rows, setRows, gridRef, townships, regions, hubId, batchId, uploadPending, onUpload, savePending, onSave, nextSave, message, preview, suggestions, suggestionPending, suggestionError, onRetrySuggestions, ignoredSuggestions, onIgnoreSuggestion, onApplyCandidate, onApplySafe, onClearPreview, onApplyPreview, invalid, saveableCount, populated, storageFailed, trackingForIndex, update, applyRowRegion, applyRowTownship, move, onOpenForm }: {
   entryMode: "spreadsheet" | "form"; setEntryMode: Dispatch<SetStateAction<"spreadsheet" | "form">>; rows: ParcelRow[]; setRows: Dispatch<SetStateAction<ParcelRow[]>>; gridRef: RefObject<HTMLDivElement | null>;
   townships: Township[]; regions: Location[]; hubId?: string; uploadPending: boolean; onUpload: (file: File) => void; savePending: boolean; onSave: (entries: DraftEntry[]) => void; nextSave: DraftEntry[];
-  message: string; preview: ManifestPreview | null; onClearPreview: () => void; onApplyPreview: () => void; invalid: boolean; saveableCount: number; populated: DraftEntry[]; storageFailed: boolean;
+  batchId: string; message: string; preview: ManifestPreview | null; suggestions: LocationSuggestion[]; suggestionPending: boolean; suggestionError: boolean; onRetrySuggestions: () => void; ignoredSuggestions: number[]; onIgnoreSuggestion: (index: number) => void; onApplyCandidate: (index: number, candidate: LocationSuggestionCandidate) => void; onApplySafe: () => void; onClearPreview: () => void; onApplyPreview: () => void; invalid: boolean; saveableCount: number; populated: DraftEntry[]; storageFailed: boolean;
   trackingForIndex: (index: number) => string; update: (index: number, key: keyof ParcelRow, value: string) => void; applyRowRegion: (index: number, region: string) => void; applyRowTownship: (index: number, township: string) => void; move: (event: KeyboardEvent<HTMLElement>, row: number, column: number) => void; onOpenForm: () => void;
 }) {
   const { t } = useTranslation();
+  const [activePhoneRow, setActivePhoneRow] = useState<number | null>(null);
   return <>
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex rounded-xl border border-slate-200 p-1 dark:border-white/10">
@@ -76,7 +79,7 @@ export function BatchDraftWorkspace({ entryMode, setEntryMode, rows, setRows, gr
           {message}
         </p>
       )}
-      <ManifestImportReview preview={preview} onCancel={onClearPreview} onApply={onApplyPreview} />
+      <ManifestImportReview preview={preview} suggestions={suggestions} suggestionPending={suggestionPending} suggestionError={suggestionError} onRetrySuggestions={onRetrySuggestions} ignoredSuggestions={ignoredSuggestions} onIgnoreSuggestion={onIgnoreSuggestion} onApplyCandidate={onApplyCandidate} onApplySafe={onApplySafe} onCancel={onClearPreview} onApply={onApplyPreview} />
       {invalid && (
         <p role="alert" className="mt-3 text-sm text-rose-600">
           {t("parcelGridValidation")}
@@ -143,7 +146,7 @@ export function BatchDraftWorkspace({ entryMode, setEntryMode, rows, setRows, gr
           <thead className="sticky top-0 bg-slate-50 text-xs uppercase text-slate-500 dark:bg-[#222529]">
             <tr>
               <th>#</th>
-              {["tracking", "orderId", "customer", "address", "region", "district", "township", "zone", "customerPhone", "cod", "deliveryFee"].map((key) => (
+              {["tracking", "orderId", "customerPhone", "customer", "address", "region", "district", "township", "zone", "cod", "deliveryFee"].map((key) => (
                 <th key={key} className="min-w-[130px] px-2 py-3">
                   {t(key)}
                 </th>
@@ -160,6 +163,7 @@ export function BatchDraftWorkspace({ entryMode, setEntryMode, rows, setRows, gr
                   type={type}
                   value={row[key]}
                   onChange={(event) => update(index, key, event.target.value)}
+                  onFocus={() => { if (key === "customerPhone") setActivePhoneRow(index); }}
                   onKeyDown={(event) => move(event, index, column)}
                   className={`${cell} ${key === "address" ? "min-w-[240px]" : ""}`}
                 />
@@ -171,8 +175,9 @@ export function BatchDraftWorkspace({ entryMode, setEntryMode, rows, setRows, gr
                   <td className="px-2 text-xs">{index + 1}</td>
                   <td className="px-2 text-sm font-semibold text-slate-500">{trackingForIndex(index)}</td>
                   <td>{input("orderId", 1)}</td>
-                  <td>{input("customerName", 2)}</td>
-                  <td>{input("address", 3)}</td>
+                  <td>{input("customerPhone", 2)}</td>
+                  <td>{input("customerName", 3)}</td>
+                  <td>{input("address", 4)}</td>
                   <LocationCells
                     row={row}
                     index={index}
@@ -184,8 +189,7 @@ export function BatchDraftWorkspace({ entryMode, setEntryMode, rows, setRows, gr
                     onChangeZone={(zoneId) => update(index, "zoneId", zoneId)}
                     onMove={(event, column) => move(event, index, column)}
                   />
-                  <td>{input("customerPhone", 8)}</td>
-                  <td>{input("codAmount", 9, "text")}</td>
+                  <td>{input("codAmount", 10, "text")}</td>
                   <DeliveryFeeCell row={row} townships={townships} hubId={hubId} />
                   <td>
                     <button aria-label={`${t("removeParcel")} ${index + 1}`} onClick={() => setRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} className="p-2 text-rose-500">
@@ -194,6 +198,7 @@ export function BatchDraftWorkspace({ entryMode, setEntryMode, rows, setRows, gr
                   </td>
                 </tr>
                 {errorKeys.length > 0 && <tr><td colSpan={13} className="px-3 pb-2 text-xs font-medium text-rose-600">{t("rowNumber", { number:index+1 })}: {errorKeys.map(key=>t(key)).join(" · ")}</td></tr>}
+                {activePhoneRow === index && hasLookupPhone(row.customerPhone) && <RowPhoneSuggestion batchId={batchId} row={row} index={index} onUse={(candidate) => setRows((current) => current.map((entry, entryIndex) => entryIndex === index ? { ...entry, customerName: entry.customerName.trim() || candidate.customerName, address: entry.address.trim() || candidate.address, townshipId: candidate.townshipId, districtId: candidate.districtId, regionStateId: candidate.regionStateId } : entry))} />}
                 </Fragment>
               );
             })}

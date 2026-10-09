@@ -1,5 +1,5 @@
 import { api, apiRaw } from "@/lib/api";
-import type { Batch, Location, ManifestPreview, ParcelRow, SavedParcel, Township, Zone } from "./batch-detail-types";
+import type { Batch, Location, LocationSuggestion, ManifestPreview, ParcelRow, SavedParcel, Township, Zone } from "./batch-detail-types";
 import { normalizeCodAmount, normalizeManifestRow } from "./parcel-draft-rules";
 
 export const getBatch = (id: string) => api<Batch>(`/operations/batches/${id}`).then((response) => response.data);
@@ -30,3 +30,10 @@ export const previewBatchManifest = async (id: string, file: File): Promise<Mani
     warnings: Array.isArray(row?.warnings) ? row.warnings.filter((warning) => typeof warning === "string") : [],
   })) };
 };
+export const getLocationSuggestions = (id: string, rows: ParcelRow[]) => api<{ rows: LocationSuggestion[] }>(`/operations/batches/${id}/parcels/location-suggestions`, {
+  method: "POST",
+  body: JSON.stringify({ rows: rows.map(({ customerName, customerPhone, address, townshipId }) => ({ customerName, customerPhone, address, townshipId })) }),
+}).then((response) => {
+  if (!Array.isArray(response.data?.rows)) throw new Error("INVALID_LOCATION_SUGGESTIONS");
+  return response.data.rows;
+});

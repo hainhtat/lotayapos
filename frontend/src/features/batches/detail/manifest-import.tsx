@@ -1,6 +1,6 @@
 import { FileUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { ManifestPreview } from "./batch-detail-types";
+import type { LocationSuggestion, LocationSuggestionCandidate, ManifestPreview } from "./batch-detail-types";
 import { ManifestReviewTable } from "./manifest-review-table";
 
 export function ManifestUploadControl({ pending, onUpload }: { pending: boolean; onUpload: (file: File) => void }) {
@@ -12,6 +12,6 @@ export function ManifestUploadControl({ pending, onUpload }: { pending: boolean;
   </label>;
 }
 
-export function ManifestImportReview({ preview, onCancel, onApply }: { preview: ManifestPreview | null; onCancel: () => void; onApply: () => void }) {
-  return preview ? <ManifestReviewTable preview={preview} onCancel={onCancel} onApply={onApply} /> : null;
+export function ManifestImportReview({ preview, ...props }: { preview: ManifestPreview | null; suggestions: LocationSuggestion[]; suggestionPending: boolean; suggestionError: boolean; onRetrySuggestions: () => void; ignoredSuggestions: number[]; onIgnoreSuggestion: (index: number) => void; onApplyCandidate: (index: number, candidate: LocationSuggestionCandidate) => void; onApplySafe: () => void; onCancel: () => void; onApply: () => void }) {
+  return preview ? <ManifestReviewTable preview={preview} {...props} /> : null;
 }

@@ -50,6 +50,25 @@ describe("protected API contracts", () => {
       await prisma.hub.delete({ where: { id: otherHub } });
     }
   });
+  test("location suggestions require parcel-entry role, hub scope, and bounded rows", async () => {
+    const batchId = `suggestion-batch-${Date.now()}`;
+    await prisma.batch.create({ data: { id: batchId, shopId: "shop-1", hubId: "contract-hub", pickupDate: new Date("2026-10-20"), label: "Suggestion contract" } });
+    const path = `/api/v1/operations/batches/${batchId}/parcels/location-suggestions`;
+    try {
+      expect((await request(app).post(path).send({ rows: [{ customerName: "May" }] })).status).toBe(401);
+      expect((await request(app).post(path).set("Authorization", `Bearer ${token("FINANCE")}`).send({ rows: [{ customerName: "May" }] })).status).toBe(403);
+      expect((await request(app).post(path).set("Authorization", `Bearer ${token("DISPATCHER")}`).send({ rows: [] })).status).toBe(400);
+      const response = await request(app).post(path).set("Authorization", `Bearer ${token("DISPATCHER")}`).send({ rows: [{ customerName: "May", customerPhone: "09123456789" }] });
+      expect(response.status).toBe(200);
+      expect(response.body.data.rows).toEqual([{ index: 0, kind: "NONE", candidates: [] }]);
+      await prisma.user.update({ where: { id: "contract-dispatcher" }, data: { hubId: null } });
+      const unscoped = await request(app).post(path).set("Authorization", `Bearer ${token("DISPATCHER")}`).send({ rows: [{ customerName: "May" }] });
+      expect(unscoped.status).toBe(404);
+    } finally {
+      await prisma.user.update({ where: { id: "contract-dispatcher" }, data: { hubId: "contract-hub" } });
+      await prisma.batch.delete({ where: { id: batchId } });
+    }
+  });
   test("requires a bounded idempotency key for expense writes", async () => {
     const response = await request(app).post("/api/v1/finance/expenses").set("Authorization", `Bearer ${token("FINANCE")}`).send({ businessDate: "2026-08-11", categoryId: "expense-rent", wallet: "CASH", amount: 1000, description: "Rent" });
     expect(response.status).toBe(400);

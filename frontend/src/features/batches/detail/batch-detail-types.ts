@@ -68,3 +68,5 @@ export type ParcelRow = {
 };
 export type ManifestPreviewRow = ParcelRow & { sourcePage: number; confidence: number; warnings: string[] };
 export type ManifestPreview = { rows: ManifestPreviewRow[]; pageCount: number; truncated: boolean; extraction: "LOCAL_TEXT"; saved: false };
+export type LocationSuggestionCandidate = { customerName: string; address: string; townshipId: string; township: string; districtId: string; district: string; regionStateId: string; regionState: string; lastUsedAt: string; source: "PHONE" | "NAME_ADDRESS" };
+export type LocationSuggestion = { index: number; kind: "SAFE" | "MULTIPLE" | "CONFLICT" | "NAME_ADDRESS" | "NONE"; candidates: LocationSuggestionCandidate[] };
