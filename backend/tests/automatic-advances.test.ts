@@ -58,6 +58,7 @@ describe("automatic batch advance recording", () => {
     expect(await prisma.osBatchObligation.findUnique({ where: { batchId: batch.id } })).toBeNull();
     expect(await getBatchDetail(batch.id, dispatcher)).toMatchObject({
       totalCod: 2_000_000,
+      advancePayments: [{ businessDate: new Date("2037-01-01"), recordedBy: "Auto advance admin", wallets: { cash: 400_000, kbzPay: 350_000, wavePay: 250_000 } }],
       availableOsCredit: 0,
       expectedOsCreditApplied: 0,
       expectedOutstanding: 1_000_000,

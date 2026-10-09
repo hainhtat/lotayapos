@@ -24,6 +24,7 @@ describe("BatchDetailPage settlement totals", () => {
             hubId: "hub-1",
             label: "Shop 11.08.2026",
             advancePaid: 40000,
+            advancePayments: [{ id: "advance-1", businessDate: "2026-08-11T00:00:00.000Z", postedAt: "2026-08-11T08:00:00.000Z", recordedBy: "Aye Aye", wallets: { cash: 10000, kbzPay: 20000, wavePay: 10000 } }],
             totalCod: 100000,
             remainingToOs: 60000,
             nextTrackingSequence: 1,
@@ -116,6 +117,8 @@ describe("BatchDetailPage settlement totals", () => {
     await waitFor(() => expect(screen.getByText("100,000 MMK")).toBeInTheDocument());
     expect(screen.getByText("60,000 MMK")).toBeInTheDocument();
     expect(screen.getByText(/Remaining to OS/i)).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Advance payment breakdown" })).toHaveTextContent("Aye Aye");
+    expect(screen.getByRole("region", { name: "Advance payment breakdown" })).toHaveTextContent("20,000 MMK");
   });
 
   it("reviews the deferred credit calculation before finalizing parcel entry", async () => {

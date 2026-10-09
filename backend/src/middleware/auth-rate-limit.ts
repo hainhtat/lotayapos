@@ -59,8 +59,10 @@ export function createAuthRateLimit(maximumAttempts: number, message: string, sc
           ? req.body.refreshToken.trim()
           : req.headers.cookie ?? "missing";
     const ipCount = attemptStore.increment(`${scope}:ip:${digest(clientIp)}`, now, windowMs);
-    const accountCount = identifier === "missing" ? 0 : attemptStore.increment(`${scope}:account:${digest(identifier)}`, now, windowMs);
-    if (ipCount > maximumAttempts * 10 || accountCount > maximumAttempts) return next(new ApiError(429, "AUTH_RATE_LIMITED", message));
+    // A username-only hard lock lets anyone block that user's login. Limit the
+    // source and source/account pair instead, so another network can still log in.
+    const pairCount = identifier === "missing" ? 0 : attemptStore.increment(`${scope}:pair:${digest(`${clientIp}:${identifier}`)}`, now, windowMs);
+    if (ipCount > maximumAttempts * 10 || pairCount > maximumAttempts) return next(new ApiError(429, "AUTH_RATE_LIMITED", message));
     next();
   };
 }

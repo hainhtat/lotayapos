@@ -46,13 +46,15 @@ export async function createShop(input: { name: string; includeDeliveryFeeInOsCr
 }
 
 export async function listShops(actor: Actor) {
-  await actorScope(actor);
+  const user = await actorScope(actor);
+  if (!["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "DISPATCHER", "AUDITOR"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "You may not view online shops");
   return prisma.onlineShop.findMany({ orderBy: { name: "asc" } });
 }
 
 export async function getShop(id: string, actor: Actor) {
-  await actorScope(actor);
-  const shop = await prisma.onlineShop.findUnique({ where: { id }, include: { batches: { orderBy: { pickupDate: "desc" } } } });
+  const user = await actorScope(actor);
+  if (!["SUPERADMIN", "OPERATIONS_MANAGER", "FINANCE", "DISPATCHER", "AUDITOR"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "You may not view online shops");
+  const shop = await prisma.onlineShop.findUnique({ where: { id }, include: { batches: { where: user.role === "SUPERADMIN" ? {} : { hubId: user.hubId ?? "__none__" }, orderBy: { pickupDate: "desc" }, take: 100 } } });
   if (!shop) throw new ApiError(404, "SHOP_NOT_FOUND", "Online shop not found");
   return shop;
 }

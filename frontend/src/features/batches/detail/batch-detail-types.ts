@@ -34,6 +34,7 @@ export type Batch = {
   label: string;
   advancePaid: number;
   advancePostedAmount?: number;
+  advancePayments?: Array<{ id: string; businessDate: string; postedAt: string; recordedBy: string | null; wallets: { cash: number; kbzPay: number; wavePay: number } }>;
   paymentPaid?: number;
   historicalSettledAmount?: number;
   openingAdjustment?: number;

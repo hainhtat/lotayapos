@@ -95,7 +95,7 @@ export VITE_API_BASE_URL="${VITE_API_BASE_URL:-/api/v1}"
 export VITE_RIDER_ANDROID_DOWNLOAD_URL="${VITE_RIDER_ANDROID_DOWNLOAD_URL:-/app/lotaya-rider.apk}"
 npm ci --include=dev
 npm run build
-rsync -a --delete dist/ "${RELEASE}/frontend/dist/"
+bash "${REPO}/deploy/stage-frontend-assets.sh" dist "${PREVIOUS_RELEASE:+${PREVIOUS_RELEASE}/frontend/dist}" "${RELEASE}/frontend/dist"
 
 bash "${REPO}/deploy/publish-rider-app.sh" "${REPO}" "${RELEASE}/app"
 [[ -s "${RELEASE}/backend/dist/server.js" && -s "${RELEASE}/frontend/dist/index.html" && -s "${RELEASE}/app/index.html" ]] || { echo "Staged release validation failed before migration." >&2; exit 1; }

@@ -1,4 +1,5 @@
 import { BoundedAttemptStore, createAuthRateLimit } from "../src/middleware/auth-rate-limit.js";
+import { csrfOriginGuard } from "../src/middleware/csrf-origin.js";
 import { gracefulShutdown } from "../src/utils/graceful-shutdown.js";
 
 describe("security and shutdown infrastructure", () => {
@@ -23,6 +24,47 @@ describe("security and shutdown infrastructure", () => {
     for (let index = 0; index < 31; index += 1) expect(invoke(`session-${index}`)).toBeUndefined();
     for (let index = 0; index < 30; index += 1) expect(invoke("abusive-session")).toBeUndefined();
     expect(invoke("abusive-session")).toMatchObject({ status: 429, code: "AUTH_RATE_LIMITED" });
+  });
+
+  test("login abuse from one IP does not lock out the account on another IP", () => {
+    const limiter = createAuthRateLimit(2, "limited", "login-test", new BoundedAttemptStore(), false);
+    const invoke = (ip: string) => {
+      let error: unknown;
+      limiter({ ip, socket: {}, body: { identifier: "staff@example.com" }, headers: {} } as never, {} as never, (value?: unknown) => { error = value; });
+      return error;
+    };
+    expect(invoke("203.0.113.1")).toBeUndefined();
+    expect(invoke("203.0.113.1")).toBeUndefined();
+    expect(invoke("203.0.113.1")).toMatchObject({ status: 429 });
+    expect(invoke("203.0.113.2")).toBeUndefined();
+  });
+
+  test("rotating login identifiers cannot bypass the source IP limit", () => {
+    const limiter = createAuthRateLimit(1, "limited", "login-ip-test", new BoundedAttemptStore(), false);
+    const invoke = (identifier: string) => {
+      let error: unknown;
+      limiter({ ip: "203.0.113.3", socket: {}, body: { identifier }, headers: {} } as never, {} as never, (value?: unknown) => { error = value; });
+      return error;
+    };
+    for (let index = 0; index < 10; index += 1) expect(invoke(`account-${index}`)).toBeUndefined();
+    expect(invoke("account-10")).toMatchObject({ status: 429, code: "AUTH_RATE_LIMITED" });
+  });
+
+  test("cookie writes require a trusted origin or referer, while native and bearer requests work", () => {
+    const invoke = (headers: Record<string, string>) => {
+      let error: unknown;
+      csrfOriginGuard({ method: "POST", headers, get: (name: string) => headers[name.toLowerCase()] } as never, {} as never, (value?: unknown) => { error = value; });
+      return error;
+    };
+    const cookie = "accessToken=test";
+    expect(invoke({ cookie })).toMatchObject({ status: 403 });
+    expect(invoke({ cookie, referer: "https://localhost:5173.attacker.invalid/path" })).toMatchObject({ status: 403 });
+    expect(invoke({ cookie, origin: "null" })).toMatchObject({ status: 403 });
+    expect(invoke({ cookie, "sec-fetch-site": "cross-site" })).toMatchObject({ status: 403 });
+    expect(invoke({ cookie, origin: "https://attacker.invalid", authorization: "Bearer test" })).toMatchObject({ status: 403 });
+    expect(invoke({ cookie, referer: "http://localhost:5173/batches" })).toBeUndefined();
+    expect(invoke({ cookie, "x-client-platform": "mobile" })).toBeUndefined();
+    expect(invoke({ authorization: "Bearer native-token" })).toBeUndefined();
   });
 
   test("waits for HTTP close before disconnecting the database", async () => {

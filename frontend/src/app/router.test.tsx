@@ -1,10 +1,11 @@
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { router } from "./router";
 import { AuthProvider } from "./auth";
 import "@/i18n";
+import { RouteError } from "./route-error";
 
 function findRouteElement(routes: typeof router.routes, path: string): ReactNode | undefined {
   for (const route of routes) {
@@ -35,6 +36,17 @@ describe("operations router", () => {
     await waitFor(() => expect(screen.getByText("dispatch-destination")).toBeInTheDocument());
     expect(memoryRouter.state.location.pathname).toBe("/operations/dispatch");
     expect(memoryRouter.state.location.search).toBe("?batchId=batch-7&assignmentStatus=UNASSIGNED");
+  });
+});
+
+describe("failed lazy route loading", () => {
+  it("shows a reload action instead of React Router's raw exception page", async () => {
+    const MissingChunk = lazy(() => Promise.reject(new TypeError("Failed to fetch dynamically imported module: /assets/batch-detail-old.js")));
+    const memoryRouter = createMemoryRouter([{ path: "/batches/:id", element: <Suspense fallback={null}><MissingChunk /></Suspense>, errorElement: <RouteError /> }], { initialEntries: ["/batches/1"] });
+    render(<RouterProvider router={memoryRouter} />);
+    expect(await screen.findByRole("heading", { name: "This page needs a refresh" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reload page" })).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to fetch dynamically imported module/)).not.toBeInTheDocument();
   });
 });
 

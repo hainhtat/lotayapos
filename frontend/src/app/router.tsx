@@ -4,6 +4,7 @@ import { AuthPage } from "@/pages/auth-page";
 import { useAuth } from "./auth";
 import { useTranslation } from "react-i18next";
 import { canAccessRoute, roleHome } from "@/lib/role-access";
+import { RouteError } from "./route-error";
 
 const AppShell = lazy(() => import("@/components/app-shell").then((module) => ({ default: module.AppShell })));
 const Dashboard = lazy(() => import("@/pages/dashboard").then((module) => ({ default: module.Dashboard })));
@@ -49,9 +50,10 @@ function OperationsRedirect() {
 
 export const router = createBrowserRouter([
   { path: "/login", element: <AuthPage /> },
-  { path: "/app", element: lazyElement(<RiderAppPage />) },
+  { path: "/app", element: lazyElement(<RiderAppPage />), errorElement: <RouteError /> },
   {
     element: <Protected />,
+    errorElement: <RouteError />,
     children: [
       { path: "rider-app", element: lazyElement(<RiderAppPage />) },
       {

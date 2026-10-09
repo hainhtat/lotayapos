@@ -9,7 +9,7 @@ const control =
 import type { useDispatchController } from "./use-dispatch-controller";
 
 export function DispatchWorkspaceView({ model, workspace = "dispatch" }: { model: ReturnType<typeof useDispatchController>; workspace?: "dispatch" | "returns" }) {
-  const { t, user, setSearchParams, filters, setFilters, setPage, selected, setSelected, setReturnOpen, parcels, overdueUnsent, batches, confirmReturns } = model;
+  const { t, user, setSearchParams, filters, setFilters, setPage, selected, setSelected, setReturnOpen, parcels, overdueUnsent, batches, masters, reasons, confirmReturns } = model;
   return (
     <div className="mx-auto max-w-[1600px]">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -22,6 +22,9 @@ export function DispatchWorkspaceView({ model, workspace = "dispatch" }: { model
           onClick={() => {
             void parcels.refetch();
             void batches.refetch();
+            void overdueUnsent.refetch();
+            void masters.refetch();
+            void reasons.refetch();
           }}
           className={`${control} flex items-center gap-2 font-bold`}
         >

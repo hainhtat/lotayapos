@@ -27,6 +27,29 @@ describe("protected API contracts", () => {
     expect(invalid.status).toBe(400);
     expect(invalid.body.error.code).toBe("VALIDATION_ERROR");
   });
+  test("shop reads reject riders and scope batch history to the reader's hub", async () => {
+    const otherHub = `other-hub-${Date.now()}`;
+    const ownBatch = `own-shop-batch-${Date.now()}`;
+    const otherBatch = `other-shop-batch-${Date.now()}`;
+    await prisma.hub.create({ data: { id: otherHub, name: otherHub } });
+    try {
+      await prisma.batch.createMany({ data: [
+        { id: ownBatch, shopId: "shop-1", hubId: "contract-hub", pickupDate: new Date("2026-09-01"), label: "Own batch" },
+        { id: otherBatch, shopId: "shop-1", hubId: otherHub, pickupDate: new Date("2026-09-02"), label: "Other batch" },
+      ] });
+      const riderList = await request(app).get("/api/v1/master-data/shops").set("Authorization", `Bearer ${token("RIDER")}`);
+      const riderDetail = await request(app).get("/api/v1/master-data/shops/shop-1").set("Authorization", `Bearer ${token("RIDER")}`);
+      expect(riderList.status).toBe(403);
+      expect(riderDetail.status).toBe(403);
+      const finance = await request(app).get("/api/v1/master-data/shops/shop-1").set("Authorization", `Bearer ${token("FINANCE")}`);
+      expect(finance.status).toBe(200);
+      expect(finance.body.data.batches.map((batch: { id: string }) => batch.id)).toContain(ownBatch);
+      expect(finance.body.data.batches.map((batch: { id: string }) => batch.id)).not.toContain(otherBatch);
+    } finally {
+      await prisma.batch.deleteMany({ where: { id: { in: [ownBatch, otherBatch] } } });
+      await prisma.hub.delete({ where: { id: otherHub } });
+    }
+  });
   test("requires a bounded idempotency key for expense writes", async () => {
     const response = await request(app).post("/api/v1/finance/expenses").set("Authorization", `Bearer ${token("FINANCE")}`).send({ businessDate: "2026-08-11", categoryId: "expense-rent", wallet: "CASH", amount: 1000, description: "Rent" });
     expect(response.status).toBe(400);

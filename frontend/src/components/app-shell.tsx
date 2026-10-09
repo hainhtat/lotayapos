@@ -109,7 +109,7 @@ export function AppShell() {
       </aside>
       <MobileNav role={user?.role} />
       <main className="lg:pl-64">
-        <header className="flex h-20 items-center justify-between border-b border-black/5 bg-white/80 px-6 backdrop-blur dark:border-[var(--color-border)] dark:bg-[color-mix(in_srgb,var(--color-surface)_88%,transparent)] lg:px-10">
+        <header className="relative z-50 flex h-20 items-center justify-between border-b border-black/5 bg-white/80 px-6 backdrop-blur dark:border-[var(--color-border)] dark:bg-[color-mix(in_srgb,var(--color-surface)_88%,transparent)] lg:px-10">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[.18em] text-[#1598ef]">LOTAYA ERP</p>
             <p className="font-display text-lg font-bold">{t("today")}</p>

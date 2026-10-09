@@ -1,6 +1,6 @@
 {
   "brand": "LOTAYA",
-  "welcome": "Good morning",
+  "welcome": "Welcome",
   "overview": "Here’s what’s happening with your delivery operation today.",
   "home": "Overview",
   "operations": "Operations",
@@ -80,5 +80,10 @@
   "showingOfTotal": "Showing {{shown}} of {{total}}",
   "pageOf": "Page {{page}} of {{total}}",
   "previous": "Previous",
-  "next": "Next"
+  "next": "Next",
+  "pageRefreshNeeded": "This page needs a refresh",
+  "pageRefreshNeededDescription": "The app was updated while this page was open. Reload to get the latest version.",
+  "pageLoadFailed": "This page could not load",
+  "pageLoadFailedDescription": "Reload and try again. If the problem continues, contact support.",
+  "reloadPage": "Reload page"
 }

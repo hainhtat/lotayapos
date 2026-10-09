@@ -304,6 +304,27 @@ export async function getBatchDetail(id:string,actor:BatchActor){
     include:{shop:true,hub:true,parcels:{include:{townshipRelation:{include:{district:{include:{regionState:true}}}},zoneRelation:true},orderBy:trackingOrderAsc}},
   });
   if(!batch)throw new ApiError(404,"BATCH_NOT_FOUND","Batch not found");
+  const advanceEntries = await prisma.journalEntry.findMany({
+    where: { sourceType: "BATCH_PICKUP_ADVANCE", OR: [{ sourceId: batch.id }, { sourceId: { startsWith: `${batch.id}:` } }] },
+    include: { lines: true },
+    orderBy: { createdAt: "asc" },
+  });
+  const activeAdvanceEntries = [] as typeof advanceEntries;
+  for (const entry of advanceEntries) if (await journalEntryIsUnreversed(prisma, entry.id)) activeAdvanceEntries.push(entry);
+  const creator = batch.createdBy && activeAdvanceEntries.some(entry => entry.sourceId === batch.id)
+    ? await prisma.user.findUnique({ where: { id: batch.createdBy }, select: { name: true } })
+    : null;
+  const advancePayments = activeAdvanceEntries.map(entry => ({
+    id: entry.id,
+    businessDate: entry.businessDate,
+    postedAt: entry.createdAt,
+    recordedBy: entry.sourceId === batch.id ? creator?.name ?? null : null,
+    wallets: {
+      cash: entry.lines.filter(line => line.account === "WALLET_CASH").reduce((sum, line) => sum + line.credit - line.debit, 0),
+      kbzPay: entry.lines.filter(line => line.account === "WALLET_KBZ_PAY").reduce((sum, line) => sum + line.credit - line.debit, 0),
+      wavePay: entry.lines.filter(line => line.account === "WALLET_WAVE_PAY").reduce((sum, line) => sum + line.credit - line.debit, 0),
+    },
+  }));
   const totalCod=batch.parcels.reduce((sum,parcel)=>sum+(parcel.status === "VOIDED" ? 0 : parcel.codAmount),0);
   const advancePostedAmount=(await postedAdvanceByBatch(prisma,[batch.id])).get(batch.id) ?? 0;
   let balanceError: string | null = null;
@@ -314,7 +335,7 @@ export async function getBatchDetail(id:string,actor:BatchActor){
   const remainingToOs=account?.outstanding ?? Math.max(0,totalCod-advancePostedAmount-returnedCod);
   const availableOsCredit = balanceError ? 0 : accountRowsForShop.reduce((sum, row) => sum + (row.batchId === batch.id ? 0 : row.creditAvailable), 0);
   const expectedOsCreditApplied = Math.min(Math.max(0, totalCod - batch.advancePaid), availableOsCredit);
-  return {...batch,totalCod,advancePostedAmount,deliveryFeeCredit,availableOsCredit,expectedOsCreditApplied,expectedOutstanding:Math.max(0,totalCod-batch.advancePaid-expectedOsCreditApplied),expectedCarryForwardCredit:Math.max(0,batch.advancePaid-totalCod),osCreditAvailable:account?.creditAvailable ?? 0,osAdvanceCreditApplied:account?.advanceCreditApplied ?? 0,returnedCod,remainingToOs:balanceError?null:remainingToOs,balanceError,paymentPaid:account?.paymentPaid??0,historicalSettledAmount:account?.historicalSettledAmount??0,openingAdjustment:account?.openingAdjustment??0,threeDaysInHand:threeDaysInHandSnapshot(batch.parcels),nextTrackingSequence:await nextTrackingSequenceStart()};
+  return {...batch,totalCod,advancePostedAmount,advancePayments,deliveryFeeCredit,availableOsCredit,expectedOsCreditApplied,expectedOutstanding:Math.max(0,totalCod-batch.advancePaid-expectedOsCreditApplied),expectedCarryForwardCredit:Math.max(0,batch.advancePaid-totalCod),osCreditAvailable:account?.creditAvailable ?? 0,osAdvanceCreditApplied:account?.advanceCreditApplied ?? 0,returnedCod,remainingToOs:balanceError?null:remainingToOs,balanceError,paymentPaid:account?.paymentPaid??0,historicalSettledAmount:account?.historicalSettledAmount??0,openingAdjustment:account?.openingAdjustment??0,threeDaysInHand:threeDaysInHandSnapshot(batch.parcels),nextTrackingSequence:await nextTrackingSequenceStart()};
 }
 
 type NewParcelInput = { trackingNumber?: string; orderId?: string | null; customerName: string; customerPhone?: string; address: string; codAmount: number; townshipId: string; zoneId?: string };

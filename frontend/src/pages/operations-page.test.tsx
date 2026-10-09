@@ -79,6 +79,22 @@ describe("OperationsPage", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Dispatch queue" })).toBeInTheDocument();
   });
 
+  it("refreshes the parcel board and its supporting overdue, master, and reason data", async () => {
+    mockParcelList([]);
+    apiMock.mockImplementation((path: string) => Promise.resolve({ data: path === "/master-data" ? { riders: [], shops: [] } : [] }));
+    renderPage();
+    await waitFor(() => expect(apiRawMock).toHaveBeenCalledWith(expect.stringContaining("/operations/parcels/overdue-unsent")));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/master-data"));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/master-data/reason-codes"));
+    const overdueBefore = apiRawMock.mock.calls.filter(([path]) => path.startsWith("/operations/parcels/overdue-unsent")).length;
+    const mastersBefore = apiMock.mock.calls.filter(([path]) => path === "/master-data").length;
+    const reasonsBefore = apiMock.mock.calls.filter(([path]) => path === "/master-data/reason-codes").length;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(apiRawMock.mock.calls.filter(([path]) => path.startsWith("/operations/parcels/overdue-unsent")).length).toBeGreaterThan(overdueBefore));
+    await waitFor(() => expect(apiMock.mock.calls.filter(([path]) => path === "/master-data").length).toBeGreaterThan(mastersBefore));
+    await waitFor(() => expect(apiMock.mock.calls.filter(([path]) => path === "/master-data/reason-codes").length).toBeGreaterThan(reasonsBefore));
+  });
+
   it("shows a retryable error for an invalid batch-list response", async () => {
     mockParcelList([]);
     apiMock.mockImplementation((path: string) => Promise.resolve({
