@@ -12,7 +12,10 @@ export type OperationsAlert = {
 
 export function useOperationsAlerts(enabled = true) {
   const user = useAuth().user;
-  return useQuery({ queryKey: ["alerts", user?.id ?? null], queryFn: () => api<OperationsAlert[]>("/operations/alerts").then((response) => response.data), enabled: enabled && Boolean(user), refetchInterval: 60_000 });
+  return useQuery({ queryKey: ["alerts", user?.id ?? null], queryFn: () => api<unknown>("/operations/alerts").then((response) => {
+    if (!Array.isArray(response.data)) throw new Error("Invalid operations alerts response");
+    return response.data as OperationsAlert[];
+  }), enabled: enabled && Boolean(user), refetchInterval: 60_000 });
 }
 
 export function useAcknowledgeAlert() {

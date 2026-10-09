@@ -40,6 +40,20 @@ describe("Operations review", () => {
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/operations/alerts/alert-1/acknowledge", { method: "POST" }));
   });
 
+  it("shows a retryable error instead of crashing when review lists have an invalid shape", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path === "/operations/wallet-alerts") return Promise.resolve({ data: [] });
+      if (path === "/operations/alerts") return Promise.resolve({ data: { items: [] } });
+      if (path === "/finance/os-pending-returns") return Promise.resolve({ data: { items: [], summary: { count: 0, totalRecoverableAmount: 0 } } });
+      if (path.startsWith("/operations/parcels/overdue-unsent")) return Promise.resolve({ data: { items: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(2));
+    expect(screen.getByRole("heading", { name: "Operations review" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Try again" })).toHaveLength(2);
+  });
+
   it("does not request restricted review data for other roles", () => {
     role.current = "DISPATCHER";
     renderPage();

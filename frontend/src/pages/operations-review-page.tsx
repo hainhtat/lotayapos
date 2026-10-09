@@ -22,7 +22,10 @@ export function OperationsReviewPage() {
   const walletAlerts = useWalletAlerts(allowed);
   const overdue = useQuery({
     queryKey: ["overdue-unsent", 3, "review", page], enabled: canReviewParcels,
-    queryFn: () => api<OverdueParcel[]>(`/operations/parcels/overdue-unsent?days=3&page=${page}&pageSize=25`).then((response) => ({ items: response.data, pagination: response.pagination as ApiPagination | undefined })),
+    queryFn: () => api<unknown>(`/operations/parcels/overdue-unsent?days=3&page=${page}&pageSize=25`).then((response) => {
+      if (!Array.isArray(response.data)) throw new Error("Invalid overdue parcels response");
+      return { items: response.data as OverdueParcel[], pagination: response.pagination as ApiPagination | undefined };
+    }),
   });
   if (!allowed) return null;
   const date = (value: string) => new Intl.DateTimeFormat(i18n.resolvedLanguage === "my" ? "my-MM" : "en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
