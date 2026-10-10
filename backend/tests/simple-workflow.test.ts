@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "../src/config/database.js";
-import { rescheduleParcels } from "../src/services/parcel.service.js";
+import { getParcelDetail, listParcels, rescheduleParcels, updateStatus } from "../src/services/parcel.service.js";
 import { bulkAssignParcels, decideFailedParcel, getBatchDetail, listBatches } from "../src/services/operations.service.js";
 import { receiveOsReturnsBulk } from "../src/services/finance/os-returns.js";
 
@@ -94,6 +94,31 @@ describe("simple dispatch and physical OS handover", () => {
     expect(await prisma.parcel.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({ riderId, status: "OUT_FOR_DELIVERY" });
     expect(await prisma.deliveryWay.count({ where: { parcelId: p.id, completedAt: null } })).toBe(1);
     expect(await prisma.statusHistory.findMany({ where: { parcelId: p.id }, select: { toStatus: true } })).toEqual(expect.arrayContaining([{ toStatus: "ASSIGNED" }, { toStatus: "OUT_FOR_DELIVERY" }]));
+  });
+
+  test("rider sees only handed-over work and cannot start a planned assignment", async () => {
+    const rider = { id: riderUserId, role: "RIDER" };
+    const planned = await parcel("ASSIGNED");
+    const shopPickedUp = await parcel("PICKED_UP");
+    const handedOver = await parcel("OUT_FOR_DELIVERY");
+    await prisma.parcel.updateMany({ where: { id: { in: [planned.id, shopPickedUp.id, handedOver.id] } }, data: { riderId } });
+    const route = await listParcels(rider, true);
+    expect(route.items.map((item) => item.id)).toContain(handedOver.id);
+    expect(route.items.map((item) => item.id)).not.toContain(planned.id);
+    expect(route.items.map((item) => item.id)).not.toContain(shopPickedUp.id);
+    await expect(getParcelDetail(planned.id, rider)).rejects.toMatchObject({ code: "PARCEL_NOT_FOUND" });
+    await expect(updateStatus(planned.id, "OUT_FOR_DELIVERY", rider)).rejects.toMatchObject({ code: "RIDER_HANDOVER_REQUIRED" });
+    expect((await prisma.parcel.findUniqueOrThrow({ where: { id: planned.id } })).status).toBe("ASSIGNED");
+  });
+
+  test("dispatch keeps a rescheduled parcel's next date for the rider", async () => {
+    const parcelForTomorrow = await parcel("PICKED_UP");
+    const nextDate = new Date("2037-01-05T00:00:00.000Z");
+    await prisma.parcel.update({ where: { id: parcelForTomorrow.id }, data: { reasonCode: "RESCHEDULE", plannedDeliveryDate: nextDate } });
+    await bulkAssignParcels({ parcelIds: [parcelForTomorrow.id], riderId, dispatch: true }, actor);
+    expect(await getParcelDetail(parcelForTomorrow.id, { id: riderUserId, role: "RIDER" })).toMatchObject({
+      status: "OUT_FOR_DELIVERY", reasonCode: "RESCHEDULE", plannedDeliveryDate: nextDate,
+    });
   });
 
   test("bulk physical return is atomic, exact-retry safe, and never changes wallets", async () => {

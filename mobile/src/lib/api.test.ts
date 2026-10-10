@@ -35,7 +35,7 @@ describe("assigned parcel linked groups", () => {
             codAmount: 1000,
             deliveryFee: 500,
             status: "ASSIGNED",
-            linkGroup: { id: "group-1" },
+            linkGroup: { id: "group-1", totalDeliveryFee: 1500, _count: { parcels: 3 } },
           },
           {
             id: "b",
@@ -70,7 +70,7 @@ describe("assigned parcel linked groups", () => {
     );
     expect(parcels.find((parcel) => parcel.id === "a")).toMatchObject({
       linkedParcelGroupId: "group-1",
-      linkedParcelCount: 2,
+      linkedParcelCount: 3,
     });
     expect(parcels.find((parcel) => parcel.id === "c")).toMatchObject({
       linkedParcelGroupId: null,

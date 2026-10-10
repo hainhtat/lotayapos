@@ -112,7 +112,8 @@ type ParcelResponse={
   deliveryFee:number;
   status:string;
   reasonCode?:string;
-  linkGroup?:{id:string;parcels?:Array<{id:string;trackingNumber:string;status:string}>}|null;
+  plannedDeliveryDate?:string|null;
+  linkGroup?:{id:string;totalDeliveryFee?:number;_count?:{parcels:number};parcels?:{id:string;trackingNumber:string;status:string}[]}|null;
 };
 export type AssignedParcel=ParcelResponse&{
   linkedParcelGroupId?:string|null;
@@ -126,7 +127,7 @@ function enrichAssignedParcels(parcels:ParcelResponse[]):AssignedParcel[]{
   return parcels.map((parcel):AssignedParcel=>({
     ...parcel,
     linkedParcelGroupId:parcel.linkGroup?.id??null,
-    linkedParcelCount:parcel.linkGroup?.id?counts.get(parcel.linkGroup.id):undefined,
+    linkedParcelCount:parcel.linkGroup?.id?parcel.linkGroup._count?.parcels??counts.get(parcel.linkGroup.id):undefined,
   }));
 }
 

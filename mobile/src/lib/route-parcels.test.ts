@@ -1,7 +1,7 @@
 import type {AssignedParcel} from "./api";
 import {datePresetRange,filterAndSortRoute,isUndeliveredParcel,matchesDeliveryFilter,parcelTownship,routeTownships} from "./route-parcels";
 
-const parcel=(id:string,township:string,group?:string,status="ASSIGNED"):AssignedParcel=>({
+const parcel=(id:string,township:string,group?:string,status="OUT_FOR_DELIVERY"):AssignedParcel=>({
   id,
   trackingNumber:`T-${id}`,
   orderId:`OS-${id}`,
@@ -41,8 +41,13 @@ describe("rider route organization",()=>{
     ];
     expect(filterAndSortRoute(mixed,{township:"",search:"",sortByTownship:true,deliveryFilter:"all"}).map(p=>p.id)).toEqual(["1","3","2","d","f"]);
   });
+  it("keeps a linked delivery together even when member townships differ",()=>{
+    const mixed=[parcel("a","Ahlone","group"),parcel("other","Bahan"),parcel("b","Yankin","group")];
+    expect(filterAndSortRoute(mixed,{township:"",search:"",sortByTownship:true}).map(p=>p.id)).toEqual(["a","b","other"]);
+  });
   it("matches delivery filter statuses",()=>{
-    expect(matchesDeliveryFilter({status:"ASSIGNED"},"toDeliver")).toBe(true);
+    expect(matchesDeliveryFilter({status:"ASSIGNED"},"toDeliver")).toBe(false);
+    expect(matchesDeliveryFilter({status:"PICKED_UP"},"all")).toBe(false);
     expect(matchesDeliveryFilter({status:"OUT_FOR_DELIVERY"},"toDeliver")).toBe(true);
     expect(matchesDeliveryFilter({status:"PENDING_RETURN"},"toDeliver")).toBe(false);
     expect(matchesDeliveryFilter({status:"PENDING_RETURN"},"all")).toBe(true);
@@ -66,9 +71,9 @@ describe("rider route organization",()=>{
     expect(datePresetRange("today",new Date("2026-08-11T20:00:00.000Z"))).toEqual({dateFrom:"2026-08-12",dateTo:"2026-08-12"});
   });
   it("marks terminal statuses as delivered for route priority",()=>{
-    expect(isUndeliveredParcel({status:"ASSIGNED"})).toBe(true);
+    expect(isUndeliveredParcel({status:"ASSIGNED"})).toBe(false);
     expect(isUndeliveredParcel({status:"OUT_FOR_DELIVERY"})).toBe(true);
-    expect(isUndeliveredParcel({status:"PICKED_UP"})).toBe(true);
+    expect(isUndeliveredParcel({status:"PICKED_UP"})).toBe(false);
     expect(isUndeliveredParcel({status:"DELIVERED"})).toBe(false);
     expect(isUndeliveredParcel({status:"PARTIAL"})).toBe(false);
     expect(isUndeliveredParcel({status:"FAILED"})).toBe(false);

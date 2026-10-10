@@ -231,7 +231,8 @@ export function buildParcelScope(scope: Pick<ActorScope, "role" | "hubId" | "rid
   if (assignedToMe && scope.role !== "RIDER") throw new ApiError(403, "FORBIDDEN", "Only riders may request assigned parcels");
   if (scope.role === "RIDER" || assignedToMe) {
     if (!scope.riderId) throw new ApiError(403, "FORBIDDEN", "Rider profile required");
-    return { riderId: scope.riderId };
+    // Assignment is a plan. A rider's route begins only after office handover.
+    return { riderId: scope.riderId, status: { notIn: ["CREATED", "PICKED_UP", "ASSIGNED", "VOIDED"] } };
   }
   if (scope.role === "SUPERADMIN") return undefined;
   if (!scope.hubId) throw new ApiError(403, "FORBIDDEN", "A hub scope is required for this action");
@@ -324,7 +325,7 @@ export async function listParcels(actor: Actor, assignedToMe = false, filters: P
   const page = filters.page ?? 1;
   const pageSize = filters.pageSize ?? 50;
   const direction = filters.sortDirection ?? "asc";
-  const include = { batch: { include: { shop: true } }, townshipRelation: { include: { district: { include: { regionState: true } } } }, zoneRelation: true, rider: { include: { user: { select: { id: true, email: true, name: true, role: true, locale: true } } } }, linkGroup: { select: { id: true, address: true, baseDeliveryFee: true, totalDeliveryFee: true } } } satisfies Prisma.ParcelInclude;
+  const include = { batch: { include: { shop: true } }, townshipRelation: { include: { district: { include: { regionState: true } } } }, zoneRelation: true, rider: { include: { user: { select: { id: true, email: true, name: true, role: true, locale: true } } } }, linkGroup: { select: { id: true, address: true, baseDeliveryFee: true, totalDeliveryFee: true, _count: { select: { parcels: true } } } } } satisfies Prisma.ParcelInclude;
   if (filters.sortBy === "orderId") {
     // Order IDs can contain digits and text. Prisma's text sort puts "162" before "2".
     // Sort the filtered IDs before slicing so pagination follows the visible order.
@@ -810,6 +811,9 @@ async function updateStatusInTransaction(
   if (parcel.status === "VOIDED") throw new ApiError(409, "PARCEL_VOIDED", "Voided parcels cannot change status");
   const parcelHubId = parcel.batch.hubId;
   assertParcelAccess(scope, { batchHubId: parcel.batch.hubId, riderUserId: parcel.rider?.userId ?? null });
+  if (scope.role === "RIDER" && (parcel.status !== "OUT_FOR_DELIVERY" || !["DELIVERED", "PARTIAL", "FAILED", "REJECTED"].includes(toStatus))) {
+    throw new ApiError(409, "RIDER_HANDOVER_REQUIRED", "Rider outcomes require office handover and an out-for-delivery parcel");
+  }
   if (!(ALL_STATUSES as readonly string[]).includes(toStatus)) {
     throw new ApiError(400, "INVALID_STATUS", "Status is not a valid parcel lifecycle status");
   }

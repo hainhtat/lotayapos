@@ -455,7 +455,10 @@ describe("parcel authorization scope", () => {
   });
 
   test("limits riders to their own assignments and rejects assigned queries for non-riders", () => {
-    expect(buildParcelScope({ role: "RIDER", hubId: "hub-a", riderId: "rider-a" }, true)).toEqual({ riderId: "rider-a" });
+    expect(buildParcelScope({ role: "RIDER", hubId: "hub-a", riderId: "rider-a" }, true)).toEqual({
+      riderId: "rider-a",
+      status: { notIn: ["CREATED", "PICKED_UP", "ASSIGNED", "VOIDED"] },
+    });
     expect(() => buildParcelScope({ role: "DISPATCHER", hubId: "hub-a", riderId: null }, true)).toThrow("Only riders");
   });
 
@@ -707,6 +710,24 @@ describe("bulk dispatch and manifest rules", () => {
     expect(pdf.subarray(0, 5).toString("ascii")).toBe("%PDF-");
     const doc = await PDFDocument.load(pdf);
     expect(doc.getPageCount()).toBeGreaterThan(0);
+  });
+
+  test("rider manifests keep linked deliveries adjacent, count their fee once, and print rescheduled dates", async () => {
+    const group = { id: "linked-a", totalDeliveryFee: 5500 };
+    const base = { customerName: "Customer", customerPhone: "0912345678", address: "Main Road", zone: null, township: "Kamayut", status: "ASSIGNED" };
+    const parcels = [
+      { ...base, trackingNumber: "LTY-1", orderId: "1", codAmount: 40000, deliveryFee: 4500, linkGroup: group, dateChange: { nextDeliveryDate: "2026-10-12", reason: "DATE_CHANGE" } },
+      { ...base, trackingNumber: "LTY-2", orderId: "2", codAmount: 10000, deliveryFee: 4000 },
+      { ...base, trackingNumber: "LTY-3", orderId: "3", codAmount: 30000, deliveryFee: 4500, linkGroup: group },
+    ];
+    const pdf = await generateDispatchManifestPdf({ sections: [{ riderName: "Rider", parcels }] });
+    const text = extractPdfStrings(pdf).join(" ");
+    expect(text.indexOf("LTY-1")).toBeLessThan(text.indexOf("LTY-3"));
+    expect(text.indexOf("LTY-3")).toBeLessThan(text.indexOf("LTY-2"));
+    expect(text).toContain("2026-10-12");
+    expect(text).toContain("5,500 ks");
+    expect(text).toContain("9,500 ks");
+    expect(summarizeManifestParcels(parcels)).toMatchObject({ totalCod: 80000, totalFees: 9500, totalAmount: 89500 });
   });
 
   test("uses landscape, wrapped return handover rows that retain customer, address, and reason text", async () => {

@@ -10,6 +10,8 @@ import { resolveCommissionRateBps } from "../utils/commission.js";
 import { buildDeliveryCollectionLines } from "./ledger.service.js";
 import { businessDateUtcBoundary, nextCalendarDate } from "../utils/business-date.js";
 import { threeDaysInHandSnapshot } from "../utils/parcel-age.js";
+import { groupManifestParcels, manifestFeeTotal, type LinkedManifestParcel } from "../utils/manifest-presentation.js";
+import { isDateChangeReason } from "../domain/exception-reasons.js";
 
 export type FundingWallet = "CASH" | "KBZ_PAY" | "WAVE_PAY";
 const walletAccounts: Record<FundingWallet, string> = { CASH: "WALLET_CASH", KBZ_PAY: "WALLET_KBZ_PAY", WAVE_PAY: "WALLET_WAVE_PAY" };
@@ -704,6 +706,8 @@ type AssignmentParcel = {
   id: string;
   riderId: string | null;
   status: string;
+  reasonCode: string | null;
+  plannedDeliveryDate: Date | null;
   batch: { hubId: string | null; pickupDate: Date; label: string; shop: { name: string } };
 };
 
@@ -719,7 +723,7 @@ export async function bulkAssignParcels(input: { parcelIds: string[]; riderId: s
   if (!rider || !rider.user.active || rider.user.role !== "RIDER") throw new ApiError(404, "RIDER_NOT_FOUND", "Active rider not found");
   if (!rider.hubId || (user.role !== "SUPERADMIN" && rider.hubId !== user.hubId)) throw new ApiError(403, "FORBIDDEN", "Rider is outside your hub scope");
 
-  const parcels = await prisma.parcel.findMany({ where: { id: { in: uniqueParcelIds } }, select: { id: true, riderId: true, status: true, batch: { select: { hubId: true, pickupDate: true, label: true, shop: { select: { name: true } } } } } });
+  const parcels = await prisma.parcel.findMany({ where: { id: { in: uniqueParcelIds } }, select: { id: true, riderId: true, status: true, reasonCode: true, plannedDeliveryDate: true, batch: { select: { hubId: true, pickupDate: true, label: true, shop: { select: { name: true } } } } } });
   const foundIds = new Set(parcels.map((parcel) => parcel.id));
   const invalid = uniqueParcelIds.filter((id) => {
     const parcel = parcels.find((candidate) => candidate.id === id) as AssignmentParcel | undefined;
@@ -730,7 +734,8 @@ export async function bulkAssignParcels(input: { parcelIds: string[]; riderId: s
 
   const assigned = await prisma.$transaction(async (tx) => {
     for (const parcel of parcels as AssignmentParcel[]) {
-      const result = await tx.parcel.updateMany({ where: { id: parcel.id, riderId: null, status: parcel.status }, data: { riderId: rider.id, status: input.dispatch ? "OUT_FOR_DELIVERY" : "ASSIGNED", reasonCode: null, plannedDeliveryDate: null } });
+      const preserveDateChange = isDateChangeReason(parcel.reasonCode) && Boolean(parcel.plannedDeliveryDate);
+      const result = await tx.parcel.updateMany({ where: { id: parcel.id, riderId: null, status: parcel.status }, data: { riderId: rider.id, status: input.dispatch ? "OUT_FOR_DELIVERY" : "ASSIGNED", reasonCode: preserveDateChange ? parcel.reasonCode : null, plannedDeliveryDate: preserveDateChange ? parcel.plannedDeliveryDate : null } });
       if (result.count !== 1) throw new ApiError(409, "ASSIGNMENT_CONFLICT", "One or more parcels were assigned by another dispatcher; refresh and retry");
       await tx.packageAssignment.create({ data: { parcelId: parcel.id, riderId: rider.id, assignedById: actor.id } });
       await tx.statusHistory.create({ data: { parcelId: parcel.id, fromStatus: parcel.status, toStatus: "ASSIGNED", actorId: actor.id, note: `Bulk assigned to rider ${rider.id}` } });
@@ -761,10 +766,10 @@ export type ManifestQuery = {
   statuses?: string[];
 };
 
-export function summarizeManifestParcels(parcels: Array<{ status: string; codAmount: number; deliveryFee?: number | null }>) {
+export function summarizeManifestParcels(parcels: Array<{ status: string; codAmount: number } & LinkedManifestParcel>) {
   const count = (status: string) => parcels.filter((parcel) => parcel.status === status).length;
   const totalCod = parcels.reduce((sum, parcel) => sum + parcel.codAmount, 0);
-  const totalFees = parcels.reduce((sum, parcel) => sum + (parcel.deliveryFee ?? 0), 0);
+  const totalFees = manifestFeeTotal(parcels);
   return {
     parcelCount: parcels.length,
     delivered: count("DELIVERED"),
@@ -855,6 +860,8 @@ export async function buildManifestForRiders(input: ManifestQuery, actor: BatchA
       riderId: true,
       status: true,
       reasonCode: true,
+      plannedDeliveryDate: true,
+      linkGroup: { select: { id: true, totalDeliveryFee: true } },
       trackingNumber: true,
       orderId: true,
       customerName: true,
@@ -887,7 +894,7 @@ export async function buildManifestForRiders(input: ManifestQuery, actor: BatchA
       riderId,
       riderName: rider.user.name,
       hubName: rider.hub?.name ?? undefined,
-      parcels: riderParcels.map((parcel) => {
+      parcels: groupManifestParcels(riderParcels).map((parcel) => {
         const exceptionStatus = (EXCEPTION_NOTE_STATUSES as readonly string[]).includes(parcel.status);
         return {
           id: parcel.id,
@@ -899,6 +906,10 @@ export async function buildManifestForRiders(input: ManifestQuery, actor: BatchA
           address: parcel.address,
           codAmount: parcel.codAmount,
           deliveryFee: parcel.deliveryFee,
+          linkGroup: parcel.linkGroup,
+          dateChange: isDateChangeReason(parcel.reasonCode) && parcel.plannedDeliveryDate
+            ? { nextDeliveryDate: parcel.plannedDeliveryDate.toISOString().slice(0, 10), reason: parcel.reasonCode! }
+            : null,
           zone: parcel.zone,
           township: parcel.township,
           batchLabel: parcel.batch.label,

@@ -232,4 +232,27 @@ describe("manifest status vs exception note mapping", () => {
     expect(response.headers["content-type"]).toMatch(/application\/pdf/);
     expect(Buffer.from(response.body).subarray(0, 5).toString("ascii")).toBe("%PDF-");
   });
+
+  test("preview exposes the rider sheet's shared fee and next delivery date", async () => {
+    const groupId = `msn-link-${suffix}`;
+    await prisma.parcelLinkGroup.create({ data: { id: groupId, address: "Main Road", baseDeliveryFee: 4000, totalDeliveryFee: 5000 } });
+    try {
+      await prisma.parcel.update({ where: { id: assignedId }, data: { linkGroupId: groupId, reasonCode: "DATE_CHANGE", plannedDeliveryDate: new Date("2026-10-12T00:00:00.000Z") } });
+      await prisma.parcel.update({ where: { id: outForDeliveryId }, data: { linkGroupId: groupId } });
+      const response = await request(app)
+        .post("/api/v1/operations/parcels/manifest/preview")
+        .set("Authorization", `Bearer ${dispatcherToken()}`)
+        .send({ riderIds: [riderId] });
+      expect(response.status).toBe(200);
+      expect(response.body.data.summary).toMatchObject({ parcelCount: 2, totalCod: 30000, totalFees: 5000, totalAmount: 35000 });
+      expect(response.body.data.sections[0].parcels.map((parcel: { id: string }) => parcel.id)).toEqual([assignedId, outForDeliveryId]);
+      expect(response.body.data.sections[0].parcels[0]).toMatchObject({
+        linkGroup: { id: groupId, totalDeliveryFee: 5000 },
+        dateChange: { nextDeliveryDate: "2026-10-12", reason: "DATE_CHANGE" },
+      });
+    } finally {
+      await prisma.parcel.updateMany({ where: { id: { in: [assignedId, outForDeliveryId] } }, data: { linkGroupId: null, reasonCode: null, plannedDeliveryDate: null } });
+      await prisma.parcelLinkGroup.delete({ where: { id: groupId } });
+    }
+  });
 });

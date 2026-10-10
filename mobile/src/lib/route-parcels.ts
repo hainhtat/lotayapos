@@ -1,7 +1,7 @@
 import type {AssignedParcel} from "@/lib/api";
 import {hubCalendarDate} from "@/lib/hub-time";
 
-const terminalStatuses=new Set(["DELIVERED","PARTIAL","FAILED","REJECTED","PENDING_RETURN","RETURNED","CANCELLED"]);
+const routeStatuses=new Set(["OUT_FOR_DELIVERY"]);
 
 export type DeliveryFilter="all"|"toDeliver"|"delivered";
 export type DatePreset="all"|"today"|"thisWeek"|"thisMonth";
@@ -9,10 +9,11 @@ export const DELIVERY_FILTERS:DeliveryFilter[]=["all","toDeliver","delivered"];
 export const DATE_PRESETS:DatePreset[]=["all","today","thisWeek","thisMonth"];
 
 export function isUndeliveredParcel(parcel:Pick<AssignedParcel,"status">){
-  return !terminalStatuses.has(parcel.status);
+  return routeStatuses.has(parcel.status);
 }
 
 export function matchesDeliveryFilter(parcel:Pick<AssignedParcel,"status">,filter:DeliveryFilter){
+  if(["CREATED","PICKED_UP","ASSIGNED","VOIDED"].includes(parcel.status))return false;
   if(filter==="all")return true;
   if(filter==="delivered")return parcel.status==="DELIVERED";
   return isUndeliveredParcel(parcel);
@@ -67,7 +68,7 @@ export function filterAndSortRoute(parcels:AssignedParcel[],input:{search:string
     const haystack=[parcel.trackingNumber,parcel.orderId,parcel.customerName,parcel.customerPhone,parcel.address,township].filter(Boolean).join(" ").toLocaleLowerCase();
     return matchesTownship&&(!needle||haystack.includes(needle));
   });
-  return filtered.map((parcel,index)=>({parcel,index})).sort((a,b)=>{
+  const sorted=filtered.map((parcel,index)=>({parcel,index})).sort((a,b)=>{
     const undelivered=Number(isUndeliveredParcel(b.parcel))-Number(isUndeliveredParcel(a.parcel));
     if(undelivered)return undelivered;
     if(input.sortByTownship){
@@ -79,4 +80,14 @@ export function filterAndSortRoute(parcels:AssignedParcel[],input:{search:string
     }
     return a.index-b.index;
   }).map(item=>item.parcel);
+  const groups=new Map<string,AssignedParcel[]>();
+  for(const parcel of sorted)if(parcel.linkedParcelGroupId)groups.set(parcel.linkedParcelGroupId,[...(groups.get(parcel.linkedParcelGroupId)??[]),parcel]);
+  const shown=new Set<string>();
+  return sorted.flatMap(parcel=>{
+    const id=parcel.linkedParcelGroupId;
+    if(!id)return [parcel];
+    if(shown.has(id))return [];
+    shown.add(id);
+    return groups.get(id)??[parcel];
+  });
 }

@@ -3,8 +3,9 @@ import { join } from "node:path";
 import fontkit from "@pdf-lib/fontkit";
 import type { Font as FontkitFont } from "@pdf-lib/fontkit";
 import { PDFDocument, PDFFont, RGB, StandardFonts, rgb } from "pdf-lib";
+import { groupManifestParcels, manifestFeeTotal, type LinkedManifestParcel } from "./manifest-presentation.js";
 
-export type ManifestParcel = {
+export type ManifestParcel = LinkedManifestParcel & {
   id?: string;
   trackingNumber: string;
   orderId?: string | null;
@@ -22,6 +23,7 @@ export type ManifestParcel = {
   status?: string;
   /** Return/exception reason and note, never a status code */
   note?: string | null;
+  dateChange?: { nextDeliveryDate: string; reason: string } | null;
 };
 
 export type ManifestSection = {
@@ -77,6 +79,9 @@ const BRAND = {
   white: rgb(1, 1, 1),
   muted: rgb(0.392, 0.455, 0.545),
   green: rgb(0.071, 0.651, 0.416),
+  warning: rgb(0.71, 0.345, 0.035),
+  linkedTint: rgb(0.955, 0.979, 1),
+  linkedLine: rgb(0.41, 0.73, 0.96),
 };
 
 /** Landscape widths give return handovers space to wrap customer/address/reason. */
@@ -175,7 +180,9 @@ function statusLabel(status?: string) {
 
 function totalsFor(parcels: ManifestParcel[], returnHandover = false) {
   const totalCod = parcels.reduce((sum, parcel) => sum + parcel.codAmount, 0);
-  const totalFees = parcels.reduce((sum, parcel) => sum + (returnHandover ? (parcel.paidToOsFeeIncluded ? parcel.deliveryFee ?? 0 : 0) : parcel.deliveryFee ?? 0), 0);
+  const totalFees = returnHandover
+    ? parcels.reduce((sum, parcel) => sum + (parcel.paidToOsFeeIncluded ? parcel.deliveryFee ?? 0 : 0), 0)
+    : manifestFeeTotal(parcels);
   return { totalCod, totalFees, totalAmount: totalCod + totalFees, count: parcels.length };
 }
 
@@ -392,6 +399,10 @@ function drawRiderSheetHeader(
   ctx.y -= 11;
   drawText(ctx, `Selected statuses: ${statusesLabel}`, MARGIN_X, ctx.y, 7, false, BRAND.slate);
   ctx.y -= 11;
+  if (!isOsHandoverDocument(documentTitle)) {
+    drawText(ctx, "Blue L / bracket: linked parcels (shared fee once). Amber clock: next delivery date in Note.", MARGIN_X, ctx.y, 7, false, BRAND.muted);
+    ctx.y -= 11;
+  }
   drawText(ctx, `${isOsHandoverDocument(documentTitle) ? "Handover" : "Selected riders"}: ${fitManifestText(selectedRidersLabel, 90)}`, MARGIN_X, ctx.y, 7, false, BRAND.slate);
   if (section.hubName) {
     ctx.y -= 11;
@@ -438,8 +449,8 @@ function startRiderPage(
   drawTableHeader(ctx, noteLabel);
 }
 
-function drawParcelRow(ctx: PageContext, parcel: ManifestParcel, index: number, returnHandover = false) {
-  const fee = parcel.deliveryFee ?? 0;
+function drawParcelRow(ctx: PageContext, parcel: ManifestParcel, index: number, returnHandover = false, firstLinked = false, lastLinked = false) {
+  const fee = parcel.linkGroup && !returnHandover ? (firstLinked ? parcel.linkGroup.totalDeliveryFee : 0) : parcel.deliveryFee ?? 0;
   const includedFee = returnHandover && !parcel.paidToOsFeeIncluded ? 0 : fee;
   const total = parcel.codAmount + includedFee;
   const orderLabel = parcel.orderId?.trim() || parcel.trackingNumber;
@@ -447,12 +458,20 @@ function drawParcelRow(ctx: PageContext, parcel: ManifestParcel, index: number, 
   const shopLines=wrapManifestText(parcel.shopName??"-",ctx.returnHandover?18:10,3);
   const customerLines=wrapManifestText(parcel.customerName,ctx.returnHandover?22:11,4);
   const addressLines=wrapManifestText(address,ctx.returnHandover?38:14,4);
-  const noteLines=wrapManifestText(parcel.note?.trim()||"",ctx.returnHandover?32:11,4);
+  const dateNote = parcel.dateChange && !returnHandover ? `Next ${parcel.dateChange.nextDeliveryDate} (${parcel.dateChange.reason.replace(/_/g, " ").toLowerCase()})` : "";
+  const noteLines=wrapManifestText([dateNote, parcel.note?.trim()].filter(Boolean).join("; "),ctx.returnHandover?32:11,4);
   const rowLines=Math.max(shopLines.length,customerLines.length,addressLines.length,noteLines.length,parcel.orderId?.trim()?2:1);
   const rowH=Math.max(18,rowLines*8+6);
   if (ctx.y - rowH < ctx.marginBottom) return false;
-  if (index % 2 === 1) drawRect(ctx, MARGIN_X, ctx.y - rowH, ctx.tableRight - MARGIN_X, rowH, BRAND.zebra);
+  if (parcel.linkGroup && !returnHandover) drawRect(ctx, MARGIN_X, ctx.y - rowH, ctx.tableRight - MARGIN_X, rowH, BRAND.linkedTint);
+  else if (index % 2 === 1) drawRect(ctx, MARGIN_X, ctx.y - rowH, ctx.tableRight - MARGIN_X, rowH, BRAND.zebra);
   ctx.page.drawRectangle({x:MARGIN_X,y:ctx.y-rowH,width:ctx.tableRight-MARGIN_X,height:rowH,borderColor:BRAND.line,borderWidth:0.4});
+  if (parcel.linkGroup && !returnHandover) {
+    const x = MARGIN_X + 1.5;
+    ctx.page.drawLine({ start: { x, y: ctx.y - (firstLinked ? 3 : 0) }, end: { x, y: ctx.y - rowH + (lastLinked ? 3 : 0) }, thickness: 1.5, color: BRAND.linkedLine });
+    if (firstLinked) ctx.page.drawLine({ start: { x, y: ctx.y - 3 }, end: { x: x + 4, y: ctx.y - 3 }, thickness: 1.5, color: BRAND.linkedLine });
+    if (lastLinked) ctx.page.drawLine({ start: { x, y: ctx.y - rowH + 3 }, end: { x: x + 4, y: ctx.y - rowH + 3 }, thickness: 1.5, color: BRAND.linkedLine });
+  }
 
   const y1 = ctx.y - 10;
   const cols=ctx.cols;
@@ -460,9 +479,11 @@ function drawParcelRow(ctx: PageContext, parcel: ManifestParcel, index: number, 
   const noteCol = cols[12]!;
 
   drawText(ctx, String(index + 1), cols[0]!.x + 2, y1, 7, true, BRAND.slate);
-  drawText(ctx, fitManifestText(orderLabel, 13), cols[1]!.x + 2, y1, 7, true, BRAND.navy);
+  drawText(ctx, fitManifestText(orderLabel, parcel.linkGroup && !returnHandover ? 8 : 13), cols[1]!.x + 2, y1, 7, true,
+    parcel.dateChange && !returnHandover && !parcel.orderId?.trim() ? BRAND.warning : parcel.linkGroup && !returnHandover ? BRAND.accent : BRAND.navy);
+  if (parcel.linkGroup && !returnHandover) drawText(ctx, "L", cols[1]!.x + cols[1]!.w - 8, y1, 6, true, BRAND.accent);
   if (parcel.orderId?.trim()) {
-    drawText(ctx, fitManifestText(parcel.trackingNumber, 15), cols[1]!.x + 2, y1-8, 5.5, false, BRAND.muted);
+    drawText(ctx, fitManifestText(parcel.trackingNumber, parcel.dateChange && !returnHandover ? 10 : 15), cols[1]!.x + 2, y1-8, 5.5, false, parcel.dateChange && !returnHandover ? BRAND.warning : BRAND.muted);
   }
   drawText(ctx, fitManifestText(parcel.batchLabel ?? "-", 16), cols[2]!.x + 2, y1, 6.5);
   shopLines.forEach((line,i)=>drawText(ctx,line,cols[3]!.x+2,y1-i*8,6.2));
@@ -471,10 +492,17 @@ function drawParcelRow(ctx: PageContext, parcel: ManifestParcel, index: number, 
   drawText(ctx, fitManifestText(parcel.township ?? parcel.zone ?? "-", 17), cols[6]!.x + 2, y1, 6, false, BRAND.slate);
   addressLines.forEach((line,i)=>drawText(ctx,line,cols[7]!.x+2,y1-i*8,6));
   drawText(ctx, money(parcel.codAmount), cols[8]!.x + 1, y1, 6, true);
-  drawText(ctx, money(includedFee), cols[9]!.x + 1, y1, 6, false, BRAND.slate);
-  drawText(ctx, money(total), cols[10]!.x + 1, y1, 6.5, true, BRAND.accent);
+  drawText(ctx, parcel.linkGroup && !returnHandover && !firstLinked ? "-" : money(includedFee), cols[9]!.x + 1, y1, 6, Boolean(parcel.linkGroup && !returnHandover), parcel.linkGroup && !returnHandover ? BRAND.accent : BRAND.slate);
+  drawText(ctx, parcel.linkGroup && !returnHandover ? "-" : money(total), cols[10]!.x + 1, y1, 6.5, true, BRAND.accent);
   drawText(ctx, statusLabel(parcel.status), statusCol.x + 1, y1, 6, true, BRAND.slate);
-  noteLines.forEach((line,i)=>drawText(ctx,line,noteCol.x+1,y1-i*8,6,false,BRAND.muted));
+  if (parcel.dateChange && !returnHandover) {
+    const cx = statusCol.x + 23;
+    const cy = y1 + 2;
+    ctx.page.drawCircle({ x: cx, y: cy, size: 3, borderColor: BRAND.warning, borderWidth: 0.8 });
+    ctx.page.drawLine({ start: { x: cx, y: cy }, end: { x: cx, y: cy + 2 }, thickness: 0.6, color: BRAND.warning });
+    ctx.page.drawLine({ start: { x: cx, y: cy }, end: { x: cx + 1.5, y: cy - 1 }, thickness: 0.6, color: BRAND.warning });
+  }
+  noteLines.forEach((line,i)=>drawText(ctx,line,noteCol.x+1,y1-i*8,6,false,parcel.dateChange && !returnHandover ? BRAND.warning : BRAND.muted));
 
   ctx.y -= rowH;
   return true;
@@ -530,7 +558,8 @@ async function buildPdfDocument(input: ManifestInput) {
 
   let pageIndex = 0;
   for (const section of sections) {
-    const totals = totalsFor(section.parcels, returnHandover);
+    const visibleParcels = returnHandover ? section.parcels : groupManifestParcels(section.parcels);
+    const totals = totalsFor(visibleParcels, returnHandover);
     let page = doc.addPage([pageWidth, pageHeight]);
     let ctx = pageContext(page, pageIndex, false);
     startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel, input.documentTitle, input.noteLabel, input.documentSubtitle);
@@ -540,15 +569,17 @@ async function buildPdfDocument(input: ManifestInput) {
       ctx.y -= 20;
     }
 
-    for (const [index, parcel] of section.parcels.entries()) {
-      const drawn = drawParcelRow(ctx, parcel, index, returnHandover);
+    for (const [index, parcel] of visibleParcels.entries()) {
+      const firstLinked = Boolean(parcel.linkGroup && (index === 0 || visibleParcels[index - 1]?.linkGroup?.id !== parcel.linkGroup.id));
+      const lastLinked = Boolean(parcel.linkGroup && (index === visibleParcels.length - 1 || visibleParcels[index + 1]?.linkGroup?.id !== parcel.linkGroup.id));
+      const drawn = drawParcelRow(ctx, parcel, index, returnHandover, firstLinked, lastLinked);
       if (!drawn) {
         drawFooter(ctx, input.footerLabel);
         pageIndex += 1;
         page = doc.addPage([pageWidth, pageHeight]);
         ctx = pageContext(page, pageIndex, true);
         startRiderPage(ctx, section, totals, generatedAt, statusesLabel, selectedRidersLabel, input.documentTitle, input.noteLabel, input.documentSubtitle);
-        drawParcelRow(ctx, parcel, index, returnHandover);
+        drawParcelRow(ctx, parcel, index, returnHandover, firstLinked, lastLinked);
       }
     }
 

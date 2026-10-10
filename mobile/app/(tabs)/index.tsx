@@ -24,33 +24,36 @@ function statusLabel(status:string){
     rejected:"rejected",
     pending:"pending",
     assigned:"pending",
-    out_for_delivery:"deliveryUpdate",
+    out_for_delivery:"outForDelivery",
   };
   const key=map[status.toLowerCase()];
   return key?i18n.t(key):status.replaceAll("_"," ");
 }
 
-function ParcelCard({parcel,dark,onCall}:{parcel:AssignedParcel;dark:boolean;onCall:(phone?:string)=>void}){
+function ParcelCard({parcel,dark,onCall,firstLinked}:{parcel:AssignedParcel;dark:boolean;onCall:(phone?:string)=>void;firstLinked:boolean}){
+  const linked=Boolean(parcel.linkedParcelGroupId);
+  const dateChanged=["DATE_CHANGE","DELIVERY_DATE_CHANGE","RESCHEDULE"].includes(parcel.reasonCode?.toUpperCase()??"")&&Boolean(parcel.plannedDeliveryDate);
   const total=parcel.codAmount+parcel.deliveryFee;
   const openStatus=()=>router.push({pathname:"/parcel",params:{id:parcel.id}});
   return (
-    <View style={[s.row,dark&&s.rowDark]}>
+    <View style={[s.row,dark&&s.rowDark,linked&&s.linkedRow,linked&&!firstLinked&&s.linkedContinuation,dark&&linked&&s.linkedRowDark]}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`${parcel.trackingNumber}, ${parcel.customerName}, ${parcel.status}`}
         onPress={openStatus}
         style={s.rowMain}
       >
-        <Text style={[s.rowTitle,dark&&s.white]}>{parcel.orderId?.trim()||parcel.trackingNumber}</Text>
+        <Text style={[s.rowTitle,dark&&s.white,dateChanged&&s.warning]}>{dateChanged?"◷ ":""}{parcel.orderId?.trim()||parcel.trackingNumber}{linked?"  🔗":""}</Text>
         <Text style={s.muted}>{parcel.customerName} · {statusLabel(parcel.status)}</Text>
         {parcel.orderId?.trim()?(
           <Text style={[s.detail,dark&&s.detailDark]}>{i18n.t("tracking")}: {parcel.trackingNumber}</Text>
         ):null}
         <Text style={[s.detail,dark&&s.detailDark]}>{i18n.t("cod")}: {money(parcel.codAmount)} MMK</Text>
-        <Text style={[s.detail,dark&&s.detailDark]}>{i18n.t("deliveryFee")}: {money(parcel.deliveryFee)} MMK</Text>
-        <Text style={[s.total,dark&&s.white]}>{i18n.t("totalAmount")}: {money(total)} MMK</Text>
+        <Text style={[s.detail,dark&&s.detailDark,linked&&s.linkedText]}>{linked?(firstLinked?i18n.t("sharedDeliveryFee",{fee:money(parcel.linkGroup?.totalDeliveryFee??parcel.deliveryFee)}):i18n.t("sharedFeeAbove")):`${i18n.t("deliveryFee")}: ${money(parcel.deliveryFee)} MMK`}</Text>
+        {!linked?<Text style={[s.total,dark&&s.white]}>{i18n.t("totalAmount")}: {money(total)} MMK</Text>:null}
         <Text style={[s.detail,dark&&s.detailDark]}>{i18n.t("address")}: {parcel.address}</Text>
-        {parcel.linkedParcelGroupId?<Text style={s.group}>{i18n.t("linkedParcelCount",{count:parcel.linkedParcelCount??parcel.linkedParcelIds?.length??2})}</Text>:null}
+        {linked&&firstLinked?<Text style={s.group}>{i18n.t("linkedParcelCount",{count:parcel.linkedParcelCount??parcel.linkedParcelIds?.length??2})}</Text>:null}
+        {dateChanged?<Text style={s.dateChange}>{i18n.t("dateChangeAlert")} · {parcel.plannedDeliveryDate?.slice(0,10)}</Text>:null}
       </Pressable>
       <View style={[s.actions,dark&&s.actionsDark]}>
         <Pressable
@@ -224,7 +227,7 @@ export default function Home(){
           return (
             <View key={parcel.id}>
               {showHeading?<Text style={[s.townshipHeading,dark&&s.white]}>{place}</Text>:null}
-              <ParcelCard parcel={parcel} dark={dark} onCall={(phone)=>void call(phone)} />
+              <ParcelCard parcel={parcel} dark={dark} firstLinked={!parcel.linkedParcelGroupId||visible[index-1]?.linkedParcelGroupId!==parcel.linkedParcelGroupId} onCall={(phone)=>void call(phone)} />
             </View>
           );
         })}
@@ -262,6 +265,12 @@ const s=StyleSheet.create({
   townshipHeading:{fontWeight:"800",fontSize:18,marginTop:18,marginBottom:2},
   row:{backgroundColor:"white",borderRadius:18,marginTop:10,overflow:"hidden"},
   rowDark:{backgroundColor:"#1b1e22"},
+  linkedRow:{backgroundColor:"#f1f9ff",borderLeftWidth:3,borderLeftColor:"#93c5fd"},
+  linkedContinuation:{marginTop:2},
+  linkedRowDark:{backgroundColor:"#172334"},
+  linkedText:{color:"#0878be",fontWeight:"700"},
+  warning:{color:"#b45309"},
+  dateChange:{color:"#b45309",fontWeight:"700",marginTop:8},
   rowMain:{padding:16,paddingBottom:12},
   rowTitle:{fontWeight:"800",fontSize:16},
   detail:{color:"#64748b",marginTop:6,lineHeight:20},
