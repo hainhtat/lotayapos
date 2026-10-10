@@ -15,10 +15,14 @@ describe("Dispatch table", () => {
     render(<MemoryRouter><DispatchTable visible={[parcel("LTY-1", "group"), parcel("LTY-3"), parcel("LTY-2", "group")]} selected={[]} allSelected={false} canDispatchEdit={false} canVoid={false} sortBy="deliveryFee" sortDirection="asc" riders={[]} riderPending={false} statusPending={false} correctRiderPending={false} paidToOsPending={false} onToggleAll={vi.fn()} onToggleOne={vi.fn()} onRiderChange={vi.fn()} onStatusChange={vi.fn()} onHistory={vi.fn()} onCorrectRider={vi.fn()} onPaidToOs={vi.fn()} onEdit={vi.fn()} onVoid={vi.fn()} onSort={vi.fn()} /></MemoryRouter>);
     const rows = screen.getAllByRole("row").slice(1);
     expect(rows.map((row) => row.textContent)).toEqual([expect.stringContaining("LTY-1"), expect.stringContaining("LTY-2"), expect.stringContaining("LTY-3")]);
-    expect(screen.getByText("Group fee 5,000 MMK")).toBeInTheDocument();
+    expect(rows[0]).toHaveTextContent("Group fee 5,000 MMK");
+    expect(rows[0].querySelector('td:first-child > span[aria-hidden="true"]')).toBeInTheDocument();
+    expect(rows[1].querySelector('td:first-child > span[aria-hidden="true"]')).toBeInTheDocument();
+    expect(rows[2].querySelector('td:first-child > span[aria-hidden="true"]')).not.toBeInTheDocument();
     expect(screen.getByText(/Other group members may be on another page/)).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Link" })).not.toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Fee" })).toHaveAttribute("aria-sort", "none");
-    expect(rows[0].querySelectorAll("td")[9]).toHaveTextContent("—");
-    expect(rows[0].querySelectorAll("td")[11]).toHaveTextContent("—");
+    expect(rows[0].querySelectorAll("td")[8]).toHaveTextContent("—");
+    expect(rows[0].querySelectorAll("td")[10]).toHaveTextContent("—");
   });
 });

@@ -324,6 +324,24 @@ export async function listParcels(actor: Actor, assignedToMe = false, filters: P
   const page = filters.page ?? 1;
   const pageSize = filters.pageSize ?? 50;
   const direction = filters.sortDirection ?? "asc";
+  const include = { batch: { include: { shop: true } }, townshipRelation: { include: { district: { include: { regionState: true } } } }, zoneRelation: true, rider: { include: { user: { select: { id: true, email: true, name: true, role: true, locale: true } } } }, linkGroup: { select: { id: true, address: true, baseDeliveryFee: true, totalDeliveryFee: true } } } satisfies Prisma.ParcelInclude;
+  if (filters.sortBy === "orderId") {
+    // Order IDs can contain digits and text. Prisma's text sort puts "162" before "2".
+    // Sort the filtered IDs before slicing so pagination follows the visible order.
+    const keys = await prisma.parcel.findMany({ where, select: { id: true, orderId: true } });
+    const collator = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+    keys.sort((a, b) => {
+      const left = a.orderId?.trim() ?? "";
+      const right = b.orderId?.trim() ?? "";
+      if (!left || !right) return left ? -1 : right ? 1 : a.id.localeCompare(b.id);
+      const comparison = collator.compare(left, right);
+      return comparison ? (direction === "desc" ? -comparison : comparison) : a.id.localeCompare(b.id);
+    });
+    const pageIds = keys.slice((page - 1) * pageSize, page * pageSize).map((key) => key.id);
+    const pageItems = pageIds.length ? await prisma.parcel.findMany({ where: { id: { in: pageIds } }, include }) : [];
+    const byId = new Map(pageItems.map((item) => [item.id, item]));
+    return { items: pageIds.map((id) => byId.get(id)!).filter(Boolean), total: keys.length, page, pageSize };
+  }
   const sortOrders: Record<NonNullable<ParcelListFilters["sortBy"]>, Prisma.ParcelOrderByWithRelationInput> = {
     orderId: { orderId: direction },
     trackingNumber: { trackingSequence: { sort: direction, nulls: "last" } },
@@ -340,7 +358,7 @@ export async function listParcels(actor: Actor, assignedToMe = false, filters: P
     ? [sortOrders[filters.sortBy], ...(filters.sortBy === "trackingNumber" ? [{ trackingNumber: direction } satisfies Prisma.ParcelOrderByWithRelationInput] : []), { id: "asc" }]
     : [{ updatedAt: "desc" }, { id: "asc" }];
   const [items, total] = await Promise.all([
-    prisma.parcel.findMany({ where, orderBy, include: { batch: { include: { shop: true } }, townshipRelation: { include: { district: { include: { regionState: true } } } }, zoneRelation: true, rider: { include: { user: { select: { id: true, email: true, name: true, role: true, locale: true } } } }, linkGroup: { select: { id: true, address: true, baseDeliveryFee: true, totalDeliveryFee: true } } }, skip: (page - 1) * pageSize, take: pageSize }),
+    prisma.parcel.findMany({ where, orderBy, include, skip: (page - 1) * pageSize, take: pageSize }),
     prisma.parcel.count({ where }),
   ]);
   return { items, total, page, pageSize };

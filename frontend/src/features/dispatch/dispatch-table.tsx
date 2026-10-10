@@ -81,11 +81,10 @@ export function DispatchTable({ visible, selected, allSelected, canDispatchEdit,
             <table className="w-full min-w-[1100px] border-collapse text-left text-xs">
               <thead>
                 <tr className="border-b border-slate-200 text-[10px] uppercase tracking-wider text-slate-400 dark:border-white/10">
-                  <th className="py-2 pr-2">
+                  <th className="py-2 pl-5 pr-2">
                     <input aria-label={t("selectAll")} type="checkbox" checked={allSelected} onChange={onToggleAll} />
                   </th>
                   <th className="py-2 pr-2">#</th>
-                  <th className="py-2 pr-2">{t("linkedGroup")}</th>
                   {sortable("orderId", t("orderId"))}
                   {sortable("trackingNumber", t("tracking"))}
                   {sortable("pickupDate", t("pickupDate"))}
@@ -107,11 +106,18 @@ export function DispatchTable({ visible, selected, allSelected, canDispatchEdit,
                   const canEditFields = fieldEditableStatuses.has(p.status) && !p.linkGroup;
                   const canCorrectRider = p.status === "DELIVERED" && Boolean(p.rider?.id) && !p.linkGroup;
                   const groupId = p.linkGroup?.id;
-                  const previousInGroup = index > 0 && displayed[index - 1]?.linkGroup?.id === groupId;
-                  const nextInGroup = index + 1 < displayed.length && displayed[index + 1]?.linkGroup?.id === groupId;
+                  const previousInGroup = Boolean(groupId && index > 0 && displayed[index - 1]?.linkGroup?.id === groupId);
+                  const nextInGroup = Boolean(groupId && index + 1 < displayed.length && displayed[index + 1]?.linkGroup?.id === groupId);
+                  const showBracket = Boolean(groupId && (previousInGroup || nextInGroup));
   return (
                     <tr key={p.id} className="border-b border-slate-100 hover:bg-slate-50/80 dark:border-white/5 dark:hover:bg-white/[0.03]">
-                      <td className="py-1.5 pr-2">
+                      <td className="relative py-1.5 pl-5 pr-2">
+                        {showBracket && (
+                          <span
+                            aria-hidden="true"
+                            className={`pointer-events-none absolute inset-y-0 left-0 w-3 border-l-[3px] border-slate-900 dark:border-slate-100 ${!previousInGroup ? "rounded-tl-md border-t-[3px]" : ""} ${!nextInGroup ? "rounded-bl-md border-b-[3px]" : ""}`}
+                          />
+                        )}
                         <input
                           aria-label={`${t("select")} ${p.trackingNumber}`}
                           type="checkbox"
@@ -121,13 +127,8 @@ export function DispatchTable({ visible, selected, allSelected, canDispatchEdit,
                       </td>
                       <td className="py-1.5 pr-2 tabular-nums text-slate-400">{index + 1}</td>
                       <td className="py-1.5 pr-2">
-                        {groupId && <span className="flex items-center gap-1 text-[11px] font-bold text-sky-700 dark:text-sky-300" title={t("linkedGroupPageOnly")}>
-                          <span aria-hidden="true" className="font-mono text-base leading-none">{previousInGroup ? nextInGroup ? "│" : "└" : nextInGroup ? "┌" : "["}</span>
-                          {!previousInGroup && <span>{t("linkedGroupVisibleCount", { count: visibleGroupCounts.get(groupId) ?? 1 })}<span className="block whitespace-nowrap font-normal">{t("linkedGroupTotalFee", { amount: money(p.linkGroup?.totalDeliveryFee) })}</span></span>}
-                        </span>}
-                      </td>
-                      <td className="py-1.5 pr-2">
                         <p className="font-bold text-[#0787df] dark:text-[#5eb8ff]"><ParcelDetailsButton id={p.id} trackingNumber={p.trackingNumber}>{p.orderId?.trim() || p.trackingNumber}</ParcelDetailsButton></p>
+                        {groupId && !previousInGroup && <p className="mt-0.5 text-[10px] font-semibold leading-tight text-sky-700 dark:text-sky-300" title={t("linkedGroupPageOnly")}>{t("linkedGroupVisibleCount", { count: visibleGroupCounts.get(groupId) ?? 1 })} · {t("linkedGroupTotalFee", { amount: money(p.linkGroup?.totalDeliveryFee) })}</p>}
                       </td>
                       <td className="py-1.5 pr-2">
                         {p.orderId?.trim() && <p className="font-mono text-[11px] text-slate-500 dark:text-slate-400">{p.trackingNumber}</p>}

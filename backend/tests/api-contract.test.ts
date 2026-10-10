@@ -683,6 +683,31 @@ describe("protected API contracts", () => {
     }
   });
 
+  test("sorts OS order IDs naturally before pagination", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const shopId = `order-sort-shop-${suffix}`;
+    const batchId = `order-sort-batch-${suffix}`;
+    await prisma.onlineShop.create({ data: { id: shopId, name: `Order sort shop ${suffix}` } });
+    try {
+      await prisma.batch.create({ data: { id: batchId, shopId, hubId: "contract-hub", pickupDate: new Date("2026-09-17T00:00:00.000Z"), label: `Order sort batch ${suffix}` } });
+      await prisma.parcel.createMany({ data: ["162", "2", "101", "17", "OS-10", "OS-2"].map((orderId, index) => ({ batchId, trackingNumber: `ORDER-${suffix}-${index}`, orderId, customerName: "Customer", address: "Address", codAmount: 0 })) });
+      const fetch = async (page: number, direction: "asc" | "desc") => {
+        const response = await request(app)
+          .get(`/api/v1/parcels?batchId=${batchId}&sortBy=orderId&sortDirection=${direction}&page=${page}&pageSize=3`)
+          .set("Authorization", `Bearer ${token("OPERATIONS_MANAGER")}`);
+        expect(response.status).toBe(200);
+        expect(response.body.pagination).toMatchObject({ total: 6, page, pageSize: 3 });
+        return response.body.data.map((parcel: { orderId: string }) => parcel.orderId);
+      };
+      expect([...(await fetch(1, "asc")), ...(await fetch(2, "asc"))]).toEqual(["2", "17", "101", "162", "OS-2", "OS-10"]);
+      expect([...(await fetch(1, "desc")), ...(await fetch(2, "desc"))]).toEqual(["OS-10", "OS-2", "162", "101", "17", "2"]);
+    } finally {
+      await prisma.parcel.deleteMany({ where: { batchId } });
+      await prisma.batch.deleteMany({ where: { id: batchId } });
+      await prisma.onlineShop.deleteMany({ where: { id: shopId } });
+    }
+  });
+
   test("sorts parcels by related pickup date and shop name", async () => {
     const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const shopIds = [`sort-shop-a-${suffix}`, `sort-shop-z-${suffix}`];
