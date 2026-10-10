@@ -67,6 +67,7 @@
   "linkedGroup": "Link",
   "linkedGroupVisibleCount": "Linked · {{count}} shown",
   "linkedGroupTotalFee": "Group fee {{amount}} MMK",
+  "linkedGroupShortHint": "Linked: {{count}} shown · Shared fee {{amount}} MMK",
   "linkedGroupConfiguredFeeHelp": "The shared fee appears once in the first visible linked row's Fee column. Grouping may change row sort order.",
   "linkedGroupConfiguredFee": "Configured parcel fee",
   "linkedGroupPageOnly": "Linked parcels are shown together within this page. Other group members may be on another page or hidden by filters.",

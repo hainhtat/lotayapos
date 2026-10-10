@@ -16,8 +16,10 @@ describe("Dispatch table", () => {
     const rows = screen.getAllByRole("row").slice(1);
     expect(rows.map((row) => row.textContent)).toEqual([expect.stringContaining("LTY-1"), expect.stringContaining("LTY-2"), expect.stringContaining("LTY-3")]);
     expect(rows[0]).toHaveTextContent("Σ 5,000");
-    expect(rows[0].querySelector('td:nth-child(3) [role="img"]')).toHaveAttribute("title", expect.stringContaining("Linked · 2 shown"));
+    expect(rows[0].querySelector('td:nth-child(3) [role="img"]')).toHaveAttribute("title", "Linked: 2 shown · Shared fee 5,000 MMK");
     expect(rows[0].querySelector('td:first-child > span[aria-hidden="true"]')).toBeInTheDocument();
+    expect(rows[0].querySelector('td:first-child > span[aria-hidden="true"]')).toHaveClass("border-sky-400", "border-l-2");
+    expect(rows[0]).toHaveClass("bg-sky-50/50");
     expect(rows[1].querySelector('td:first-child > span[aria-hidden="true"]')).toBeInTheDocument();
     expect(rows[2].querySelector('td:first-child > span[aria-hidden="true"]')).not.toBeInTheDocument();
     expect(screen.getByText(/Other group members may be on another page/)).toBeInTheDocument();
@@ -32,7 +34,7 @@ describe("Dispatch table", () => {
     render(<MemoryRouter><DispatchTable visible={[parcel]} selected={[]} allSelected={false} canDispatchEdit={false} canVoid={false} sortBy="orderId" sortDirection="asc" riders={[]} riderPending={false} statusPending={false} correctRiderPending={false} paidToOsPending={false} onToggleAll={vi.fn()} onToggleOne={vi.fn()} onRiderChange={vi.fn()} onStatusChange={vi.fn()} onHistory={vi.fn()} onCorrectRider={vi.fn()} onPaidToOs={vi.fn()} onEdit={vi.fn()} onVoid={vi.fn()} onSort={vi.fn()} /></MemoryRouter>);
     const row = screen.getAllByRole("row")[1]!;
     expect(row.querySelectorAll("td")[2]).not.toHaveTextContent("1 shown");
-    expect(row.querySelector('td:nth-child(3) [role="img"]')).toHaveAttribute("title", expect.stringContaining("Linked · 1 shown"));
+    expect(row.querySelector('td:nth-child(3) [role="img"]')).toHaveAttribute("title", "Linked: 1 shown · Shared fee 5,500 MMK");
     expect(row.querySelectorAll("td")[8]).toHaveTextContent("Σ 5,500");
   });
   it("keeps a rescheduled tracking cue compact and shows its details on hover", () => {

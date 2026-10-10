@@ -111,14 +111,14 @@ export function DispatchTable({ visible, selected, allSelected, canDispatchEdit,
                   const showBracket = Boolean(groupId && (previousInGroup || nextInGroup));
                   const rescheduled = isDateChangeReason(p.reasonCode);
                   const trackingHint = rescheduled ? [t("dateChangeAlert"), p.plannedDeliveryDate ? `${t("plannedDeliveryDate")}: ${p.plannedDeliveryDate.slice(0, 10)}` : null, `${t("cod")}: ${money(p.codAmount)} MMK`].filter(Boolean).join(" · ") : undefined;
-                  const linkedHint = groupId ? `${t("linkedGroupVisibleCount", { count: visibleGroupCounts.get(groupId) ?? 1 })} · ${t("linkedGroupTotalFee", { amount: money(p.linkGroup?.totalDeliveryFee) })}. ${t("linkedGroupPageOnly")}` : undefined;
+                  const linkedHint = groupId ? t("linkedGroupShortHint", { count: visibleGroupCounts.get(groupId) ?? 1, amount: money(p.linkGroup?.totalDeliveryFee) }) : undefined;
   return (
-                    <tr key={p.id} className="border-b border-slate-100 hover:bg-slate-50/80 dark:border-white/5 dark:hover:bg-white/[0.03]">
+                    <tr key={p.id} className={`border-b border-slate-100 dark:border-white/5 ${groupId ? "bg-sky-50/50 hover:bg-sky-50 dark:bg-sky-950/15 dark:hover:bg-sky-950/25" : "hover:bg-slate-50/80 dark:hover:bg-white/[0.03]"}`}>
                       <td className="relative py-1.5 pl-5 pr-2">
                         {showBracket && (
                           <span
                             aria-hidden="true"
-                            className={`pointer-events-none absolute inset-y-0 left-0 w-3 border-l-[3px] border-slate-900 dark:border-slate-100 ${!previousInGroup ? "rounded-tl-md border-t-[3px]" : ""} ${!nextInGroup ? "rounded-bl-md border-b-[3px]" : ""}`}
+                            className={`pointer-events-none absolute inset-y-0 left-0 w-3 border-l-2 border-sky-400 dark:border-sky-500 ${!previousInGroup ? "rounded-tl-md border-t-2" : ""} ${!nextInGroup ? "rounded-bl-md border-b-2" : ""}`}
                           />
                         )}
                         <input
