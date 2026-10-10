@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ArrowUpDown, Pencil, UserRoundPen } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Clock3, Link2, Pencil, UserRoundPen } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ParcelDetailsButton } from "@/components/parcel-details";
 import { isDateChangeReason } from "@/lib/exception-reasons";
@@ -109,6 +109,9 @@ export function DispatchTable({ visible, selected, allSelected, canDispatchEdit,
                   const previousInGroup = Boolean(groupId && index > 0 && displayed[index - 1]?.linkGroup?.id === groupId);
                   const nextInGroup = Boolean(groupId && index + 1 < displayed.length && displayed[index + 1]?.linkGroup?.id === groupId);
                   const showBracket = Boolean(groupId && (previousInGroup || nextInGroup));
+                  const rescheduled = isDateChangeReason(p.reasonCode);
+                  const trackingHint = rescheduled ? [t("dateChangeAlert"), p.plannedDeliveryDate ? `${t("plannedDeliveryDate")}: ${p.plannedDeliveryDate.slice(0, 10)}` : null, `${t("cod")}: ${money(p.codAmount)} MMK`].filter(Boolean).join(" · ") : undefined;
+                  const linkedHint = groupId ? `${t("linkedGroupVisibleCount", { count: visibleGroupCounts.get(groupId) ?? 1 })} · ${t("linkedGroupTotalFee", { amount: money(p.linkGroup?.totalDeliveryFee) })}. ${t("linkedGroupPageOnly")}` : undefined;
   return (
                     <tr key={p.id} className="border-b border-slate-100 hover:bg-slate-50/80 dark:border-white/5 dark:hover:bg-white/[0.03]">
                       <td className="relative py-1.5 pl-5 pr-2">
@@ -127,23 +130,16 @@ export function DispatchTable({ visible, selected, allSelected, canDispatchEdit,
                       </td>
                       <td className="py-1.5 pr-2 tabular-nums text-slate-400">{index + 1}</td>
                       <td className="py-1.5 pr-2">
-                        <p className="font-bold text-[#0787df] dark:text-[#5eb8ff]"><ParcelDetailsButton id={p.id} trackingNumber={p.trackingNumber}>{p.orderId?.trim() || p.trackingNumber}</ParcelDetailsButton></p>
-                        {groupId && !previousInGroup && <p className="mt-0.5 text-[10px] font-semibold leading-tight text-sky-700 dark:text-sky-300" title={t("linkedGroupPageOnly")}>{t("linkedGroupVisibleCount", { count: visibleGroupCounts.get(groupId) ?? 1 })} · {t("linkedGroupTotalFee", { amount: money(p.linkGroup?.totalDeliveryFee) })}</p>}
+                        <span className="inline-flex items-center gap-1 whitespace-nowrap"><ParcelDetailsButton id={p.id} trackingNumber={p.trackingNumber} title={!p.orderId?.trim() ? trackingHint : undefined} tone={!p.orderId?.trim() && rescheduled ? "warning" : "default"}>{p.orderId?.trim() || <span className="inline-flex items-center gap-1">{p.trackingNumber}{rescheduled && <Clock3 aria-hidden="true" size={13} />}</span>}</ParcelDetailsButton>{groupId && <span role="img" aria-label={linkedHint} title={linkedHint} tabIndex={0} className="inline-flex rounded-sm text-sky-700 focus-visible:outline-2 focus-visible:outline-sky-500 dark:text-sky-300"><Link2 aria-hidden="true" size={13} /></span>}</span>
                       </td>
                       <td className="py-1.5 pr-2">
-                        {p.orderId?.trim() && <p className="font-mono text-[11px] text-slate-500 dark:text-slate-400">{p.trackingNumber}</p>}
-                        {isDateChangeReason(p.reasonCode) ? (
-                          <p role="alert" className="mt-1 rounded-md bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-                            {t("dateChangeAlert")}
-                            {p.plannedDeliveryDate && <span className="block">{t("plannedDeliveryDate")}: {p.plannedDeliveryDate.slice(0, 10)}</span>}
-                          </p>
-                        ) : null}
+                        {p.orderId?.trim() && <span className="font-mono text-[11px]"><ParcelDetailsButton id={p.id} trackingNumber={p.trackingNumber} title={trackingHint} tone={rescheduled ? "warning" : "default"}><span className="inline-flex items-center gap-1">{p.trackingNumber}{rescheduled && <Clock3 aria-hidden="true" size={13} />}</span></ParcelDetailsButton></span>}
                       </td>
                       <td className="py-1.5 pr-2 whitespace-nowrap text-slate-600 dark:text-slate-300">{formatPickupDate(p)}</td>
                       <td className="py-1.5 pr-2 font-semibold">{p.batch.shop.name}</td>
                       <td className="py-1.5 pr-2">{p.customerName}</td>
                       <td className="py-1.5 pr-2 text-slate-500">{p.township || "—"}</td>
-                      <td className="py-1.5 pr-2 text-right tabular-nums">{p.linkGroup ? <span title={`${t("linkedGroupConfiguredFee")}: ${money(p.deliveryFee)} MMK`}>—</span> : money(p.deliveryFee)}</td>
+                      <td className="py-1.5 pr-2 text-right tabular-nums">{p.linkGroup ? !previousInGroup ? <span className="whitespace-nowrap font-semibold text-sky-700 dark:text-sky-300" title={linkedHint} aria-label={t("linkedGroupTotalFee", { amount: money(p.linkGroup.totalDeliveryFee) })}>Σ {money(p.linkGroup.totalDeliveryFee)}</span> : <span title={linkedHint}>—</span> : money(p.deliveryFee)}</td>
                       <td className="py-1.5 pr-2 text-right tabular-nums">{money(p.codAmount)}</td>
                       <td className="py-1.5 pr-2 text-right font-bold tabular-nums text-[#0787df]">{p.linkGroup ? "—" : money(total)}</td>
                       <td className="py-1.5 pr-2">

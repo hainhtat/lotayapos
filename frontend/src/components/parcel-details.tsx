@@ -127,10 +127,10 @@ function ParcelDetailsModal({ id, onClose }: { id: string; onClose: () => void }
   </div></ModalPortal>;
 }
 
-export function ParcelDetailsButton({ id, trackingNumber, children }: { id: string; trackingNumber: string; children?: React.ReactNode }) {
+export function ParcelDetailsButton({ id, trackingNumber, children, title, tone = "default" }: { id: string; trackingNumber: string; children?: React.ReactNode; title?: string; tone?: "default" | "warning" }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const close = () => { setOpen(false); requestAnimationFrame(() => triggerRef.current?.focus()); };
-  return <><button ref={triggerRef} type="button" aria-label={`${t("viewParcelDetails")} ${trackingNumber}`} onClick={() => setOpen(true)} className="rounded-sm text-left font-semibold text-sky-700 underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 dark:text-sky-300">{children ?? trackingNumber}</button>{open && <ParcelDetailsModal id={id} onClose={close}/>}</>;
+  return <><button ref={triggerRef} type="button" title={title} aria-label={`${t("viewParcelDetails")} ${trackingNumber}${title ? `. ${title}` : ""}`} onClick={() => setOpen(true)} className={`rounded-sm text-left font-semibold underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${tone === "warning" ? "text-amber-700 dark:text-amber-300" : "text-sky-700 dark:text-sky-300"}`}>{children ?? trackingNumber}</button>{open && <ParcelDetailsModal id={id} onClose={close}/>}</>;
 }
