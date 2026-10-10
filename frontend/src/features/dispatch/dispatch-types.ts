@@ -38,7 +38,7 @@ export type BatchSummary = {
 };
 export type MasterData = {
   shops?: Array<{ id: string; name: string }>;
-  riders: Array<{ id: string; user: { name: string }; hub?: { name: string } | null }>;
+  riders: Array<{ id: string; hubId?: string | null; user: { name: string }; hub?: { name: string } | null }>;
 };
 export type ReasonCode = {
   id: string;

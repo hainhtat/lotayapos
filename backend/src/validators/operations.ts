@@ -92,6 +92,8 @@ export const linkParcelsValidation = [
   body("reason").isString().trim().isLength({ min: 3, max: 500 }),
 ];
 
+export const linkSuggestionsValidation = [query("hubId").optional().isString().trim().notEmpty()];
+
 export const unlinkParcelsValidation = [
   param("id").isString().trim().notEmpty(),
   body("reason").isString().trim().isLength({ min: 3, max: 500 }),

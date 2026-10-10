@@ -1,6 +1,7 @@
 import { Download, Link2, Search, UserPlus } from "lucide-react";
 import { emptyDispatchFilters as emptyFilters, type DispatchFilters as Filters } from "@/lib/dispatch-filters";
 import { DispatchTable } from "./dispatch-table";
+import { LinkSuggestionsPanel } from "./link-suggestions-panel";
 import type { useDispatchController } from "./use-dispatch-controller";
 
 const ALL_STATUSES = ["CREATED", "PICKED_UP", "ASSIGNED", "OUT_FOR_DELIVERY", "DELIVERED", "PARTIAL", "FAILED", "REJECTED", "PENDING_RETURN", "RETURNED"] as const;
@@ -362,6 +363,8 @@ export function DispatchQueuePanel({ model }: { model: ReturnType<typeof useDisp
             {message}
           </p>
         )}
+
+        <LinkSuggestionsPanel enabled={canDispatchEdit} riders={riders} />
 
         {parcels.isLoading ? (
           <p className="py-10 text-center text-sm text-slate-400">{t("loading")}</p>

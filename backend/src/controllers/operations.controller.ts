@@ -2,6 +2,7 @@ import type { RequestHandler } from "express";
 import * as service from "../services/operations.service.js";
 import * as parcelService from "../services/parcel.service.js";
 import { suggestParcelLocations } from "../services/parcel-location-suggestions.service.js";
+import { suggestParcelLinks } from "../services/parcel-link-suggestions.service.js";
 import { generateDispatchManifestPdf } from "../utils/manifest-pdf.js";
 import { previewManifestPdf } from "../services/manifest-import.service.js";
 
@@ -41,6 +42,7 @@ export const overdueUnsent: RequestHandler = async (req, res) => {
 export const batchDetail: RequestHandler = async (req,res)=>res.json({success:true,data:await service.getBatchDetail(String(req.params.id),actor(req))});
 export const bulkCreateParcels: RequestHandler = async(req,res)=>res.status(201).json({success:true,data:await service.bulkCreateParcels(String(req.params.id),req.body,actor(req))});
 export const parcelLocationSuggestions: RequestHandler = async (req, res) => res.json({ success: true, data: await suggestParcelLocations(String(req.params.id), req.body.rows, actor(req)) });
+export const parcelLinkSuggestions: RequestHandler = async (req, res) => res.json({ success: true, data: await suggestParcelLinks(actor(req), typeof req.query.hubId === "string" ? req.query.hubId : undefined) });
 export const previewManifestImport: RequestHandler = async(req,res)=>res.json({success:true,data:await previewManifestPdf(String(req.params.id),Buffer.isBuffer(req.body)?req.body:Buffer.alloc(0),actor(req))});
 export const createBatch: RequestHandler = async (req, res) => res.status(201).json({ success: true, data: await service.createBatch(req.body, actor(req)) });
 export const postPickupAdvances: RequestHandler = async (req, res) => res.json({ success: true, data: await service.postPickupAdvances(String(req.params.id), req.body, actor(req)) });

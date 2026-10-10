@@ -55,8 +55,21 @@ type Props = {
 };
 export function DispatchTable({ visible, selected, allSelected, canDispatchEdit, riders, riderPending, statusPending, correctRiderPending, paidToOsPending, sortBy, sortDirection, onSort, canVoid, onVoid, onToggleAll, onToggleOne, onRiderChange, onStatusChange, onHistory, onCorrectRider, onPaidToOs, onEdit }: Props) {
   const { t } = useTranslation();
+  // Keep the API's page and filter boundary, but put members already visible on
+  // this page next to the first member. Never imply the entire group is loaded.
+  const shownGroupIds = new Set<string>();
+  const displayed = visible.flatMap((parcel) => {
+    const groupId = parcel.linkGroup?.id;
+    if (!groupId) return [parcel];
+    if (shownGroupIds.has(groupId)) return [];
+    shownGroupIds.add(groupId);
+    return visible.filter((member) => member.linkGroup?.id === groupId);
+  });
+  const visibleGroupCounts = new Map<string, number>();
+  for (const parcel of visible) if (parcel.linkGroup) visibleGroupCounts.set(parcel.linkGroup.id, (visibleGroupCounts.get(parcel.linkGroup.id) ?? 0) + 1);
+  const grouped = visibleGroupCounts.size > 0;
   const sortable = (key: string, label: string, right = false) => (
-    <th scope="col" aria-sort={sortBy === key ? (sortDirection === "desc" ? "descending" : "ascending") : "none"} className={`py-2 pr-2 ${right ? "text-right" : ""}`}>
+    <th scope="col" aria-sort={!grouped && sortBy === key ? (sortDirection === "desc" ? "descending" : "ascending") : "none"} className={`py-2 pr-2 ${right ? "text-right" : ""}`}>
       <button type="button" onClick={() => onSort(key)} className={`inline-flex items-center gap-1 rounded-sm hover:text-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500 dark:hover:text-slate-100 ${right ? "ml-auto" : ""}`}>
         {label}{sortBy === key ? (sortDirection === "desc" ? <ArrowDown aria-hidden="true" size={12} /> : <ArrowUp aria-hidden="true" size={12} />) : <ArrowUpDown aria-hidden="true" size={12} />}
       </button>
@@ -64,6 +77,7 @@ export function DispatchTable({ visible, selected, allSelected, canDispatchEdit,
   );
   return (
           <div className="mt-3 overflow-x-auto">
+            {visibleGroupCounts.size > 0 && <p className="mb-2 text-[11px] text-slate-500 dark:text-slate-400">{t("linkedGroupPageOnly")} {t("linkedGroupConfiguredFeeHelp")}</p>}
             <table className="w-full min-w-[1100px] border-collapse text-left text-xs">
               <thead>
                 <tr className="border-b border-slate-200 text-[10px] uppercase tracking-wider text-slate-400 dark:border-white/10">
@@ -71,6 +85,7 @@ export function DispatchTable({ visible, selected, allSelected, canDispatchEdit,
                     <input aria-label={t("selectAll")} type="checkbox" checked={allSelected} onChange={onToggleAll} />
                   </th>
                   <th className="py-2 pr-2">#</th>
+                  <th className="py-2 pr-2">{t("linkedGroup")}</th>
                   {sortable("orderId", t("orderId"))}
                   {sortable("trackingNumber", t("tracking"))}
                   {sortable("pickupDate", t("pickupDate"))}
@@ -86,11 +101,14 @@ export function DispatchTable({ visible, selected, allSelected, canDispatchEdit,
                 </tr>
               </thead>
               <tbody>
-                {visible.map((p, index) => {
+                {displayed.map((p, index) => {
                   const fee = p.deliveryFee ?? 0;
                   const total = p.codAmount + fee;
                   const canEditFields = fieldEditableStatuses.has(p.status) && !p.linkGroup;
                   const canCorrectRider = p.status === "DELIVERED" && Boolean(p.rider?.id) && !p.linkGroup;
+                  const groupId = p.linkGroup?.id;
+                  const previousInGroup = index > 0 && displayed[index - 1]?.linkGroup?.id === groupId;
+                  const nextInGroup = index + 1 < displayed.length && displayed[index + 1]?.linkGroup?.id === groupId;
   return (
                     <tr key={p.id} className="border-b border-slate-100 hover:bg-slate-50/80 dark:border-white/5 dark:hover:bg-white/[0.03]">
                       <td className="py-1.5 pr-2">
@@ -102,6 +120,12 @@ export function DispatchTable({ visible, selected, allSelected, canDispatchEdit,
                         />
                       </td>
                       <td className="py-1.5 pr-2 tabular-nums text-slate-400">{index + 1}</td>
+                      <td className="py-1.5 pr-2">
+                        {groupId && <span className="flex items-center gap-1 text-[11px] font-bold text-sky-700 dark:text-sky-300" title={t("linkedGroupPageOnly")}>
+                          <span aria-hidden="true" className="font-mono text-base leading-none">{previousInGroup ? nextInGroup ? "│" : "└" : nextInGroup ? "┌" : "["}</span>
+                          {!previousInGroup && <span>{t("linkedGroupVisibleCount", { count: visibleGroupCounts.get(groupId) ?? 1 })}<span className="block whitespace-nowrap font-normal">{t("linkedGroupTotalFee", { amount: money(p.linkGroup?.totalDeliveryFee) })}</span></span>}
+                        </span>}
+                      </td>
                       <td className="py-1.5 pr-2">
                         <p className="font-bold text-[#0787df] dark:text-[#5eb8ff]"><ParcelDetailsButton id={p.id} trackingNumber={p.trackingNumber}>{p.orderId?.trim() || p.trackingNumber}</ParcelDetailsButton></p>
                       </td>
@@ -118,9 +142,9 @@ export function DispatchTable({ visible, selected, allSelected, canDispatchEdit,
                       <td className="py-1.5 pr-2 font-semibold">{p.batch.shop.name}</td>
                       <td className="py-1.5 pr-2">{p.customerName}</td>
                       <td className="py-1.5 pr-2 text-slate-500">{p.township || "—"}</td>
-                      <td className="py-1.5 pr-2 text-right tabular-nums">{money(p.deliveryFee)}</td>
+                      <td className="py-1.5 pr-2 text-right tabular-nums">{p.linkGroup ? <span title={`${t("linkedGroupConfiguredFee")}: ${money(p.deliveryFee)} MMK`}>—</span> : money(p.deliveryFee)}</td>
                       <td className="py-1.5 pr-2 text-right tabular-nums">{money(p.codAmount)}</td>
-                      <td className="py-1.5 pr-2 text-right font-bold tabular-nums text-[#0787df]">{money(total)}</td>
+                      <td className="py-1.5 pr-2 text-right font-bold tabular-nums text-[#0787df]">{p.linkGroup ? "—" : money(total)}</td>
                       <td className="py-1.5 pr-2">
                         <select
                           aria-label={`${t("rider")} ${p.trackingNumber}`}
